@@ -12,7 +12,6 @@ import requests
 # ==========================================
 st.set_page_config(page_title="Nexus AI Gateway", page_icon="🤖", layout="wide")
 
-# Lấy thông tin GitHub kết nối DB từ Streamlit Secrets
 def get_admin_secret(key, default=""):
     try:
         if key in st.secrets:
@@ -27,7 +26,7 @@ GITHUB_FILE_PATH = "data/users_encrypted.json"
 MAX_GUEST_LIMIT = 100
 
 # ==========================================
-# MODULE MÃ HÓA & LƯU TRỮ TRÊN GITHUB DB
+# MODULE MÃ HÓA BASE64 (UTF-8 SAFE)
 # ==========================================
 def encode_data(data_str: str) -> str:
     """Mã hóa chuỗi JSON sang Base64 chuẩn UTF-8"""
@@ -40,19 +39,27 @@ def decode_data(b64_str: str) -> str:
     except Exception:
         return "{}"
 
+# ==========================================
+# GITHUB DATABASE MANAGER (FIX 409 CONFLICT)
+# ==========================================
 class GitHubDB:
     @staticmethod
     def _headers():
         return {
             "Authorization": f"token {GITHUB_TOKEN}",
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "NexusAIGateway"
+            "User-Agent": "NexusAIGateway",
+            "Cache-Control": "no-cache"
         }
 
     @classmethod
     def get_latest_sha(cls):
-        """Lấy mã SHA mới nhất của file trên GitHub để tránh lỗi HTTP 422 & 409"""
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+        """Lấy mã SHA trực tiếp từ GitHub server (Bỏ qua CDN Cache)"""
+        if not GITHUB_TOKEN:
+            return None
+        # Thêm timestamp query parameter để chống GitHub CDN Cache SHA cũ
+        timestamp = int(time.time() * 1000)
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}?t={timestamp}"
         req = urllib.request.Request(url, headers=cls._headers())
         try:
             with urllib.request.urlopen(req) as response:
@@ -63,10 +70,11 @@ class GitHubDB:
 
     @classmethod
     def load_users(cls):
+        """Đọc dữ liệu người dùng từ GitHub DB"""
         if not GITHUB_TOKEN:
-            st.error("⚠️ Chưa cấu hình GITHUB_TOKEN trong Streamlit Secrets!")
             return {}, None
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+        timestamp = int(time.time() * 1000)
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}?t={timestamp}"
         req = urllib.request.Request(url, headers=cls._headers())
         try:
             with urllib.request.urlopen(req) as response:
@@ -77,52 +85,54 @@ class GitHubDB:
                 users = json.loads(raw_json_str)
                 return users, sha
         except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return {}, None
             return {}, None
         except Exception:
             return {}, None
 
     @classmethod
-    def save_users(cls, users_dict, sha=None, max_retries=3):
+    def save_users(cls, users_dict, max_retries=3):
+        """Lưu dữ liệu lên GitHub với cơ chế xử lý lỗi 409 Conflict triệt để"""
         if not GITHUB_TOKEN:
-            st.error("⚠️ Chưa cấu hình GITHUB_TOKEN trong Streamlit Secrets!")
-            return False
-            
+            return False, "Chưa cấu hình GITHUB_TOKEN trong Streamlit Secrets!"
+
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
         json_str = json.dumps(users_dict, ensure_ascii=False)
         content_b64 = encode_data(json_str)
 
-        # Cơ chế thử lại (Retry) để xử lý triệt để lỗi 409 Conflict
         for attempt in range(max_retries):
-            current_sha = cls.get_latest_sha() or sha
+            # Lấy SHA tươi mới nhất ngay trước khi gửi request
+            fresh_sha = cls.get_latest_sha()
             
             payload = {
-                "message": f"Update database via Nexus Streamlit App (attempt {attempt + 1})",
+                "message": f"Update DB (attempt {attempt + 1})",
                 "content": content_b64
             }
-            if current_sha:
-                payload["sha"] = current_sha
-                
+            if fresh_sha:
+                payload["sha"] = fresh_sha
+
             data = json.dumps(payload).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers=cls._headers(), method="PUT")
-            
+
             try:
                 with urllib.request.urlopen(req) as response:
                     if response.status in (200, 201):
-                        return True
+                        res_data = json.loads(response.read().decode('utf-8'))
+                        # Cập nhật SHA mới vừa lưu vào session_state
+                        new_sha = res_data.get("content", {}).get("sha")
+                        if new_sha:
+                            st.session_state.db_sha = new_sha
+                        return True, "Lưu dữ liệu thành công!"
             except urllib.error.HTTPError as e:
                 if e.code == 409 and attempt < max_retries - 1:
-                    time.sleep(0.5 * (attempt + 1))
+                    # Nếu dính lỗi 409 Conflict, tạm dừng tăng dần để chờ GitHub xử lý xong commit trước
+                    time.sleep(1.0 * (attempt + 1))
                     continue
                 else:
-                    st.error(f"Lỗi GitHub API ({e.code}): {e.reason}")
-                    return False
+                    return False, f"Lỗi GitHub API ({e.code}): {e.reason}"
             except Exception as e:
-                st.error(f"Lỗi kết nối lưu GitHub DB: {e}")
-                return False
-                
-        return False
+                return False, f"Lỗi hệ thống: {str(e)}"
+
+        return False, "Lưu thất bại sau nhiều lần thử lại do xung đột dữ liệu."
 
 # ==========================================
 # MODULE AI ENGINE (Groq -> Gemini -> Fallback)
@@ -130,7 +140,7 @@ class GitHubDB:
 class AutoAIEngine:
     @staticmethod
     def generate_response(prompt: str, system_instruction: str = "", groq_key: str = "", gemini_key: str = "") -> str:
-        # 1. Ưu tiên gọi Groq API
+        # 1. Thử gọi Groq API
         if groq_key.strip():
             try:
                 url = "https://api.groq.com/openai/v1/chat/completions"
@@ -138,7 +148,7 @@ class AutoAIEngine:
                 if system_instruction:
                     messages.append({"role": "system", "content": system_instruction})
                 messages.append({"role": "user", "content": prompt})
-                
+
                 payload = {
                     "model": "llama-3.3-70b-versatile",
                     "messages": messages,
@@ -152,41 +162,34 @@ class AutoAIEngine:
                 res = requests.post(url, json=payload, headers=headers, timeout=20)
                 if res.status_code == 200:
                     return res.json()['choices'][0]['message']['content']
-                else:
-                    st.warning(f"Groq API báo lỗi ({res.status_code}): {res.text[:150]}")
-            except Exception as e:
-                st.warning(f"Lỗi kết nối Groq API: {str(e)}")
+            except Exception:
+                pass
 
-        # 2. Thử tiếp Gemini API
+        # 2. Thử gọi Gemini API
         if gemini_key.strip():
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key.strip()}"
                 combined_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
-                payload = {
-                    "contents": [{"parts": [{"text": combined_prompt}]}]
-                }
+                payload = {"contents": [{"parts": [{"text": combined_prompt}]}]}
                 headers = {'Content-Type': 'application/json'}
                 res = requests.post(url, json=payload, headers=headers, timeout=20)
                 if res.status_code == 200:
                     return res.json()['candidates'][0]['content']['parts'][0]['text']
-                else:
-                    st.warning(f"Gemini API báo lỗi ({res.status_code}): {res.text[:150]}")
-            except Exception as e:
-                st.warning(f"Lỗi kết nối Gemini API: {str(e)}")
+            except Exception:
+                pass
 
-        # 3. Phản hồi thông báo nếu thiếu hoặc sai API Key
-        return "⚠️ **Không thể kết nối API AI!** Vui lòng kiểm tra lại mã **Groq API Key** hoặc **Gemini API Key** trong bảng cài đặt bên thanh Sidebar."
+        return "⚠️ **Không thể kết nối API AI!** Vui lòng kiểm tra lại **Groq API Key** hoặc **Gemini API Key** bên thanh Sidebar."
 
     @staticmethod
     def generate_title(chat_messages: list, groq_key: str = "", gemini_key: str = "") -> str:
         conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in chat_messages if m['role'] != 'system'])
-        prompt = f"Dựa trên nội dung cuộc hội thoại sau, hãy đặt một tiêu đề ngắn gọn (từ 2 đến 5 từ). Chỉ trả về duy nhất chuỗi tiêu đề, không dùng dấu ngoặc hay lời giải thích:\n\n{conversation_text}"
+        prompt = f"Dựa trên nội dung cuộc hội thoại sau, hãy đặt một tiêu đề ngắn gọn (từ 2 đến 5 từ). Chỉ trả về duy nhất chuỗi tiêu đề:\n\n{conversation_text}"
         response = AutoAIEngine.generate_response(prompt, "", groq_key, gemini_key)
         clean_title = response.strip().replace('"', '').replace("'", "").replace("\n", "")[:40]
         return clean_title if clean_title and "Không thể kết nối" not in clean_title else "Cuộc trò chuyện mới"
 
 # ==========================================
-# KHỞI TẠO BIẾN SESSION STATE & TỰ ĐỘNG ĐĂNG NHẬP
+# KHỞI TẠO SESSION STATE & TỰ ĐỘNG ĐĂNG NHẬP
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -200,31 +203,36 @@ if "temp_guest_groq" not in st.session_state:
     st.session_state.temp_guest_groq = ""
 if "temp_guest_gemini" not in st.session_state:
     st.session_state.temp_guest_gemini = ""
+if "db_sha" not in st.session_state:
+    st.session_state.db_sha = None
 
-# Xử lý Tự động đăng nhập qua Query Parameters (URL token)
+# Tự động đăng nhập qua Query Token
 query_params = st.query_params
 if st.session_state.user is None and "session_token" in query_params:
     saved_token = query_params["session_token"]
     try:
         decoded_user = decode_data(saved_token)
         if decoded_user:
-            users, _ = GitHubDB.load_users()
+            users, sha = GitHubDB.load_users()
             if decoded_user in users:
                 st.session_state.user = decoded_user
                 st.session_state.user_data = users[decoded_user]
+                st.session_state.db_sha = sha
                 if "chats" not in st.session_state.user_data:
                     st.session_state.user_data["chats"] = []
     except Exception:
         pass
 
 # ==========================================
-# HÀM TRỢ GIÚP QUẢN LÝ CHAT & USER DỮ LIỆU
+# HÀM TRỢ GIÚP ĐỒNG BỘ DỮ LIỆU SAFETY
 # ==========================================
 def save_current_user_to_db():
     if st.session_state.user:
-        users, sha = GitHubDB.load_users()
+        users, _ = GitHubDB.load_users()
         users[st.session_state.user] = st.session_state.user_data
-        GitHubDB.save_users(users, sha)
+        success, msg = GitHubDB.save_users(users)
+        return success, msg
+    return False, "Chưa đăng nhập"
 
 def create_new_chat():
     chat_id = str(int(time.time() * 1000))
@@ -262,7 +270,6 @@ def check_guest_limit() -> bool:
     st.session_state.guest_timestamps = [t for t in st.session_state.guest_timestamps if now - t < 3600]
     return len(st.session_state.guest_timestamps) < MAX_GUEST_LIMIT
 
-# Tạo chat mặc định nếu danh sách trống
 if not get_active_chats():
     create_new_chat()
 
@@ -275,7 +282,7 @@ if st.session_state.current_chat_id is None and get_active_chats():
 with st.sidebar:
     st.title("🤖 Nexus AI Gateway")
 
-    # --- KHU VỰC THÔNG TIN TÀI KHOẢN & ĐĂNG NHẬP ---
+    # --- KHU VỰC ĐĂNG NHẬP / ĐĂNG XUẤT ---
     if st.session_state.user:
         st.success(f"👤 **{st.session_state.user}**")
         if st.button("Đăng xuất", use_container_width=True):
@@ -288,37 +295,37 @@ with st.sidebar:
         guest_used = len([t for t in st.session_state.guest_timestamps if time.time() - t < 3600])
         st.progress(guest_used / MAX_GUEST_LIMIT)
         st.caption(f"Lượt chat 1h qua: **{guest_used}/{MAX_GUEST_LIMIT}**")
-        
+
         tab_login, tab_reg = st.tabs(["Đăng nhập", "Đăng ký"])
-        
+
         with tab_login:
             login_u = st.text_input("Tài khoản", key="l_u")
             login_p = st.text_input("Mật khẩu", type="password", key="l_p")
             remember_me = st.checkbox("Ghi nhớ đăng nhập", value=True)
             if st.button("Đăng nhập", use_container_width=True):
-                users, _ = GitHubDB.load_users()
+                users, sha = GitHubDB.load_users()
                 if login_u in users and users[login_u].get("password") == login_p:
                     st.session_state.user = login_u
                     st.session_state.user_data = users[login_u]
+                    st.session_state.db_sha = sha
                     if "chats" not in st.session_state.user_data:
                         st.session_state.user_data["chats"] = []
-                    
+
                     if remember_me:
-                        token = encode_data(login_u)
-                        st.query_params["session_token"] = token
-                    st.success("Đăng nhập thành công!")
+                        st.query_params["session_token"] = encode_data(login_u)
+                    st.toast("Đăng nhập thành công!", icon="✅")
                     st.rerun()
                 else:
-                    st.error("Tài khoản hoặc mật khẩu không chính xác!")
+                    st.error("Tài khoản hoặc mật khẩu không đúng!")
 
         with tab_reg:
             reg_u = st.text_input("Tài khoản mới", key="r_u")
             reg_p = st.text_input("Mật khẩu mới", type="password", key="r_p")
             if st.button("Tạo tài khoản", use_container_width=True):
                 if not reg_u or not reg_p:
-                    st.warning("Vui lòng điền đủ thông tin.")
+                    st.warning("Vui lòng nhập đủ thông tin.")
                 else:
-                    users, sha = GitHubDB.load_users()
+                    users, _ = GitHubDB.load_users()
                     if reg_u in users:
                         st.error("Tài khoản đã tồn tại!")
                     else:
@@ -330,33 +337,38 @@ with st.sidebar:
                             "chats": []
                         }
                         users[reg_u] = new_user_payload
-                        if GitHubDB.save_users(users, sha):
+                        success, msg = GitHubDB.save_users(users)
+                        if success:
                             st.session_state.user = reg_u
                             st.session_state.user_data = new_user_payload
                             st.query_params["session_token"] = encode_data(reg_u)
-                            st.success("Đăng ký thành công!")
+                            st.toast("Đăng ký thành công!", icon="✅")
                             st.rerun()
                         else:
-                            st.error("Lỗi khi tạo dữ liệu trên GitHub DB.")
+                            st.error(f"Đăng ký thất bại: {msg}")
 
     st.markdown("---")
 
-    # --- KHU VỰC CẤU HÌNH API KEYS CÁ NHÂN ---
+    # --- KHU VỰC CẤU HÌNH API KEYS ---
     st.subheader("🔑 Cấu hình API Keys")
     if st.session_state.user:
         current_groq = st.session_state.user_data.get("groq_key", "")
         current_gemini = st.session_state.user_data.get("gemini_key", "")
-        
+
         input_groq = st.text_input("Groq API Key", value=current_groq, type="password")
         input_gemini = st.text_input("Gemini API Key", value=current_gemini, type="password")
-        
+
         if st.button("💾 Lưu API Keys", use_container_width=True):
             st.session_state.user_data["groq_key"] = input_groq.strip()
             st.session_state.user_data["gemini_key"] = input_gemini.strip()
-            save_current_user_to_db()
-            st.toast("Đã lưu API Keys thành công!", icon="✅")
+
+            success, msg = save_current_user_to_db()
+            if success:
+                st.toast("Đã lưu API Keys thành công!", icon="✅")
+            else:
+                st.error(f"Lỗi lưu API Keys: {msg}")
     else:
-        st.caption("Khách có thể nhập API Key tạm thời để sử dụng:")
+        st.caption("Khách có thể nhập API Key tạm thời:")
         st.session_state.temp_guest_groq = st.text_input("Groq Key (Tạm thời)", type="password", value=st.session_state.temp_guest_groq)
         st.session_state.temp_guest_gemini = st.text_input("Gemini Key (Tạm thời)", type="password", value=st.session_state.temp_guest_gemini)
 
@@ -404,27 +416,24 @@ active_chat = get_current_chat()
 
 if active_chat:
     st.header(f"💬 {active_chat['title']}")
-    
-    # Hiển thị lịch sử tin nhắn
+
+    # Hiển thị lịch sử hội thoại
     for msg in active_chat["messages"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Xử lý người dùng gửi tin nhắn
+    # Xử lý khi người dùng nhập tin nhắn
     if prompt := st.chat_input("Nhập tin nhắn của bạn..."):
-        # Kiểm tra giới hạn chế độ Khách
         if st.session_state.user is None:
             if not check_guest_limit():
-                st.error("⚠️ Bạn đã dùng hết 100 lượt chat cho Khách trong 1 giờ qua! Vui lòng Đăng ký / Đăng nhập để tiếp tục.")
+                st.error("⚠️ Bạn đã dùng hết 100 lượt chat cho Khách trong 1 giờ qua! Vui lòng Đăng nhập để tiếp tục.")
                 st.stop()
             st.session_state.guest_timestamps.append(time.time())
 
-        # Thêm câu hỏi của user vào danh sách
         active_chat["messages"].append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Xác định API Keys và Memory áp dụng
         if st.session_state.user:
             active_groq = st.session_state.user_data.get("groq_key", "")
             active_gemini = st.session_state.user_data.get("gemini_key", "")
@@ -434,7 +443,6 @@ if active_chat:
             active_gemini = st.session_state.temp_guest_gemini
             system_mem = ""
 
-        # Gọi AI sinh phản hồi
         with st.chat_message("assistant"):
             with st.spinner("Đang suy nghĩ..."):
                 response_text = AutoAIEngine.generate_response(prompt, system_mem, active_groq, active_gemini)
@@ -442,7 +450,7 @@ if active_chat:
 
         active_chat["messages"].append({"role": "assistant", "content": response_text})
 
-        # ĐỔI TÊN CUỘC HỘI THOẠI TỰ ĐỘNG SAU ĐÚNG 3 LƯỢT NHẮN CỦA USER
+        # Đổi tên tự động sau 3 lượt gửi câu hỏi của User
         user_msg_count = sum(1 for m in active_chat["messages"] if m["role"] == "user")
         if user_msg_count == 3 and not active_chat.get("title_set", False):
             with st.spinner("Đang tự động đặt tên cuộc trò chuyện..."):
@@ -451,7 +459,7 @@ if active_chat:
                     active_chat["title"] = new_title
                     active_chat["title_set"] = True
 
-        # Lưu dữ liệu sau mỗi lượt nhắn
+        # ĐỒNG BỘ NGHỆ AN DỮ LIỆU
         if st.session_state.user:
             save_current_user_to_db()
 
