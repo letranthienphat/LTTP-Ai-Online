@@ -51,7 +51,7 @@ class GitHubDB:
 
     @classmethod
     def get_latest_sha(cls):
-        """Lấy mã SHA mới nhất của file trên GitHub để tránh lỗi HTTP 422"""
+        """Lấy mã SHA mới nhất của file trên GitHub để tránh lỗi HTTP 422 & 409"""
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
         req = urllib.request.Request(url, headers=cls._headers())
         try:
@@ -84,34 +84,45 @@ class GitHubDB:
             return {}, None
 
     @classmethod
-    def save_users(cls, users_dict, sha=None):
+    def save_users(cls, users_dict, sha=None, max_retries=3):
         if not GITHUB_TOKEN:
             st.error("⚠️ Chưa cấu hình GITHUB_TOKEN trong Streamlit Secrets!")
             return False
             
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
-        
-        # Tự động đồng bộ SHA mới nhất
-        sha = cls.get_latest_sha() or sha
-
         json_str = json.dumps(users_dict, ensure_ascii=False)
         content_b64 = encode_data(json_str)
-        
-        payload = {
-            "message": "Update database via Nexus Streamlit App",
-            "content": content_b64
-        }
-        if sha:
-            payload["sha"] = sha
+
+        # Cơ chế thử lại (Retry) để xử lý triệt để lỗi 409 Conflict
+        for attempt in range(max_retries):
+            current_sha = cls.get_latest_sha() or sha
             
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers=cls._headers(), method="PUT")
-        try:
-            with urllib.request.urlopen(req) as response:
-                return response.status in (200, 201)
-        except Exception as e:
-            st.error(f"Lỗi kết nối lưu GitHub DB: {e}")
-            return False
+            payload = {
+                "message": f"Update database via Nexus Streamlit App (attempt {attempt + 1})",
+                "content": content_b64
+            }
+            if current_sha:
+                payload["sha"] = current_sha
+                
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers=cls._headers(), method="PUT")
+            
+            try:
+                with urllib.request.urlopen(req) as response:
+                    if response.status in (200, 201):
+                        return True
+            except urllib.error.HTTPError as e:
+                if e.code == 409 and attempt < max_retries - 1:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                else:
+                    st.error(f"Lỗi GitHub API ({e.code}): {e.reason}")
+                    return False
+            except Exception as e:
+                st.error(f"Lỗi kết nối lưu GitHub DB: {e}")
+                return False
+                
+        return False
 
 # ==========================================
 # MODULE AI ENGINE (Groq -> Gemini -> Fallback)
