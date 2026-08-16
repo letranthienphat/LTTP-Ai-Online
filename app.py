@@ -2,6 +2,7 @@ import os
 import json
 import time
 import base64
+import threading
 import urllib.request
 import urllib.error
 import streamlit as st
@@ -29,20 +30,24 @@ MAX_GUEST_LIMIT = 100
 # MODULE MÃ HÓA BASE64 (UTF-8 SAFE)
 # ==========================================
 def encode_data(data_str: str) -> str:
-    """Mã hóa chuỗi JSON sang Base64 chuẩn UTF-8"""
     return base64.b64encode(data_str.encode('utf-8')).decode('utf-8')
 
 def decode_data(b64_str: str) -> str:
-    """Giải mã chuỗi Base64 về JSON"""
     try:
         return base64.b64decode(b64_str.encode('utf-8')).decode('utf-8')
     except Exception:
         return "{}"
 
 # ==========================================
-# GITHUB DATABASE MANAGER (FIX 409 CONFLICT)
+# BỘ QUẢN LÝ TRUY XUẤT TUẦN TỰ (EMMC-LIKE CONTROLLER)
 # ==========================================
-class GitHubDB:
+class SequentialDBManager:
+    """
+    Bộ quản lý khóa đơn luồng (Thread Lock).
+    Chỉ cho phép 1 thao tác (Đọc/Sửa/Ghi) được thực thi tại một thời điểm.
+    """
+    _lock = threading.Lock()
+
     @staticmethod
     def _headers():
         return {
@@ -53,10 +58,10 @@ class GitHubDB:
         }
 
     @classmethod
-    def get_latest_file_info(cls):
-        """Lấy dữ liệu và SHA mới nhất trực tiếp từ GitHub"""
+    def _raw_fetch(cls):
+        """Thao tác đọc trực tiếp từ GitHub"""
         if not GITHUB_TOKEN:
-            return {}, None, "Chưa cấu hình GITHUB_TOKEN"
+            return {}, None, "Chưa cấu hình GITHUB_TOKEN!"
         
         timestamp = int(time.time() * 1000)
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}?t={timestamp}"
@@ -77,43 +82,59 @@ class GitHubDB:
             return {}, None, str(e)
 
     @classmethod
-    def save_users(cls, users_dict, max_retries=3):
-        """Lưu dữ liệu lên GitHub với cơ chế retry và lấy SHA mới nhất mỗi lần thử"""
-        if not GITHUB_TOKEN:
-            return False, "Chưa cấu hình GITHUB_TOKEN trong Streamlit Secrets!"
+    def read_db(cls):
+        """Đọc dữ liệu an toàn qua Khóa tuần tự"""
+        with cls._lock:
+            users, _, err = cls._raw_fetch()
+            return users, err
 
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
-        json_str = json.dumps(users_dict, ensure_ascii=False)
-        content_b64 = encode_data(json_str)
-
-        for attempt in range(max_retries):
-            # Luôn đọc SHA tươi trực tiếp từ GitHub ngay trước khi ghi
-            _, fresh_sha, err = cls.get_latest_file_info()
-            
-            payload = {
-                "message": f"Update DB (attempt {attempt + 1})",
-                "content": content_b64
-            }
-            if fresh_sha:
-                payload["sha"] = fresh_sha
-
-            data = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(url, data=data, headers=cls._headers(), method="PUT")
-
-            try:
-                with urllib.request.urlopen(req) as response:
-                    if response.status in (200, 201):
-                        return True, "Lưu dữ liệu thành công!"
-            except urllib.error.HTTPError as e:
-                if e.code == 409 and attempt < max_retries - 1:
-                    time.sleep(1.2 * (attempt + 1))
+    @classmethod
+    def atomic_update(cls, update_callback_fn, max_retries=3):
+        """
+        CƠ CHẾ NGUYÊN TỬ (ATOMIC):
+        Khóa luồng -> Lấy SHA mới nhất -> Thực hiện hàm sửa đổi -> Ghi đè ngay lập tức -> Mở khóa.
+        """
+        with cls._lock:
+            for attempt in range(max_retries):
+                # 1. Đọc dữ liệu và SHA mới nhất
+                users, sha, err = cls._raw_fetch()
+                if err and "404" not in str(err):
+                    time.sleep(0.5)
                     continue
-                else:
-                    return False, f"Lỗi GitHub API ({e.code}): {e.reason}"
-            except Exception as e:
-                return False, f"Lỗi hệ thống: {str(e)}"
 
-        return False, "Lưu thất bại do xung đột dữ liệu liên tục."
+                # 2. Thực hiện sửa đổi trên bản dữ liệu mới nhất
+                users = update_callback_fn(users)
+
+                # 3. Ghi đè dữ liệu lên GitHub
+                url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+                json_str = json.dumps(users, ensure_ascii=False)
+                content_b64 = encode_data(json_str)
+
+                payload = {
+                    "message": f"Sequential Update (attempt {attempt + 1})",
+                    "content": content_b64
+                }
+                if sha:
+                    payload["sha"] = sha
+
+                data = json.dumps(payload).encode('utf-8')
+                req = urllib.request.Request(url, data=data, headers=cls._headers(), method="PUT")
+
+                try:
+                    with urllib.request.urlopen(req) as response:
+                        if response.status in (200, 201):
+                            time.sleep(0.3)  # Delay ngắn để GitHub cập nhật trạng thái
+                            return True, "Đã lưu dữ liệu thành công!"
+                except urllib.error.HTTPError as e:
+                    if e.code == 409 and attempt < max_retries - 1:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    else:
+                        return False, f"Lỗi GitHub API ({e.code}): {e.reason}"
+                except Exception as e:
+                    return False, f"Lỗi hệ thống: {str(e)}"
+
+            return False, "Lưu thất bại do xung đột dữ liệu liên tục."
 
 # ==========================================
 # MODULE AI ENGINE (Groq -> Gemini -> Fallback)
@@ -189,7 +210,7 @@ if st.session_state.user is None and "session_token" in query_params:
     try:
         decoded_user = decode_data(saved_token)
         if decoded_user:
-            users, _, _ = GitHubDB.get_latest_file_info()
+            users, _ = SequentialDBManager.read_db()
             if decoded_user in users:
                 st.session_state.user = decoded_user
                 st.session_state.user_data = users[decoded_user]
@@ -199,15 +220,21 @@ if st.session_state.user is None and "session_token" in query_params:
         pass
 
 # ==========================================
-# HÀM TRỢ GIÚP ĐỒNG BỘ DỮ LIỆU SAFETY
+# HÀM ĐỒNG BỘ QUA BỘ QUẢN LÝ TUẦN TỰ
 # ==========================================
 def save_current_user_to_db():
-    if st.session_state.user:
-        users, _, err = GitHubDB.get_latest_file_info()
-        users[st.session_state.user] = st.session_state.user_data
-        success, msg = GitHubDB.save_users(users)
-        return success, msg
-    return False, "Chưa đăng nhập"
+    if not st.session_state.user:
+        return False, "Chưa đăng nhập"
+
+    username = st.session_state.user
+    user_payload = st.session_state.user_data
+
+    # Callback truyền vào bộ quản lý nguyên tử
+    def update_fn(users_db):
+        users_db[username] = user_payload
+        return users_db
+
+    return SequentialDBManager.atomic_update(update_fn)
 
 def create_new_chat():
     chat_id = str(int(time.time() * 1000))
@@ -257,7 +284,7 @@ if st.session_state.current_chat_id is None and get_active_chats():
 with st.sidebar:
     st.title("🤖 Nexus AI Gateway")
 
-    # --- KHU VỰC ĐĂNG NHẬP / ĐĂNG XUẤT ---
+    # --- ĐĂNG NHẬP / ĐĂNG XUẤT ---
     if st.session_state.user:
         st.success(f"👤 **{st.session_state.user}**")
         if st.button("Đăng xuất", use_container_width=True):
@@ -278,7 +305,7 @@ with st.sidebar:
             login_p = st.text_input("Mật khẩu", type="password", key="l_p")
             remember_me = st.checkbox("Ghi nhớ đăng nhập", value=True)
             if st.button("Đăng nhập", use_container_width=True):
-                users, _, _ = GitHubDB.get_latest_file_info()
+                users, _ = SequentialDBManager.read_db()
                 if login_u in users and users[login_u].get("password") == login_p:
                     st.session_state.user = login_u
                     st.session_state.user_data = users[login_u]
@@ -299,31 +326,32 @@ with st.sidebar:
                 if not reg_u or not reg_p:
                     st.warning("Vui lòng nhập đủ thông tin.")
                 else:
-                    users, _, _ = GitHubDB.get_latest_file_info()
-                    if reg_u in users:
-                        st.error("Tài khoản đã tồn tại!")
-                    else:
-                        new_user_payload = {
-                            "password": reg_p,
-                            "groq_key": "",
-                            "gemini_key": "",
-                            "memory": "",
-                            "chats": []
+                    def register_fn(db):
+                        if reg_u not in db:
+                            db[reg_u] = {
+                                "password": reg_p,
+                                "groq_key": "",
+                                "gemini_key": "",
+                                "memory": "",
+                                "chats": []
+                            }
+                        return db
+
+                    success, msg = SequentialDBManager.atomic_update(register_fn)
+                    if success:
+                        st.session_state.user = reg_u
+                        st.session_state.user_data = {
+                            "password": reg_p, "groq_key": "", "gemini_key": "", "memory": "", "chats": []
                         }
-                        users[reg_u] = new_user_payload
-                        success, msg = GitHubDB.save_users(users)
-                        if success:
-                            st.session_state.user = reg_u
-                            st.session_state.user_data = new_user_payload
-                            st.query_params["session_token"] = encode_data(reg_u)
-                            st.toast("Đăng ký thành công!", icon="✅")
-                            st.rerun()
-                        else:
-                            st.error(f"Đăng ký thất bại: {msg}")
+                        st.query_params["session_token"] = encode_data(reg_u)
+                        st.toast("Đăng ký thành công!", icon="✅")
+                        st.rerun()
+                    else:
+                        st.error(f"Đăng ký thất bại: {msg}")
 
     st.markdown("---")
 
-    # --- KHU VỰC CẤU HÌNH API KEYS ---
+    # --- CẤU HÌNH API KEYS ---
     st.subheader("🔑 Cấu hình API Keys")
     if st.session_state.user:
         current_groq = st.session_state.user_data.get("groq_key", "")
@@ -348,13 +376,12 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # --- KHU VỰC MỤC GHI NHỚ (MEMORY) ---
+    # --- MỤC GHI NHỚ (MEMORY) ---
     st.subheader("🧠 Bộ nhớ AI (Memory)")
     if st.session_state.user:
         current_mem = st.session_state.user_data.get("memory", "")
         input_mem = st.text_area("AI sẽ luôn ghi nhớ những điều này:", value=current_mem, height=100)
-        
-        # Thêm nút bấm lưu riêng cho Memory (Tránh tự động ghi đè gây ra lỗi 409)
+
         if st.button("💾 Lưu Bộ Nhớ", use_container_width=True):
             st.session_state.user_data["memory"] = input_mem
             success, msg = save_current_user_to_db()
@@ -367,7 +394,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # --- KHU VỰC DANH SÁCH CUỘC HỘI THOẠI ---
+    # --- DANH SÁCH CUỘC HỘI THOẠI ---
     st.subheader("💬 Cuộc trò chuyện")
     if st.button("➕ Tạo hội thoại mới", use_container_width=True):
         create_new_chat()
