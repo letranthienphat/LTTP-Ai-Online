@@ -29,23 +29,14 @@ MAX_GUEST_LIMIT = 100
 # ==========================================
 # MODULE MÃ HÓA & LƯU TRỮ TRÊN GITHUB DB
 # ==========================================
-SECRET_SALT = "NEXUS_WEB_SECRET_2026"
+def encode_data(data_str: str) -> str:
+    """Mã hóa chuỗi JSON sang Base64 chuẩn UTF-8"""
+    return base64.b64encode(data_str.encode('utf-8')).decode('utf-8')
 
-def xor_encrypt_decrypt(data_str: str, key: str = SECRET_SALT) -> str:
-    out = []
-    for i, char in enumerate(data_str):
-        key_c = key[i % len(key)]
-        out.append(chr(ord(char) ^ ord(key_c)))
-    return "".join(out)
-
-def encode_to_hex(data_str: str) -> str:
-    encrypted = xor_encrypt_decrypt(data_str)
-    return encrypted.encode('utf-8').hex()
-
-def decode_from_hex(hex_str: str) -> str:
+def decode_data(b64_str: str) -> str:
+    """Giải mã chuỗi Base64 về JSON"""
     try:
-        raw_str = bytes.fromhex(hex_str).decode('utf-8')
-        return xor_encrypt_decrypt(raw_str)
+        return base64.b64decode(b64_str.encode('utf-8')).decode('utf-8')
     except Exception:
         return "{}"
 
@@ -59,6 +50,18 @@ class GitHubDB:
         }
 
     @classmethod
+    def get_latest_sha(cls):
+        """Lấy mã SHA mới nhất của file trên GitHub để tránh lỗi HTTP 422"""
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+        req = urllib.request.Request(url, headers=cls._headers())
+        try:
+            with urllib.request.urlopen(req) as response:
+                res_data = json.loads(response.read().decode('utf-8'))
+                return res_data.get("sha")
+        except Exception:
+            return None
+
+    @classmethod
     def load_users(cls):
         if not GITHUB_TOKEN:
             st.error("⚠️ Chưa cấu hình GITHUB_TOKEN trong Streamlit Secrets!")
@@ -69,10 +72,9 @@ class GitHubDB:
             with urllib.request.urlopen(req) as response:
                 res_data = json.loads(response.read().decode('utf-8'))
                 sha = res_data.get("sha")
-                content_b64 = res_data.get("content", "")
-                raw_hex = base64.b64decode(content_b64).decode('utf-8').strip()
-                decrypted_json_str = decode_from_hex(raw_hex)
-                users = json.loads(decrypted_json_str)
+                content_b64 = res_data.get("content", "").replace("\n", "").replace("\r", "")
+                raw_json_str = decode_data(content_b64)
+                users = json.loads(raw_json_str)
                 return users, sha
         except urllib.error.HTTPError as e:
             if e.code == 404:
@@ -86,10 +88,14 @@ class GitHubDB:
         if not GITHUB_TOKEN:
             st.error("⚠️ Chưa cấu hình GITHUB_TOKEN trong Streamlit Secrets!")
             return False
+            
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
+        
+        # Tự động đồng bộ SHA mới nhất
+        sha = cls.get_latest_sha() or sha
+
         json_str = json.dumps(users_dict, ensure_ascii=False)
-        hex_data = encode_to_hex(json_str)
-        content_b64 = base64.b64encode(hex_data.encode('utf-8')).decode('utf-8')
+        content_b64 = encode_data(json_str)
         
         payload = {
             "message": "Update database via Nexus Streamlit App",
@@ -189,7 +195,7 @@ query_params = st.query_params
 if st.session_state.user is None and "session_token" in query_params:
     saved_token = query_params["session_token"]
     try:
-        decoded_user = decode_from_hex(saved_token)
+        decoded_user = decode_data(saved_token)
         if decoded_user:
             users, _ = GitHubDB.load_users()
             if decoded_user in users:
@@ -287,7 +293,7 @@ with st.sidebar:
                         st.session_state.user_data["chats"] = []
                     
                     if remember_me:
-                        token = encode_to_hex(login_u)
+                        token = encode_data(login_u)
                         st.query_params["session_token"] = token
                     st.success("Đăng nhập thành công!")
                     st.rerun()
@@ -316,7 +322,7 @@ with st.sidebar:
                         if GitHubDB.save_users(users, sha):
                             st.session_state.user = reg_u
                             st.session_state.user_data = new_user_payload
-                            st.query_params["session_token"] = encode_to_hex(reg_u)
+                            st.query_params["session_token"] = encode_data(reg_u)
                             st.success("Đăng ký thành công!")
                             st.rerun()
                         else:
@@ -425,7 +431,7 @@ if active_chat:
 
         active_chat["messages"].append({"role": "assistant", "content": response_text})
 
-        # ĐẮT TÊN CUỘC HỘI THOẠI TỰ ĐỘNG SAU ĐÚNG 3 LƯỢT NHẮN CỦA USER
+        # ĐỔI TÊN CUỘC HỘI THOẠI TỰ ĐỘNG SAU ĐÚNG 3 LƯỢT NHẮN CỦA USER
         user_msg_count = sum(1 for m in active_chat["messages"] if m["role"] == "user")
         if user_msg_count == 3 and not active_chat.get("title_set", False):
             with st.spinner("Đang tự động đặt tên cuộc trò chuyện..."):
