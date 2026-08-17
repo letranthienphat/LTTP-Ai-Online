@@ -90,11 +90,21 @@ GITHUB_REPO = get_admin_secret("GITHUB_REPO", "username/repository-name")
 GITHUB_FILE_PATH = "data/users_encrypted.json"
 MAX_GUEST_LIMIT = 100
 
+AUTO_MODEL_OPTION = "🔄 Tự động (Auto Switch)"
 AVAILABLE_GEMINI_MODELS = [
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    AUTO_MODEL_OPTION,
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-2.5-flash"
+    "gemini-1.5-pro",
+    "gemini-1.5-flash"
+]
+
+# Danh sách thứ tự ưu tiên khi ở chế độ Tự động (Từ mới/mạnh nhất xuống cũ hơn)
+AUTO_FALLBACK_ORDER = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash"
 ]
 
 # ==========================================
@@ -110,14 +120,13 @@ def decode_data(b64_str: str) -> str:
         return "{}"
 
 def normalize_user_data(data: dict) -> dict:
-    """Chuẩn hóa cấu trúc dữ liệu người dùng (Migration từ bản cũ nếu có)"""
+    """Chuẩn hóa cấu trúc dữ liệu người dùng"""
     if "gemini_keys" not in data:
         data["gemini_keys"] = []
-        # Chuyển đổi key đơn lẻ cũ sang danh sách
         if "gemini_key" in data and data["gemini_key"].strip():
             data["gemini_keys"].append(data["gemini_key"].strip())
     if "selected_model" not in data:
-        data["selected_model"] = "gemini-1.5-flash"
+        data["selected_model"] = AUTO_MODEL_OPTION
     if "memory" not in data:
         data["memory"] = ""
     if "chats" not in data:
@@ -159,7 +168,6 @@ class GlobalRAMDatabase:
                 raw_json_str = decode_data(content_b64)
                 users = json.loads(raw_json_str) if raw_json_str else {}
                 
-                # Normalize dữ liệu cho toàn bộ users
                 for username in users:
                     users[username] = normalize_user_data(users[username])
 
@@ -229,51 +237,68 @@ class GlobalRAMDatabase:
             return True, "Đã lưu tạm vào RAM server."
 
 # ==========================================
-# MODULE AI ENGINE (GEMINI ONLY)
+# MODULE AI ENGINE (GEMINI WITH AUTO FALLBACK)
 # ==========================================
 class AutoAIEngine:
     @staticmethod
-    def generate_response(prompt: str, system_instruction: str = "", gemini_keys: list = None, model: str = "gemini-1.5-flash") -> str:
+    def generate_response(prompt: str, system_instruction: str = "", gemini_keys: list = None, selected_model: str = AUTO_MODEL_OPTION) -> tuple[str, str]:
+        """
+        Trả về: (response_text, actual_model_used)
+        """
         if not gemini_keys or not any(k.strip() for k in gemini_keys):
-            return "⚠️ **Chưa cấu hình Gemini API Key!** Vui lòng thêm API Key bên thanh Sidebar."
+            return "⚠️ **Chưa cấu hình Gemini API Key!** Vui lòng thêm API Key bên thanh Sidebar.", ""
 
-        # Thử lần lượt từng API Key nếu có nhiều key (Failover Support)
+        # Xác định danh sách mô hình cần thử
+        if selected_model == AUTO_MODEL_OPTION:
+            models_to_try = AUTO_FALLBACK_ORDER
+        else:
+            models_to_try = [selected_model]
+
+        # Duyệt qua tất cả API Keys khả dụng
         for key in gemini_keys:
             clean_key = key.strip()
             if not clean_key:
                 continue
 
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={clean_key}"
-                
-                payload = {"contents": []}
-                if system_instruction.strip():
-                    payload["system_instruction"] = {
-                        "parts": [{"text": system_instruction.strip()}]
-                    }
-                
-                payload["contents"].append({
-                    "role": "user",
-                    "parts": [{"text": prompt}]
-                })
+            # Thử lần lượt các mô hình theo thứ tự ưu tiên
+            for model in models_to_try:
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={clean_key}"
+                    
+                    payload = {"contents": []}
+                    if system_instruction.strip():
+                        payload["system_instruction"] = {
+                            "parts": [{"text": system_instruction.strip()}]
+                        }
+                    
+                    payload["contents"].append({
+                        "role": "user",
+                        "parts": [{"text": prompt}]
+                    })
 
-                headers = {'Content-Type': 'application/json'}
-                res = requests.post(url, json=payload, headers=headers, timeout=25)
-                
-                if res.status_code == 200:
-                    data = res.json()
-                    return data['candidates'][0]['content']['parts'][0]['text']
-            except Exception:
-                continue  # Nếu Key hiện tại lỗi/hết hạn ngạch, tự động nhảy sang Key tiếp theo
+                    headers = {'Content-Type': 'application/json'}
+                    res = requests.post(url, json=payload, headers=headers, timeout=25)
+                    
+                    if res.status_code == 200:
+                        data = res.json()
+                        text = data['candidates'][0]['content']['parts'][0]['text']
+                        return text, model
+                    
+                    # Nếu bị lỗi Rate Limit (429), Quá tải (503/500), hoặc không tìm thấy Model (404) -> Hạ cấp xuống mô hình tiếp theo
+                    elif res.status_code in (429, 404, 500, 503):
+                        continue
 
-        return "⚠️ **Không thể kết nối Gemini API!** Tất cả API Key đều không khả dụng hoặc bị từ chối. Vui lòng kiểm tra lại Key/Mô hình."
+                except Exception:
+                    continue  # Lỗi mạng hoặc trễ kết nối -> Thử mô hình tiếp theo
+
+        return "⚠️ **Không thể kết nối Gemini API!** Tất cả API Keys hoặc Mô hình khả dụng đều gặp lỗi/hết hạn ngạch.", ""
 
     @staticmethod
-    def generate_title(chat_messages: list, gemini_keys: list = None, model: str = "gemini-1.5-flash") -> str:
+    def generate_title(chat_messages: list, gemini_keys: list = None, selected_model: str = AUTO_MODEL_OPTION) -> str:
         conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in chat_messages if m['role'] != 'system'])
         prompt = f"Dựa trên nội dung cuộc hội thoại sau, hãy đặt một tiêu đề ngắn gọn (từ 2 đến 5 từ). Chỉ trả về duy nhất chuỗi tiêu đề:\n\n{conversation_text}"
-        response = AutoAIEngine.generate_response(prompt, "", gemini_keys, model)
-        clean_title = response.strip().replace('"', '').replace("'", "").replace("\n", "")[:40]
+        response_text, _ = AutoAIEngine.generate_response(prompt, "", gemini_keys, selected_model)
+        clean_title = response_text.strip().replace('"', '').replace("'", "").replace("\n", "")[:40]
         return clean_title if clean_title and "Không thể kết nối" not in clean_title and "Chưa cấu hình" not in clean_title else "Cuộc trò chuyện mới"
 
 # ==========================================
@@ -290,7 +315,7 @@ if "guest_timestamps" not in st.session_state:
 if "temp_guest_gemini" not in st.session_state:
     st.session_state.temp_guest_gemini = ""
 if "guest_model" not in st.session_state:
-    st.session_state.guest_model = "gemini-1.5-flash"
+    st.session_state.guest_model = AUTO_MODEL_OPTION
 
 query_params = st.query_params
 if st.session_state.user is None and "session_token" in query_params:
@@ -411,7 +436,7 @@ with st.sidebar:
                         new_user_payload = normalize_user_data({
                             "password": reg_p,
                             "gemini_keys": [],
-                            "selected_model": "gemini-1.5-flash",
+                            "selected_model": AUTO_MODEL_OPTION,
                             "memory": "",
                             "chats": []
                         })
@@ -433,7 +458,7 @@ with st.sidebar:
     with st.expander("🔑 Cấu hình Gemini API & Mô hình", expanded=True if st.session_state.user else False):
         if st.session_state.user:
             # 1. Chọn Mô hình Gemini
-            current_model = st.session_state.user_data.get("selected_model", "gemini-1.5-flash")
+            current_model = st.session_state.user_data.get("selected_model", AUTO_MODEL_OPTION)
             model_index = AVAILABLE_GEMINI_MODELS.index(current_model) if current_model in AVAILABLE_GEMINI_MODELS else 0
             
             selected_model = st.selectbox("Chọn mô hình Gemini:", AVAILABLE_GEMINI_MODELS, index=model_index)
@@ -441,6 +466,9 @@ with st.sidebar:
                 st.session_state.user_data["selected_model"] = selected_model
                 save_user_state_to_ram()
                 GlobalRAMDatabase.sync_ram_to_github()
+
+            if selected_model == AUTO_MODEL_OPTION:
+                st.caption("⚡ **Tự động:** Hệ thống thử `2.5-flash` ➔ `2.0-flash` ➔ `1.5-pro` ➔ `1.5-flash` nếu bị hết lượt.")
 
             st.markdown("---")
 
@@ -557,25 +585,28 @@ if active_chat:
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Lấy danh sách Key & Mô hình tương ứng với tài khoản/khách
+        # Lấy danh sách Key & Mô hình tương ứng
         if st.session_state.user:
             active_keys = st.session_state.user_data.get("gemini_keys", [])
-            active_model = st.session_state.user_data.get("selected_model", "gemini-1.5-flash")
+            active_model = st.session_state.user_data.get("selected_model", AUTO_MODEL_OPTION)
             system_mem = st.session_state.user_data.get("memory", "")
         else:
             active_keys = [st.session_state.temp_guest_gemini] if st.session_state.temp_guest_gemini else []
-            active_model = st.session_state.get("guest_model", "gemini-1.5-flash")
+            active_model = st.session_state.get("guest_model", AUTO_MODEL_OPTION)
             system_mem = ""
 
         with st.chat_message("assistant"):
-            with st.spinner(f"Đang xử lý với {active_model}..."):
-                response_text = AutoAIEngine.generate_response(
+            spinner_msg = "Đang xử lý với Tự động chuyển đổi mô hình..." if active_model == AUTO_MODEL_OPTION else f"Đang xử lý với {active_model}..."
+            with st.spinner(spinner_msg):
+                response_text, used_model = AutoAIEngine.generate_response(
                     prompt=prompt,
                     system_instruction=system_mem,
                     gemini_keys=active_keys,
-                    model=active_model
+                    selected_model=active_model
                 )
                 st.markdown(response_text)
+                if used_model and active_model == AUTO_MODEL_OPTION:
+                    st.caption(f"⚡ *Đã tự động phản hồi bằng: `{used_model}`*")
 
         active_chat["messages"].append({"role": "assistant", "content": response_text})
 
