@@ -4,6 +4,13 @@
     "gemini_keys": [],
     "selected_model": "gemini-3.5-flash",
     "memory": "",
-    "chats": []
+    "chats": [
+      {
+        "id": "1786937361869",
+        "title": "Cuộc trò chuyện mới",
+        "title_set": false,
+        "messages": []
+      }
+    ]
   }
 }
