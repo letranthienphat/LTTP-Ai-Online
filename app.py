@@ -351,6 +351,11 @@ encrypted_keys = user_data["api_keys"]
 user_chats = user_data["chats"]
 active_api_keys = [decrypt_key(k) for k in encrypted_keys if decrypt_key(k)]
 
+# Kiểm tra an toàn trạng thái cuộc trò chuyện hiện tại
+if st.session_state.current_chat_id and st.session_state.current_chat_id not in user_chats:
+    st.session_state.current_chat_id = None
+    st.session_state.messages = []
+
 # ==========================================
 # 8. SIDEBAR CHÍNH
 # ==========================================
@@ -383,7 +388,7 @@ with st.sidebar:
 
     st.subheader("💬 Danh sách trò chuyện")
     
-    # --- DANH SÁCH & XÓA CHAT ---
+    # --- DANH SÁCH & XÓA CHAT (ĐÃ SỬA LỖI KEYERROR) ---
     if not user_chats:
         st.caption("Chưa có cuộc trò chuyện nào.")
     else:
@@ -394,7 +399,7 @@ with st.sidebar:
         )
 
         for cid in sorted_chat_ids:
-            chat_item = user_chats[cid]
+            chat_item = user_chats.get(cid, {})
             title = chat_item.get("title", "Hội thoại mới")
             
             is_active = (cid == st.session_state.current_chat_id)
@@ -408,22 +413,23 @@ with st.sidebar:
                 st.rerun()
 
             if col_del.button("🗑️", key=f"del_{cid}", help="Xóa cuộc trò chuyện"):
-                del user_chats[cid]
-                user_data["chats"] = user_chats
-                db_data[st.session_state.user] = user_data
-                
-                ok, msg = GitHubStorage.save_db(db_data)
-                
-                if st.session_state.current_chat_id == cid:
-                    st.session_state.current_chat_id = None
-                    st.session_state.messages = []
-                
-                if ok:
-                    st.toast("Đã xóa cuộc trò chuyện!", icon="🗑️")
-                else:
-                    st.error(f"Lỗi: {msg}")
-                time.sleep(0.3)
-                st.rerun()
+                if cid in user_chats:
+                    del user_chats[cid]
+                    user_data["chats"] = user_chats
+                    db_data[st.session_state.user] = user_data
+                    
+                    ok, msg = GitHubStorage.save_db(db_data)
+                    
+                    if st.session_state.current_chat_id == cid:
+                        st.session_state.current_chat_id = None
+                        st.session_state.messages = []
+                    
+                    if ok:
+                        st.toast("Đã xóa cuộc trò chuyện!", icon="🗑️")
+                    else:
+                        st.error(f"Lỗi: {msg}")
+                    time.sleep(0.3)
+                    st.rerun()
 
     st.divider()
 
@@ -478,8 +484,9 @@ st.markdown("<h1 class='main-header'>⚡ Nexus AI Online</h1>", unsafe_allow_htm
 current_chat_title = "Cuộc trò chuyện mới"
 current_summary = ""
 
+# Lấy thông tin chat an toàn từ dictionary
 if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
-    chat_obj = user_chats[st.session_state.current_chat_id]
+    chat_obj = user_chats.get(st.session_state.current_chat_id, {})
     current_chat_title = chat_obj.get("title", "Cuộc trò chuyện")
     current_summary = chat_obj.get("summary", "")
 
@@ -503,7 +510,7 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
     st.chat_message("user").write(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # Tạo Chat ID nếu là tin nhắn đầu tiên
+    # Tạo Chat ID mới nếu đang ở giao diện chat mới
     if not st.session_state.current_chat_id:
         new_cid = f"chat_{uuid.uuid4().hex[:8]}"
         st.session_state.current_chat_id = new_cid
@@ -514,10 +521,22 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "summary": "",
             "summarized_count": 0,
-            "messages": []
+            "messages": st.session_state.messages
         }
-
+    
     cid = st.session_state.current_chat_id
+    
+    # Kiểm tra và lấy chat_info an toàn
+    if cid not in user_chats:
+        user_chats[cid] = {
+            "title": prompt[:30] + "..." if len(prompt) > 30 else prompt,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "summary": "",
+            "summarized_count": 0,
+            "messages": st.session_state.messages
+        }
+    
     chat_info = user_chats[cid]
 
     # Xử lý tóm tắt nếu quá 6 tin nhắn
@@ -542,7 +561,6 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
 
     # --- KHUNG AI PHẢN HỒI KÈM HIỆU ỨNG LOADING VÒNG XOAY ---
     with st.chat_message("assistant"):
-        # Hiển thị Widget Đồ họa Spinner Chờ AI
         loading_placeholder = st.empty()
         loading_placeholder.markdown("""
         <div class="ai-loading-box">
@@ -583,7 +601,6 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
                 is_first_chunk = True
                 for chunk in response:
                     if chunk.text:
-                        # Khi có phản hồi đầu tiên -> Ẩn hiệu ứng xoay loading
                         if is_first_chunk:
                             loading_placeholder.empty()
                             is_first_chunk = False
@@ -597,7 +614,6 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
             except Exception:
                 pass
 
-        # Xóa loading placeholder nếu xảy ra lỗi
         loading_placeholder.empty()
 
         if success and full_response:
