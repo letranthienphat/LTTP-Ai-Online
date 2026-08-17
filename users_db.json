@@ -4,7 +4,25 @@
     "api_keys": [
       "gAAAAABqgoxZfK1leEN6GFJ-Nynd1tdNJirKeqdcNefQabmiUtmkAyTBLm0Ez94qtAPl2d30edZSRI732N7kvXQoFjgDyLiIq3J-2LMQ5lBHHazZQvKXCQfK_YYV7mM2dYEdZdYDIuOeetjhzwFPvAB5KEIuC6RN2w=="
     ],
-    "chats": {},
+    "chats": {
+      "chat_17a80bfa": {
+        "title": "Nếu tôi thả một quả bóng bàn v...",
+        "created_at": "2026-08-17 04:43",
+        "updated_at": "2026-08-17 04:43:28",
+        "summary": "",
+        "summarized_count": 0,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Nếu tôi thả một quả bóng bàn và một viên đá xuống một đường ống ngoằn ngoèo bọc kín, làm sao dùng một dụng cụ gia đình đơn giản để lấy quả bóng bàn ra nhanh nhất mà không làm hỏng ống?"
+          },
+          {
+            "role": "assistant",
+            "content": "Cách nhanh nhất và đơn giản nhất là **dùng một ca nước (hoặc vòi nước) để đổ đầy nước vào đường ống**.\n\n**Nguyên lý hoạt động:**\n* **Bóng bàn:** Rất nhẹ và rỗng, lực đẩy Ác-si-mét sẽ đẩy quả bóng tự động **nổi lên bề mặt nước** và trôi dần ra khỏi miệng ống, bất chấp đường ống có ngoằn ngoèo đến mức nào.\n* **Viên đá:** Nặng hơn nước nên sẽ chìm dưới đáy, tách biệt hoàn toàn với quả bóng.\n\n**Ưu điểm:**\n* Dụng cụ cực kỳ dễ tìm (chỉ cần nước).\n* Không cần luồn que/dây làm xước hay rách ống.\n* Không tốn sức và lấy bóng ra chỉ trong vài giây."
+          }
+        ]
+      }
+    },
     "remembered_devices": [
       "23507fbc-11a2-43a3-bba8-e3ccad502682"
     ]
