@@ -1,0 +1,14 @@
+{
+  "7428": {
+    "schema_version": 2,
+    "gemini_keys": [],
+    "selected_model": "gemini-2.5-flash",
+    "chats": [
+      {
+        "id": "1786938477",
+        "title": "Cuộc trò chuyện mới",
+        "messages": []
+      }
+    ]
+  }
+}
