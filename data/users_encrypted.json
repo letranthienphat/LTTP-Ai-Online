@@ -6,19 +6,10 @@
     "memory": "",
     "chats": [
       {
-        "id": "1786935704197",
+        "id": "1786936003211",
         "title": "Cuộc trò chuyện mới",
         "title_set": false,
-        "messages": [
-          {
-            "role": "user",
-            "content": "hello"
-          },
-          {
-            "role": "assistant",
-            "content": "⚠️ **Không thể kết nối Gemini API!**\n\n`Model `gemini-2.5-pro` (HTTP 401): Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.`"
-          }
-        ]
+        "messages": []
       }
     ]
   }
