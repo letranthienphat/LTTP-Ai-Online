@@ -1,1 +1,26 @@
-{"Phát": {"password": "Tp27111510", "gemini_keys": [], "selected_model": "gemini-2.0-flash", "memory": "", "chats": [{"id": "1786937940487", "title": "Cuộc trò chuyện mới", "title_set": false, "messages": []}]}}
+{
+  "Phát": {
+    "schema_version": 2,
+    "gemini_keys": [],
+    "selected_model": "gemini-2.5-flash",
+    "chats": [
+      {
+        "id": "1786937940487",
+        "title": "Cuộc trò chuyện mới",
+        "messages": []
+      }
+    ]
+  },
+  "phát": {
+    "schema_version": 2,
+    "gemini_keys": [],
+    "selected_model": "gemini-2.5-flash",
+    "chats": [
+      {
+        "id": "1786938425",
+        "title": "Cuộc trò chuyện mới",
+        "messages": []
+      }
+    ]
+  }
+}
