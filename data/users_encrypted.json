@@ -4,7 +4,7 @@
     "gemini_keys": [
       "ENC_AaQb.cAdbe8fRgNh6iKjgkMlDmnnboSpKqEr5sVtGuHvXwNxbyUzxaBb5cbdIenfAgghpiBjikSlrm3n2olpSqCrYsZt3uhvnw5xXyLzga"
     ],
-    "selected_model": "gemini-2.5-flash-lite",
+    "selected_model": "gemini-1.5-flash",
     "chats": [
       {
         "id": "1786938477",
