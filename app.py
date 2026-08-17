@@ -16,12 +16,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Danh sách Mô Hình Gemini được cập nhật
 AVAILABLE_FREE_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash-8b"
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-live-translate-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite"
 ]
 
 LOCAL_DB_FILE = "nexus_db.json"
@@ -56,6 +59,7 @@ CURSOR_HTML = '<span class="word-cursor"></span>'
 # 3. BỘ MÃ HÓA / GIẢI MÃ API KEY
 # ==========================================
 def encode_key(raw_key: str) -> str:
+    """Mã hóa API Key tránh vi phạm quy định bảo mật của GitHub"""
     if not raw_key:
         return ""
     if raw_key.startswith("ENC_"):
@@ -65,6 +69,7 @@ def encode_key(raw_key: str) -> str:
     return f"ENC_{b64_str}"
 
 def decode_key(encoded_key: str) -> str:
+    """Giải mã API Key trở lại dạng nguyên bản"""
     if not encoded_key:
         return ""
     if not encoded_key.startswith("ENC_"):
@@ -427,7 +432,7 @@ else:
                     message_placeholder.markdown(CURSOR_HTML, unsafe_allow_html=True)
 
                     try:
-                        # Cấu hình SDK chính thức của Google Generative AI
+                        # Cấu hình SDK chính thức
                         genai.configure(api_key=active_raw_key)
                         model_engine = genai.GenerativeModel(sel_model)
 
@@ -451,7 +456,6 @@ else:
                                     message_placeholder.markdown(full_text + CURSOR_HTML, unsafe_allow_html=True)
                                     time.sleep(0.003)
 
-                        # Kết thúc câu trả lời: Xóa con trỏ và lưu dữ liệu
                         message_placeholder.markdown(full_text)
                         
                         active_chat["messages"].append({"role": "user", "content": prompt})
@@ -460,4 +464,4 @@ else:
 
                     except Exception as e:
                         message_placeholder.empty()
-                        st.error(f"⚠️ Lỗi kết nối Google API: {str(e)}")
+                        st.error(f"⚠️ Lỗi kết nối Google API ({sel_model}): {str(e)}")
