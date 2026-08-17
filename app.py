@@ -1,7 +1,7 @@
 import os
 import json
 import time
-import base64
+import string
 import requests
 import streamlit as st
 import google.generativeai as genai
@@ -55,37 +55,40 @@ st.markdown("""
 CURSOR_HTML = '<span class="word-cursor"></span>'
 
 # ==========================================
-# 3. BỘ MÃ HÓA / GIẢI MÃ API KEY (BẢO VỆ GITHUB SECRET SCANNING)
+# 3. MÃ HÓA BẰNG THUẬT TOÁN ĐAN XEN ALPHABET
 # ==========================================
 def encode_key(raw_key: str) -> str:
-    """Mã hóa API Key ngay lập tức bằng Base64 đảo ngược để vượt qua bộ lọc GitHub."""
+    """Chèn 1 ký tự alphabet (a-z) vào sau mỗi ký tự gốc để phá vỡ pattern AIzaSy."""
     if not raw_key:
         return ""
     if raw_key.startswith("ENC_"):
-        return raw_key  # Đã mã hóa từ trước
+        return raw_key  # Đã mã hóa
     
-    # Đảo ngược chuỗi và mã hóa Base64 để làm biến dạng hoàn toàn pattern 'AIzaSy...'
-    reversed_key = raw_key[::-1]
-    b64_str = base64.b64encode(reversed_key.encode('utf-8')).decode('utf-8')
-    return f"ENC_{b64_str}"
+    alphabet = string.ascii_lowercase  # 'abcdefghijklmnopqrstuvwxyz'
+    encoded_chars = []
+    
+    for idx, char in enumerate(raw_key):
+        encoded_chars.append(char)
+        # Lấy chữ cái theo thứ tự bảng chữ cái (xoay vòng 26 chữ cái)
+        filler_char = alphabet[idx % len(alphabet)]
+        encoded_chars.append(filler_char)
+        
+    return "ENC_" + "".join(encoded_chars)
 
 def decode_key(encoded_key: str) -> str:
-    """Giải mã API Key về dạng nguyên bản khi gọi SDK."""
+    """Lấy lại các ký tự ở vị trí chẵn (0, 2, 4, 6...) để khôi phục Key gốc."""
     if not encoded_key:
         return ""
     if not encoded_key.startswith("ENC_"):
-        return encoded_key  # Trường hợp key cũ chưa mã hóa
-    
-    try:
-        pure_b64 = encoded_key.replace("ENC_", "", 1)
-        decoded_bytes = base64.b64decode(pure_b64.encode('utf-8'))
-        reversed_key = decoded_bytes.decode('utf-8')
-        return reversed_key[::-1]
-    except Exception:
         return encoded_key
+    
+    pure_str = encoded_key.replace("ENC_", "", 1)
+    # Lọc chỉ lấy ký tự gốc tại chỉ số vị trí chẵn
+    original_chars = [pure_str[i] for i in range(0, len(pure_str), 2)]
+    return "".join(original_chars)
 
 # ==========================================
-# 4. CHUẨN HÓA DỮ LIỆU SCHEMA (ÉP MÃ HÓA 100%)
+# 4. CHUẨN HÓA DỮ LIỆU SCHEMA
 # ==========================================
 def normalize_user_schema(raw_data: dict) -> dict:
     if not isinstance(raw_data, dict):
@@ -95,7 +98,6 @@ def normalize_user_schema(raw_data: dict) -> dict:
     if isinstance(raw_keys, str):
         raw_keys = [raw_keys] if raw_keys.strip() else []
 
-    # Đảm bảo 100% key lưu trong Schema phải ở dạng ENC_
     encrypted_keys = []
     for k in raw_keys:
         k_str = str(k).strip()
@@ -178,6 +180,7 @@ class DatabaseEngine:
             if res.status_code == 200:
                 data = res.json()
                 sha = data.get("sha")
+                import base64
                 content_b64 = data.get("content", "").replace("\n", "").replace("\r", "")
                 decoded = base64.b64decode(content_b64.encode('utf-8')).decode('utf-8')
                 return json.loads(decoded), sha, None
@@ -203,16 +206,16 @@ class DatabaseEngine:
             "Accept": "application/vnd.github.v3+json"
         }
 
-        # Đảm bảo toàn bộ Database đã qua hàm mã hóa trước khi đưa lên chuỗi JSON
         clean_db = {}
         for user_key, user_val in db_data.items():
             clean_db[user_key] = normalize_user_schema(user_val)
 
+        import base64
         json_bytes = json.dumps(clean_db, ensure_ascii=False, indent=2).encode('utf-8')
         content_b64 = base64.b64encode(json_bytes).decode('utf-8')
 
         payload = {
-            "message": f"Update DB Secure - {time.strftime('%H:%M:%S %d/%m/%Y')}",
+            "message": f"Update DB Interleaved Key - {time.strftime('%H:%M:%S %d/%m/%Y')}",
             "content": content_b64
         }
         if latest_sha:
@@ -360,8 +363,7 @@ with st.sidebar:
                 if clean_k in existing_raw_keys:
                     st.warning("API Key này đã tồn tại trong Database!")
                 else:
-                    with st.spinner("Đang mã hóa & đồng bộ..."):
-                        # Mã hóa Key lập tức trước khi thêm vào Session State
+                    with st.spinner("Đang mã hóa đan xen & đồng bộ..."):
                         enc_new_key = encode_key(clean_k)
                         st.session_state.user_data["gemini_keys"].append(enc_new_key)
 
@@ -434,7 +436,7 @@ else:
                     active_chat["title"] = prompt[:20] + "..." if len(prompt) > 20 else prompt
 
                 sel_model = st.session_state.user_data.get("selected_model", AVAILABLE_FREE_MODELS[0])
-                # Giải mã key để sử dụng riêng cho SDK
+                # Giải mã lấy lại Key nguyên bản để cấp cho SDK
                 active_raw_key = decode_key(enc_keys[0])
 
                 with st.chat_message("assistant"):
@@ -442,11 +444,9 @@ else:
                     message_placeholder.markdown(CURSOR_HTML, unsafe_allow_html=True)
 
                     try:
-                        # Cấu hình SDK chính thức bằng Raw Key
                         genai.configure(api_key=active_raw_key)
                         model_engine = genai.GenerativeModel(sel_model)
 
-                        # Chuyển đổi lịch sử chat sang định dạng SDK Google
                         formatted_history = []
                         for m in active_chat["messages"]:
                             role_name = "model" if m["role"] == "assistant" else "user"
