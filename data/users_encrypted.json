@@ -1,1 +1,1 @@
-{"Phát": {"password": "Tp27111510", "groq_key": "", "gemini_key": "", "memory": "", "chats": [{"id": "1786853302036", "title": "Cuộc trò chuyện mới", "title_set": false, "messages": []}]}}
+{"Phát": {"password": "Tp27111510", "groq_key": "", "gemini_key": "", "memory": "", "chats": [{"id": "1786853302036", "title": "Cuộc trò chuyện mới", "title_set": false, "messages": []}], "gemini_keys": [], "selected_model": "gemini-3.5-flash"}}
