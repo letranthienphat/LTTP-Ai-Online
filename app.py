@@ -6,17 +6,10 @@ import requests
 import streamlit as st
 
 # ==========================================
-# CẤU HÌNH TRANG
+# 1. CẤU HÌNH TRANG & SECRETS
 # ==========================================
-st.set_page_config(
-    page_title="Nexus AI Gateway",
-    page_icon="🤖",
-    layout="wide"
-)
+st.set_page_config(page_title="Nexus AI Gateway", page_icon="🤖", layout="wide")
 
-# ==========================================
-# LẤY SECRETS & CẤU HÌNH GITHUB
-# ==========================================
 def get_secret(key, default=""):
     try:
         if key in st.secrets:
@@ -25,8 +18,8 @@ def get_secret(key, default=""):
         pass
     return os.getenv(key, default)
 
-GITHUB_TOKEN = get_secret("GITHUB_TOKEN", "")
-GITHUB_REPO = get_secret("GITHUB_REPO", "") # Ví dụ: username/repo-name
+GITHUB_TOKEN = get_secret("GITHUB_TOKEN", "").strip()
+GITHUB_REPO = get_secret("GITHUB_REPO", "").strip()  # Dạng: username/repo-name
 GITHUB_FILE_PATH = "data/users_encrypted.json"
 
 AVAILABLE_GEMINI_FREE_MODELS = [
@@ -39,202 +32,295 @@ AVAILABLE_GEMINI_FREE_MODELS = [
 ]
 
 # ==========================================
-# CÁC HÀM XỬ LÝ GITHUB DATABASE (TRỰC TIẾP)
+# 2. ENGINE KẾT NỐI DATABASE GITHUB (CHUẨN XÁC)
 # ==========================================
-def github_get_file():
-    """Tải dữ liệu mới nhất và SHA từ GitHub API"""
+def github_get_db():
+    """Lấy dữ liệu JSON và SHA mới nhất từ GitHub"""
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return {}, None, "Chưa cấu hình GITHUB_TOKEN hoặc GITHUB_REPO trong Secrets!"
     
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json"
     }
     
     try:
-        res = requests.get(url, headers=headers, params={"t": time.time()}, timeout=10)
+        res = requests.get(url, headers=headers, params={"nocache": time.time()}, timeout=10)
         if res.status_code == 200:
             data = res.json()
             sha = data.get("sha")
-            content_b64 = data.get("content", "")
-            decoded_str = base64.b64decode(content_b64.encode('utf-8')).decode('utf-8')
-            return json.loads(decoded_str), sha, None
+            content_b64 = data.get("content", "").replace("\n", "").replace("\r", "")
+            decoded = base64.b64decode(content_b64.encode('utf-8')).decode('utf-8')
+            return json.loads(decoded), sha, None
         elif res.status_code == 404:
-            return {}, None, None # File chưa tồn tại
+            return {}, None, None  # File chưa tồn tại trên Repo
         else:
-            return {}, None, f"Lỗi GitHub ({res.status_code}): {res.text}"
+            return {}, None, f"GitHub HTTP {res.status_code}: {res.text}"
     except Exception as e:
         return {}, None, f"Lỗi kết nối: {str(e)}"
 
-def github_save_file(data_dict):
-    """Ghi đè dữ liệu trực tiếp lên GitHub Repository"""
+def github_save_db(full_db):
+    """Ghi đè dữ liệu lên GitHub (Tự động lấy SHA tươi)"""
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return False, "Thiếu GITHUB_TOKEN hoặc GITHUB_REPO trong Secrets!"
-
-    # 1. Lấy SHA mới nhất trước khi ghi
-    _, current_sha, err = github_get_file()
+    
+    # Lấy SHA tươi ngay trước khi thực hiện ghi
+    _, latest_sha, err = github_get_db()
     if err and "404" not in err:
-        return False, f"Không thể lấy SHA để ghi: {err}"
+        return False, f"Không thể đọc SHA từ GitHub: {err}"
 
-    # 2. Mã hóa dữ liệu sang Base64
-    json_bytes = json.dumps(data_dict, ensure_ascii=False, indent=2).encode('utf-8')
-    content_b64 = base64.b64encode(json_bytes).decode('utf-8')
-
-    # 3. Đẩy lên GitHub
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json"
     }
     
+    json_bytes = json.dumps(full_db, ensure_ascii=False, indent=2).encode('utf-8')
+    content_b64 = base64.b64encode(json_bytes).decode('utf-8')
+    
     payload = {
-        "message": "Update user API Keys & Data",
+        "message": f"Update DB - {time.strftime('%H:%M:%S %d/%m/%Y')}",
         "content": content_b64
     }
-    if current_sha:
-        payload["sha"] = current_sha
+    if latest_sha:
+        payload["sha"] = latest_sha
 
     try:
         res = requests.put(url, headers=headers, json=payload, timeout=15)
         if res.status_code in [200, 201]:
-            return True, "Thành công!"
+            return True, "Lưu thành công!"
         else:
-            return False, f"GitHub từ chối ({res.status_code}): {res.text}"
+            return False, f"Lỗi GitHub ({res.status_code}): {res.text}"
     except Exception as e:
         return False, f"Lỗi gửi dữ liệu: {str(e)}"
 
 # ==========================================
-# INIT SESSION STATE
+# 3. KHỞI TẠO SESSION STATE
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
 if "user_data" not in st.session_state:
     st.session_state.user_data = {"gemini_keys": [], "selected_model": AVAILABLE_GEMINI_FREE_MODELS[0], "chats": []}
+if "current_chat_id" not in st.session_state:
+    st.session_state.current_chat_id = None
 
 # ==========================================
-# SIDEBAR GIAO DIỆN
+# 4. GIAO DIỆN THANH SIDEBAR
 # ==========================================
 with st.sidebar:
     st.title("🤖 Nexus AI Gateway")
 
-    # Báo trạng thái kết nối GitHub
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-        st.error("⚠️ Bạn chưa điền `GITHUB_TOKEN` hoặc `GITHUB_REPO` vào Streamlit Secrets!")
+    # Tool kiểm tra kết nối GitHub
+    with st.expander("🔍 Kiểm tra kết nối GitHub DB", expanded=False):
+        st.write(f"**Repo:** `{GITHUB_REPO if GITHUB_REPO else 'Chưa điền'}`")
+        if st.button("Kiểm tra quyền Ghi File", use_container_width=True):
+            with st.spinner("Đang thử kết nối..."):
+                db, sha, err = github_get_db()
+                if err and "404" not in err:
+                    st.error(f"❌ Thất bại: {err}")
+                else:
+                    st.success(f"✅ Kết nối thành công! (SHA: {sha if sha else 'File mới'})")
 
-    # ĐĂNG NHẬP / ĐĂNG KÝ SIMPLE
+    st.markdown("---")
+
+    # ĐĂNG NHẬP / TẢI DỮ LIỆU
     if not st.session_state.user:
-        u_input = st.text_input("Tên tài khoản (để lưu dữ liệu):")
+        u_input = st.text_input("Tên tài khoản của bạn:")
         if st.button("🔑 Đăng nhập / Tải dữ liệu", use_container_width=True):
             if u_input.strip():
-                with st.spinner("Đang kết nối Database GitHub..."):
-                    db, _, err = github_get_file()
-                    if err:
-                        st.error(err)
+                with st.spinner("Đang lấy dữ liệu từ GitHub..."):
+                    db, _, err = github_get_db()
+                    if err and "404" not in err:
+                        st.error(f"Lỗi tải DB: {err}")
                     else:
-                        st.session_state.user = u_input.strip()
-                        if u_input in db:
-                            st.session_state.user_data = db[u_input]
-                            st.success("Đã tải dữ liệu của bạn từ GitHub!")
+                        username = u_input.strip()
+                        st.session_state.user = username
+                        if username in db:
+                            st.session_state.user_data = db[username]
+                            st.toast("Đã tải dữ liệu từ Database!", icon="✅")
                         else:
                             # Tài khoản mới
                             st.session_state.user_data = {"gemini_keys": [], "selected_model": AVAILABLE_GEMINI_FREE_MODELS[0], "chats": []}
-                            st.info("Đã tạo tài khoản tạm thời mới.")
+                            st.toast("Tạo tài khoản mới!", icon="ℹ️")
+                        
+                        # Tạo chat mặc định nếu trống
+                        if not st.session_state.user_data.get("chats"):
+                            new_chat_id = str(int(time.time()))
+                            st.session_state.user_data["chats"] = [{"id": new_chat_id, "title": "Cuộc trò chuyện mới", "messages": []}]
+                        st.session_state.current_chat_id = st.session_state.user_data["chats"][0]["id"]
                         st.rerun()
     else:
         st.success(f"👤 Tài khoản: **{st.session_state.user}**")
         if st.button("🚪 Đăng xuất", use_container_width=True):
             st.session_state.user = None
+            st.session_state.user_data = {"gemini_keys": [], "selected_model": AVAILABLE_GEMINI_FREE_MODELS[0], "chats": []}
             st.rerun()
 
     st.markdown("---")
 
-    # KHU VỰC CẤU HÌNH API KEY VÀ MODEL
-    st.subheader("🔑 API Key & Model Free")
+    # CẤU HÌNH API KEY VÀ MODEL
+    st.subheader("🔑 Cấu hình API Key & Model")
     
     # Chọn Model
     current_model = st.session_state.user_data.get("selected_model", AVAILABLE_GEMINI_FREE_MODELS[0])
     idx = AVAILABLE_GEMINI_FREE_MODELS.index(current_model) if current_model in AVAILABLE_GEMINI_FREE_MODELS else 0
     selected_model = st.selectbox("Chọn mô hình Free Tier:", AVAILABLE_GEMINI_FREE_MODELS, index=idx)
-    st.session_state.user_data["selected_model"] = selected_model
+    
+    if selected_model != current_model and st.session_state.user:
+        st.session_state.user_data["selected_model"] = selected_model
+        db, _, _ = github_get_db()
+        db[st.session_state.user] = st.session_state.user_data
+        github_save_db(db)
 
-    # Danh sách Keys hiện tại
+    # Hiển thị Keys hiện tại
     keys_list = st.session_state.user_data.get("gemini_keys", [])
-    st.markdown(f"**Số Key hiện có:** `{len(keys_list)}`")
-
+    st.markdown(f"**API Keys đã lưu ({len(keys_list)}):**")
+    
     for i, k in enumerate(keys_list):
         col_txt, col_btn = st.columns([0.8, 0.2])
         col_txt.text(f"Key {i+1}: {k[:6]}...{k[-4:]}")
-        if col_btn.button("❌", key=f"del_{i}"):
-            keys_list.pop(i)
-            st.session_state.user_data["gemini_keys"] = keys_list
-            
-            # Lưu ngay khi xóa
+        if col_btn.button("❌", key=f"del_key_{i}"):
             if st.session_state.user:
-                db, _, _ = github_get_file()
-                db[st.session_state.user] = st.session_state.user_data
-                ok, msg = github_save_file(db)
+                # Tạo bản sao thử nghiệm trước
+                temp_keys = list(keys_list)
+                temp_keys.pop(i)
+                
+                db, _, _ = github_get_db()
+                temp_user_data = dict(st.session_state.user_data)
+                temp_user_data["gemini_keys"] = temp_keys
+                db[st.session_state.user] = temp_user_data
+                
+                ok, msg = github_save_db(db)
                 if ok:
-                    st.toast("Đã xóa Key và cập nhật GitHub!", icon="✅")
+                    st.session_state.user_data["gemini_keys"] = temp_keys
+                    st.toast("Đã xóa Key khỏi Database!", icon="🗑️")
+                    st.rerun()
                 else:
-                    st.error(f"Lỗi lưu GitHub: {msg}")
-            st.rerun()
+                    st.error(f"Không thể xóa trên GitHub: {msg}")
 
-    # Thêm Key Mới
-    new_key = st.text_input("Nhập API Key mới:", type="password")
-    if st.button("💾 THÊM & LƯU LÊN DATABASE", type="primary", use_container_width=True):
-        clean_k = new_key.strip()
+    # Nhập Key Mới
+    new_key_input = st.text_input("Nhập Gemini API Key mới:", type="password", key="input_new_key")
+    if st.button("💾 LƯU KEY VÀO DATABASE", type="primary", use_container_width=True):
+        clean_k = new_key_input.strip()
         if not clean_k:
             st.warning("Vui lòng nhập API Key!")
         elif not st.session_state.user:
-            st.error("Bạn phải điền tên tài khoản ở trên trước khi lưu!")
+            st.error("Bạn chưa đăng nhập tài khoản ở trên!")
+        elif clean_k in keys_list:
+            st.warning("API Key này đã tồn tại trong danh sách!")
         else:
-            if clean_k not in keys_list:
-                keys_list.append(clean_k)
-                st.session_state.user_data["gemini_keys"] = keys_list
-
-                # ĐẨY THẲNG LÊN GITHUB NGAY LẬP TỨC
-                with st.spinner("Đang gửi yêu cầu Commit lên GitHub..."):
-                    db, _, err_get = github_get_file()
-                    db[st.session_state.user] = st.session_state.user_data
+            with st.spinner("Đang ghi dữ liệu lên GitHub..."):
+                # Lấy DB hiện tại từ GitHub
+                db, _, err = github_get_db()
+                if err and "404" not in err:
+                    st.error(f"Lỗi đọc DB: {err}")
+                else:
+                    # Chuẩn bị dữ liệu cập nhật
+                    temp_keys = list(keys_list) + [clean_k]
+                    temp_user_data = dict(st.session_state.user_data)
+                    temp_user_data["gemini_keys"] = temp_keys
+                    db[st.session_state.user] = temp_user_data
                     
-                    ok, msg = github_save_file(db)
+                    # Ghi lên GitHub
+                    ok, msg = github_save_db(db)
                     if ok:
-                        st.success("🎉 ĐÃ LƯU THÀNH CÔNG LÊN GITHUB DATABASE!")
+                        # CHỈ cập nhật RAM khi GitHub báo thành công 100%
+                        st.session_state.user_data["gemini_keys"] = temp_keys
+                        st.success("🎉 ĐÃ LƯU API KEY THÀNH CÔNG VÀO GITHUB!")
                         time.sleep(1)
                         st.rerun()
                     else:
-                        st.error(f"🔴 KHÔNG THỂ LƯU LÊN GITHUB: {msg}")
-            else:
-                st.warning("Key này đã có trong danh sách.")
+                        st.error(f"🔴 LƯU THẤT BẠI: {msg}")
+
+    st.markdown("---")
+    
+    # DANH SÁCH CUỘC TRÒ CHUYỆN
+    st.subheader("💬 Danh sách Chat")
+    if st.button("➕ Tạo hội thoại mới", use_container_width=True):
+        if st.session_state.user:
+            new_id = str(int(time.time()))
+            st.session_state.user_data["chats"].insert(0, {"id": new_id, "title": "Cuộc trò chuyện mới", "messages": []})
+            st.session_state.current_chat_id = new_id
+            
+            db, _, _ = github_get_db()
+            db[st.session_state.user] = st.session_state.user_data
+            github_save_db(db)
+            st.rerun()
+
+    chats = st.session_state.user_data.get("chats", [])
+    for c in chats:
+        btn_type = "primary" if c["id"] == st.session_state.current_chat_id else "secondary"
+        if st.button(f"💬 {c['title']}", key=f"chat_btn_{c['id']}", type=btn_type, use_container_width=True):
+            st.session_state.current_chat_id = c["id"]
+            st.rerun()
 
 # ==========================================
-# KHU VỰC HỎI ĐÁP
+# 5. KHU VỰC KHUNG CHAT CHÍNH
 # ==========================================
-st.title("💬 Chatbot AI")
-user_keys = st.session_state.user_data.get("gemini_keys", [])
+st.title("💬 Nexus AI Chatbot")
 
-if not user_keys:
-    st.info("👈 Hãy đăng nhập và thêm ít nhất 1 Gemini API Key bên thanh Sidebar để bắt đầu.")
+if not st.session_state.user:
+    st.info("👈 Vui lòng nhập **Tên tài khoản** ở thanh Sidebar để Bắt đầu & Lưu dữ liệu.")
 else:
-    prompt = st.chat_input("Nhập câu hỏi của bạn...")
-    if prompt:
-        st.chat_message("user").write(prompt)
-        
-        # Gọi Gemini REST API trực tiếp
-        active_key = user_keys[0] # Lấy key đầu tiên
-        target_model = "gemini-2.5-flash" if selected_model == "🔄 Tự động chọn Model Free" else selected_model
-        
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={active_key}"
-        
-        with st.chat_message("assistant"):
-            with st.spinner(f"Đang suy nghĩ với model {target_model}..."):
-                try:
-                    res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
-                    if res.status_code == 200:
-                        ans = res.json()['candidates'][0]['content']['parts'][0]['text']
-                        st.write(ans)
-                    else:
-                        st.error(f"Lỗi API ({res.status_code}): {res.text}")
-                except Exception as e:
-                    st.error(f"Lỗi kết nối: {str(e)}")
+    # Tìm chat hiện tại
+    chats = st.session_state.user_data.get("chats", [])
+    active_chat = None
+    for c in chats:
+        if c["id"] == st.session_state.current_chat_id:
+            active_chat = c
+            break
+            
+    if not active_chat and chats:
+        active_chat = chats[0]
+        st.session_state.current_chat_id = active_chat["id"]
+
+    if active_chat:
+        # Hiển thị tin nhắn lịch sử
+        for msg in active_chat.get("messages", []):
+            st.chat_message(msg["role"]).write(msg["content"])
+
+        # Nhập tin nhắn mới
+        if prompt := st.chat_input("Nhập câu hỏi của bạn..."):
+            user_keys = st.session_state.user_data.get("gemini_keys", [])
+            if not user_keys:
+                st.error("⚠️ Bạn chưa lưu API Key nào vào Database! Vui lòng thêm Key bên Sidebar.")
+            else:
+                # 1. Hiển thị & Lưu tin nhắn User
+                st.chat_message("user").write(prompt)
+                active_chat["messages"].append({"role": "user", "content": prompt})
+
+                # Tự đổi tiêu đề chat nếu là câu đầu tiên
+                if len(active_chat["messages"]) == 1:
+                    active_chat["title"] = prompt[:20] + "..."
+
+                # 2. Gọi Gemini API
+                active_key = user_keys[0]
+                model_name = "gemini-2.5-flash" if selected_model == "🔄 Tự động chọn Model Free" else selected_model
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={active_key}"
+
+                with st.chat_message("assistant"):
+                    with st.spinner(f"Đang suy nghĩ ({model_name})..."):
+                        try:
+                            # Chuyển lịch sử sang định dạng Gemini
+                            contents = []
+                            for m in active_chat["messages"]:
+                                r = "model" if m["role"] == "assistant" else "user"
+                                contents.append({"role": r, "parts": [{"text": m["content"]}]})
+
+                            res = requests.post(url, json={"contents": contents}, timeout=30)
+                            if res.status_code == 200:
+                                ans_text = res.json()['candidates'][0]['content']['parts'][0]['text']
+                                st.write(ans_text)
+                                active_chat["messages"].append({"role": "assistant", "content": ans_text})
+
+                                # 3. LƯU TOÀN BỘ CHAT VÀO GITHUB DATABASE NGAY LẬP TỨC
+                                db, _, _ = github_get_db()
+                                db[st.session_state.user] = st.session_state.user_data
+                                ok, msg_err = github_save_db(db)
+                                if not ok:
+                                    st.warning(f"⚠️ Tin nhắn đã hiện nhưng chưa lưu được lên GitHub: {msg_err}")
+                            else:
+                                st.error(f"Lỗi Gemini API ({res.status_code}): {res.text}")
+                        except Exception as e:
+                            st.error(f"Lỗi kết nối: {str(e)}")
