@@ -24,7 +24,7 @@ DB_FILE = "users_db.json"
 GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
 GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 
-# Khóa mã hóa AES từ Secret (Mã hóa API Key)
+# Khóa mã hóa AES từ Secret (Dùng mã hóa API Key)
 MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "NexusAI_Master_Secret_Key_2026")
 FERNET_KEY = base64.urlsafe_b64encode(hashlib.sha256(MASTER_SECRET.encode()).digest())
 cipher = Fernet(FERNET_KEY)
@@ -42,7 +42,7 @@ if not device_id:
     cookies.set("nexus_device_id", device_id, max_age=COOKIE_MAX_AGE)
 
 # ==========================================
-# 2. HÀM MÃ HÓA & GIẢI MÃ API KEY
+# 2. HÀM MÃ HÓA & MẬT KHẨU
 # ==========================================
 def encrypt_key(raw_key: str) -> str:
     if not raw_key: return ""
@@ -59,39 +59,7 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 # ==========================================
-# 3. HÀM TÓM TẮT HỘI THOẠI CŨ (TIẾT KIỆM TOKEN)
-# ==========================================
-def generate_summary(older_messages: list, existing_summary: str, api_key: str, model_name: str) -> str:
-    """Gọi AI tóm tắt các lượt nhắn cũ hơn 6 tin nhắn gần nhất."""
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
-        
-        text_to_summarize = ""
-        if existing_summary:
-            text_to_summarize += f"Bối cảnh tóm tắt trước đó:\n{existing_summary}\n\nCác tin nhắn mới phát sinh:\n"
-        
-        for m in older_messages:
-            role_label = "Người dùng" if m["role"] == "user" else "AI"
-            text_to_summarize += f"- {role_label}: {m['content']}\n"
-            
-        prompt = (
-            "Hãy tóm tắt ngắn gọn và đúc kết các ý chính, thông tin quan trọng của đoạn hội thoại sau "
-            "thành 1 đoạn văn (dưới 150 từ) để làm bối cảnh cho các câu hỏi tiếp theo:\n\n"
-            f"{text_to_summarize}"
-        )
-        
-        res = model.generate_content(prompt)
-        return res.text.strip()
-    except Exception:
-        parts = [existing_summary] if existing_summary else []
-        for m in older_messages:
-            r = "User" if m["role"] == "user" else "AI"
-            parts.append(f"{r}: {m['content'][:50]}...")
-        return " | ".join(parts)
-
-# ==========================================
-# 4. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
+# 3. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
 # ==========================================
 class GitHubStorage:
     @staticmethod
@@ -150,7 +118,7 @@ class GitHubStorage:
         content_b64 = base64.b64encode(json_bytes).decode('utf-8')
         
         payload = {
-            "message": "Update users_db.json (API Keys, Chats & Devices)",
+            "message": "Update users_db.json (Chats, Keys & Devices)",
             "content": content_b64
         }
         if sha:
@@ -166,7 +134,39 @@ class GitHubStorage:
             return False, f"Lỗi lưu GitHub: {e}"
 
 # ==========================================
-# 5. KHỞI TẠO STATE & TỰ ĐỘNG ĐĂNG NHẬP THEO DEVICE ID
+# 4. HÀM TÓM TẮT HỘI THOẠI CŨ (TIẾT KIỆM TOKEN)
+# ==========================================
+def generate_summary(older_messages: list, existing_summary: str, api_key: str, model_name: str) -> str:
+    """Gọi AI tóm tắt các lượt nhắn cũ hơn 6 tin nhắn gần nhất."""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        
+        text_to_summarize = ""
+        if existing_summary:
+            text_to_summarize += f"Bối cảnh tóm tắt trước đó:\n{existing_summary}\n\nCác tin nhắn mới phát sinh:\n"
+        
+        for m in older_messages:
+            role_label = "Người dùng" if m["role"] == "user" else "AI"
+            text_to_summarize += f"- {role_label}: {m['content']}\n"
+            
+        prompt = (
+            "Hãy tóm tắt ngắn gọn và đúc kết các ý chính, thông tin quan trọng của đoạn hội thoại sau "
+            "thành 1 đoạn văn (dưới 150 từ) để làm bối cảnh cho các câu hỏi tiếp theo:\n\n"
+            f"{text_to_summarize}"
+        )
+        
+        res = model.generate_content(prompt)
+        return res.text.strip()
+    except Exception:
+        parts = [existing_summary] if existing_summary else []
+        for m in older_messages:
+            r = "User" if m["role"] == "user" else "AI"
+            parts.append(f"{r}: {m['content'][:50]}...")
+        return " | ".join(parts)
+
+# ==========================================
+# 5. KHỞI TẠO SESSION STATE & TỰ ĐỘNG ĐĂNG NHẬP
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -178,7 +178,7 @@ if "messages" not in st.session_state:
 # Tải cơ sở dữ liệu
 db_data = GitHubStorage.load_db()
 
-# Kiểm tra tính năng Auto Login bằng Device ID
+# Tự động đăng nhập nếu Device ID đã được ghi nhớ
 if not st.session_state.user and device_id and db_data:
     for username, uinfo in db_data.items():
         remembered_devices = uinfo.get("remembered_devices", [])
@@ -187,7 +187,7 @@ if not st.session_state.user and device_id and db_data:
             st.toast(f"Tự động đăng nhập thiết bị thành công! Xin chào {username}", icon="⚡")
             break
 
-# UI Đăng nhập / Đăng ký nếu chưa có User
+# UI Đăng nhập / Đăng ký
 def render_auth_ui():
     st.markdown("<h2 style='text-align: center;'>⚡ Cổng Truy Cập Nexus AI</h2>", unsafe_allow_html=True)
     _, col, _ = st.columns([1, 2, 1])
@@ -209,7 +209,6 @@ def render_auth_ui():
                         st.session_state.current_chat_id = None
                         st.session_state.messages = []
                         
-                        # Lưu Device ID vào tài khoản người dùng
                         if remember_me:
                             db[u_name].setdefault("remembered_devices", [])
                             if device_id not in db[u_name]["remembered_devices"]:
@@ -253,10 +252,9 @@ if not st.session_state.user:
     st.stop()
 
 # ==========================================
-# 6. TẢI DỮ LIỆU TÀI KHOẢN HIỆN TẠI
+# 6. TẢI DỮ LIỆU TÀI KHOẢN
 # ==========================================
 user_data = db_data.get(st.session_state.user, {})
-
 user_data.setdefault("api_keys", [])
 user_data.setdefault("chats", {})
 user_data.setdefault("remembered_devices", [])
@@ -273,7 +271,6 @@ with st.sidebar:
     st.caption(f"💻 Device ID: `{device_id[:6]}...{device_id[-4:]}`")
 
     if st.button("🚪 Đăng xuất", use_container_width=True):
-        # Hủy liên kết Device ID hiện tại khi đăng xuất
         if device_id in user_data["remembered_devices"]:
             user_data["remembered_devices"].remove(device_id)
             db_data[st.session_state.user] = user_data
@@ -286,17 +283,19 @@ with st.sidebar:
 
     st.divider()
 
-    # --- LỊCH SỬ CHAT ---
+    # --- THÊM CHAT MỚI ---
     if st.button("➕ Cuộc trò chuyện mới", type="primary", use_container_width=True):
         st.session_state.current_chat_id = None
         st.session_state.messages = []
         st.rerun()
 
-    st.subheader("💬 Lịch sử trò chuyện")
+    st.subheader("💬 Danh sách trò chuyện")
     
+    # --- HIỂN THỊ & XÓA CUỘC TRÒ CHUYỆN ---
     if not user_chats:
-        st.caption("Chưa có lịch sử hội thoại.")
+        st.caption("Chưa có cuộc trò chuyện nào.")
     else:
+        # Sắp xếp cuộc trò chuyện theo thời gian mới nhất
         sorted_chat_ids = sorted(
             user_chats.keys(), 
             key=lambda cid: user_chats[cid].get("updated_at", ""), 
@@ -310,34 +309,46 @@ with st.sidebar:
             is_active = (cid == st.session_state.current_chat_id)
             btn_label = f"📌 {title}" if is_active else f"💬 {title}"
             
-            col_c, col_d = st.columns([0.82, 0.18])
-            if col_c.button(btn_label, key=f"chat_select_{cid}", use_container_width=True):
+            col_select, col_del = st.columns([0.8, 0.2])
+            
+            # Chọn cuộc trò chuyện
+            if col_select.button(btn_label, key=f"select_{cid}", use_container_width=True):
                 st.session_state.current_chat_id = cid
                 st.session_state.messages = user_chats[cid].get("messages", [])
                 st.rerun()
 
-            if col_d.button("🗑️", key=f"chat_del_{cid}", help="Xóa hội thoại này"):
+            # Xóa cuộc trò chuyện
+            if col_del.button("🗑️", key=f"del_{cid}", help="Xóa hội thoại này"):
                 del user_chats[cid]
                 user_data["chats"] = user_chats
                 db_data[st.session_state.user] = user_data
-                GitHubStorage.save_db(db_data)
                 
+                # Lưu đồng bộ lập tức lên GitHub
+                ok, msg = GitHubStorage.save_db(db_data)
+                
+                # Nếu đang mở cuộc hội thoại bị xóa, xóa state hiện tại
                 if st.session_state.current_chat_id == cid:
                     st.session_state.current_chat_id = None
                     st.session_state.messages = []
+                
+                if ok:
+                    st.toast("Đã xóa cuộc trò chuyện và đồng bộ Database!", icon="🗑️")
+                else:
+                    st.error(f"Xóa thất bại: {msg}")
+                time.sleep(0.3)
                 st.rerun()
 
     st.divider()
 
-    # --- QUẢN LÝ LƯU API KEY (MÃ HÓA) ---
+    # --- QUẢN LÝ API KEY ---
     st.subheader("🔑 Quản lý API Key (AES-256)")
     
     if active_api_keys:
         for idx, raw_k in enumerate(active_api_keys):
-            col_k, col_del = st.columns([0.85, 0.15])
+            col_k, col_del_k = st.columns([0.8, 0.2])
             masked = f"{raw_k[:6]}...{raw_k[-4:]}" if len(raw_k) > 10 else "••••••••"
             col_k.code(masked)
-            if col_del.button("❌", key=f"del_key_{idx}"):
+            if col_del_k.button("❌", key=f"del_key_{idx}"):
                 user_data["api_keys"].pop(idx)
                 db_data[st.session_state.user] = user_data
                 GitHubStorage.save_db(db_data)
@@ -357,7 +368,7 @@ with st.sidebar:
                 time.sleep(0.5)
                 st.rerun()
 
-    # Dò Model Gemini
+    # Dò danh sách Model Gemini
     available_models = []
     if active_api_keys:
         try:
@@ -388,7 +399,7 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id in user
 
 st.caption(f"Đang mở: **{current_chat_title}** | Tài khoản: **{st.session_state.user}**")
 
-# HIỂN THỊ BỐI CẢNH ĐÃ TÓM TẮT (NẾU CÓ)
+# Hiển thị bối cảnh tóm tắt nếu có
 if current_summary:
     with st.expander("📝 Bối cảnh hội thoại cũ (Đã tóm tắt để tiết kiệm Token)", expanded=False):
         st.info(current_summary)
@@ -397,16 +408,16 @@ if not active_api_keys:
     st.warning("👈 Vui lòng thêm ít nhất 1 Gemini API Key ở thanh bên (Sidebar) để bắt đầu trò chuyện.")
     st.stop()
 
-# Hiển thị lại toàn bộ lịch sử tin nhắn trên màn hình
+# Hiển thị lịch sử tin nhắn của hội thoại hiện tại
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# Nhập tin nhắn mới
+# Xử lý nhập tin nhắn mới
 if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
     st.chat_message("user").write(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # Tạo chat_id mới nếu là cuộc trò chuyện mới
+    # Tự động tạo Chat ID mới nếu đang ở giao diện New Chat
     if not st.session_state.current_chat_id:
         new_cid = f"chat_{uuid.uuid4().hex[:8]}"
         st.session_state.current_chat_id = new_cid
@@ -423,7 +434,7 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
     cid = st.session_state.current_chat_id
     chat_info = user_chats[cid]
 
-    # --- XỬ LÝ TÓM TẮT KHI VƯỢT QUÁ 6 LƯỢT NHẮN ---
+    # --- TÓM TẮT HỘI THOẠI KHI > 6 TIN NHẮN ---
     total_msgs = len(st.session_state.messages)
     if total_msgs > 6:
         older_msgs = st.session_state.messages[:-6]
@@ -441,9 +452,10 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
             chat_info["summarized_count"] = len(older_msgs)
             current_summary = updated_summary
 
-    # LẤY NGUYÊN VẸN 6 LƯỢT NHẮN MỚI NHẤT
+    # Lấy 6 tin nhắn mới nhất
     recent_messages = st.session_state.messages[-6:] if total_msgs > 6 else st.session_state.messages
 
+    # AI Phản hồi Stream
     with st.chat_message("assistant"):
         placeholder = st.empty()
         full_response = ""
@@ -453,7 +465,6 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
             try:
                 genai.configure(api_key=current_key)
                 
-                # Truyền Bối cảnh tóm tắt qua System Instruction
                 sys_instruction = None
                 if current_summary:
                     sys_instruction = (
@@ -467,7 +478,6 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
                     system_instruction=sys_instruction
                 )
 
-                # Dựng lịch sử CHỈ GỒM các tin nhắn thuộc 6 tin nhắn mới nhất
                 chat_history = []
                 for m in recent_messages[:-1]:
                     role = "model" if m["role"] == "assistant" else "user"
@@ -484,13 +494,13 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
                 placeholder.markdown(full_response)
                 success = True
                 break
-            except Exception as e:
+            except Exception:
                 pass
 
         if success and full_response:
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
-            # Cập nhật lịch sử và tóm tắt lên GitHub
+            # --- CẬP NHẬT & ĐỒNG BỘ LÊN GITHUB DATABASE ---
             chat_info["messages"] = st.session_state.messages
             chat_info["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
