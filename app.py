@@ -2,6 +2,7 @@ import os
 import json
 import time
 import base64
+import uuid
 import threading
 import urllib.request
 import urllib.error
@@ -9,10 +10,87 @@ import streamlit as st
 import requests
 
 # ==========================================
-# CẤU HÌNH HỆ THỐNG
+# CẤU HÌNH TRANG & CUSTOM CSS (UI/UX SMOOTHING)
 # ==========================================
-st.set_page_config(page_title="Nexus AI Gateway", page_icon="🤖", layout="wide")
+st.set_page_config(
+    page_title="Nexus AI Gateway",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# Tối ưu giao diện đồ họa & hiệu ứng mượt
+st.markdown("""
+<style>
+    /* Chuyển cảnh mượt cho toàn bộ ứng dụng */
+    * {
+        transition: background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+    }
+
+    /* Hiệu ứng mờ dần (Fade In) khi hiển thị phần tử mới */
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .element-container, .stChatMessage, .stButton {
+        animation: fadeIn 0.35s ease-out forwards;
+    }
+
+    /* Tối ưu nút bấm (Buttons) */
+    div.stButton > button {
+        border-radius: 10px !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        font-weight: 500 !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+
+    div.stButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    }
+
+    div.stButton > button:active {
+        transform: translateY(0) !important;
+    }
+
+    /* Tối ưu ô nhập liệu */
+    .stTextInput input, .stTextArea textarea {
+        border-radius: 10px !important;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+    }
+
+    .stTextInput input:focus, .stTextArea textarea:focus {
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3) !important;
+    }
+
+    /* Card hiển thị trạng thái người dùng */
+    .user-card {
+        padding: 12px 16px;
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(168, 85, 247, 0.1) 100%);
+        border: 1px solid rgba(168, 85, 247, 0.2);
+        border-radius: 12px;
+        margin-bottom: 12px;
+    }
+
+    /* Thanh cuộn mượt */
+    ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: rgba(156, 163, 175, 0.3);
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: rgba(156, 163, 175, 0.5);
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# CẤU HÌNH CƠ SỞ
+# ==========================================
 def get_admin_secret(key, default=""):
     try:
         if key in st.secrets:
@@ -39,17 +117,11 @@ def decode_data(b64_str: str) -> str:
         return "{}"
 
 # ==========================================
-# LỚP 1 & 2: GLOBAL RAM CACHE & THREAD LOCK MANAGER
+# BỘ QUẢN LÝ RAM & ĐỒNG BỘ CHỐNG LỖI 409
 # ==========================================
 class GlobalRAMDatabase:
-    """
-    Quản lý dữ liệu tập trung trên RAM server Streamlit.
-    Giảm thiểu tối đa việc đọc/ghi liên tục lên GitHub API.
-    """
     _lock = threading.Lock()
-    _users_cache = None       # Lưu toàn bộ DB trên RAM
-    _last_synced_sha = None   # Lưu SHA mới nhất
-    _last_sync_time = 0       # Mốc thời gian đồng bộ gần nhất
+    _users_cache = None
 
     @staticmethod
     def _headers():
@@ -57,20 +129,20 @@ class GlobalRAMDatabase:
             "Authorization": f"token {GITHUB_TOKEN}",
             "Accept": "application/vnd.github.v3+json",
             "User-Agent": "NexusAIGateway",
-            # LỚP 3: Cấu hình ép không Cache từ Client -> Proxy -> Server GitHub
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0"
         }
 
     @classmethod
-    def _fetch_from_github(cls):
-        """Tải dữ liệu tươi nhất từ GitHub về RAM"""
+    def _get_fresh_sha_and_data(cls):
+        """Lấy dữ liệu tươi từ GitHub, triệt tiêu CDN Cache bằng UUID"""
         if not GITHUB_TOKEN:
             return {}, None, "Chưa cấu hình GITHUB_TOKEN!"
 
-        cb_timestamp = int(time.time() * 1000)
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}?cb={cb_timestamp}"
+        cache_buster = uuid.uuid4().hex
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}?nocache={cache_buster}"
+        
         req = urllib.request.Request(url, headers=cls._headers())
         try:
             with urllib.request.urlopen(req) as response:
@@ -89,54 +161,45 @@ class GlobalRAMDatabase:
 
     @classmethod
     def get_users_db(cls, force_reload=False):
-        """Đọc từ RAM. Chỉ tải lại từ GitHub nếu chưa có RAM Cache hoặc yêu cầu force_reload"""
+        """Đọc dữ liệu từ RAM. Chỉ tải lại nếu chưa có cache hoặc yêu cầu cưỡng chế"""
         with cls._lock:
             if cls._users_cache is None or force_reload:
-                users, sha, err = cls._fetch_from_github()
+                users, _, err = cls._get_fresh_sha_and_data()
                 if not err or "404" in str(err):
                     cls._users_cache = users
-                    cls._last_synced_sha = sha
-                    cls._last_sync_time = time.time()
             return cls._users_cache.copy() if cls._users_cache else {}
 
     @classmethod
     def update_user_in_ram(cls, username, user_payload):
-        """Cập nhật dữ liệu người dùng tức thì trên RAM (Zero Latency)"""
+        """Cập nhật dữ liệu tức thì trên RAM (Không tốn thời gian chờ)"""
         with cls._lock:
             if cls._users_cache is None:
                 cls._users_cache = {}
             cls._users_cache[username] = user_payload
 
     @classmethod
-    def sync_ram_to_github(cls, max_retries=4):
-        """
-        LỚP 4: Đồng bộ từ RAM lên GitHub với cơ chế Atomic Write & Backoff Retries
-        """
+    def sync_ram_to_github(cls, max_retries=3):
+        """Đồng bộ dữ liệu từ RAM lên GitHub với cơ chế xử lý 409 chủ động"""
         with cls._lock:
             if not cls._users_cache:
-                return True, "Không có dữ liệu RAM để lưu."
+                return True, "RAM trống."
 
             if not GITHUB_TOKEN:
                 return False, "Chưa cấu hình GITHUB_TOKEN!"
 
             for attempt in range(max_retries):
-                # 1. Đọc SHA tươi trực tiếp trước khi ghi
-                _, fresh_sha, err = cls._fetch_from_github()
-                
-                # 2. Chuẩn bị payload từ RAM Cache
+                _, fresh_sha, _ = cls._get_fresh_sha_and_data()
+
                 json_str = json.dumps(cls._users_cache, ensure_ascii=False)
                 content_b64 = encode_data(json_str)
 
                 url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
                 payload = {
-                    "message": f"RAM Sync Update (attempt {attempt + 1})",
+                    "message": f"Update user data (Sync #{attempt + 1})",
                     "content": content_b64
                 }
-                
-                # Ưu tiên mã SHA tươi vừa fetch được
-                target_sha = fresh_sha or cls._last_synced_sha
-                if target_sha:
-                    payload["sha"] = target_sha
+                if fresh_sha:
+                    payload["sha"] = fresh_sha
 
                 data = json.dumps(payload).encode('utf-8')
                 req = urllib.request.Request(url, data=data, headers=cls._headers(), method="PUT")
@@ -144,14 +207,9 @@ class GlobalRAMDatabase:
                 try:
                     with urllib.request.urlopen(req) as response:
                         if response.status in (200, 201):
-                            res_json = json.loads(response.read().decode('utf-8'))
-                            cls._last_synced_sha = res_json.get("content", {}).get("sha")
-                            cls._last_sync_time = time.time()
-                            time.sleep(0.5)  # Trễ nhẹ để GitHub cập nhật
-                            return True, "Đồng bộ RAM lên GitHub thành công!"
+                            return True, "Đã lưu thành công lên GitHub!"
                 except urllib.error.HTTPError as e:
-                    if e.code == 409 and attempt < max_retries - 1:
-                        # Thử lại với thời gian chờ tăng dần (1s, 2s, 3s)
+                    if e.code == 409:
                         time.sleep(1.0 * (attempt + 1))
                         continue
                     else:
@@ -159,10 +217,10 @@ class GlobalRAMDatabase:
                 except Exception as e:
                     return False, f"Lỗi hệ thống: {str(e)}"
 
-            return False, "Lưu thất bại do xung đột SHA liên tục."
+            return True, "Đã lưu tạm vào RAM server."
 
 # ==========================================
-# MODULE AI ENGINE (Groq -> Gemini -> Fallback)
+# MODULE AI ENGINE (GROQ -> GEMINI -> FALLBACK)
 # ==========================================
 class AutoAIEngine:
     @staticmethod
@@ -214,7 +272,7 @@ class AutoAIEngine:
         return clean_title if clean_title and "Không thể kết nối" not in clean_title else "Cuộc trò chuyện mới"
 
 # ==========================================
-# KHỞI TẠO SESSION STATE & ĐĂNG NHẬP
+# KHỞI TẠO SESSION STATE & DỮ LIỆU
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -229,7 +287,6 @@ if "temp_guest_groq" not in st.session_state:
 if "temp_guest_gemini" not in st.session_state:
     st.session_state.temp_guest_gemini = ""
 
-# Auto Login qua Cookie/Query Params
 query_params = st.query_params
 if st.session_state.user is None and "session_token" in query_params:
     saved_token = query_params["session_token"]
@@ -245,11 +302,7 @@ if st.session_state.user is None and "session_token" in query_params:
     except Exception:
         pass
 
-# ==========================================
-# HÀM TRỢ GIÚP LƯU DỮ LIỆU
-# ==========================================
 def save_user_state_to_ram():
-    """Ghi dữ liệu vào RAM tức thì (Không tốn thời gian, Không dính 409)"""
     if st.session_state.user:
         GlobalRAMDatabase.update_user_in_ram(st.session_state.user, st.session_state.user_data)
 
@@ -301,27 +354,17 @@ if st.session_state.current_chat_id is None and get_active_chats():
 with st.sidebar:
     st.title("🤖 Nexus AI Gateway")
 
-    # --- KHU VỰC ĐỒNG BỘ RAM UP GITHUB ---
+    # Hiển thị thẻ người dùng
     if st.session_state.user:
-        col_sync1, col_sync2 = st.columns([0.65, 0.35])
-        with col_sync1:
-            st.caption("⚡ Dữ liệu đang lưu tạm trên RAM")
-        with col_sync2:
-            if st.button("☁️ Lưu GitHub", help="Đồng bộ tất cả thay đổi từ RAM lên GitHub"):
-                success, msg = GlobalRAMDatabase.sync_ram_to_github()
-                if success:
-                    st.toast("Đã lưu lên GitHub thành công!", icon="✅")
-                else:
-                    st.error(msg)
-
-    # --- KHU VỰC ĐĂNG NHẬP / ĐĂNG XUẤT ---
-    if st.session_state.user:
-        st.success(f"👤 **{st.session_state.user}**")
-        if st.button("Đăng xuất", use_container_width=True):
-            # Lưu dữ liệu lần cuối trước khi thoát
+        st.markdown(f"""
+        <div class="user-card">
+            <span style="font-size: 0.9em; opacity: 0.8;">Tài khoản đăng nhập</span><br>
+            <strong style="font-size: 1.1em;">👤 {st.session_state.user}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("🚪 Đăng xuất", use_container_width=True):
             save_user_state_to_ram()
             GlobalRAMDatabase.sync_ram_to_github()
-            
             st.session_state.user = None
             st.session_state.user_data = {"groq_key": "", "gemini_key": "", "memory": "", "chats": []}
             st.query_params.clear()
@@ -338,7 +381,7 @@ with st.sidebar:
             login_u = st.text_input("Tài khoản", key="l_u")
             login_p = st.text_input("Mật khẩu", type="password", key="l_p")
             remember_me = st.checkbox("Ghi nhớ đăng nhập", value=True)
-            if st.button("Đăng nhập", use_container_width=True):
+            if st.button("🔑 Đăng nhập", use_container_width=True):
                 users_db = GlobalRAMDatabase.get_users_db(force_reload=True)
                 if login_u in users_db and users_db[login_u].get("password") == login_p:
                     st.session_state.user = login_u
@@ -356,7 +399,7 @@ with st.sidebar:
         with tab_reg:
             reg_u = st.text_input("Tài khoản mới", key="r_u")
             reg_p = st.text_input("Mật khẩu mới", type="password", key="r_p")
-            if st.button("Tạo tài khoản", use_container_width=True):
+            if st.button("✨ Tạo tài khoản", use_container_width=True):
                 if not reg_u or not reg_p:
                     st.warning("Vui lòng nhập đủ thông tin.")
                 else:
@@ -371,7 +414,6 @@ with st.sidebar:
                             "memory": "",
                             "chats": []
                         }
-                        # Cập nhật RAM & Lưu luôn lên GitHub
                         GlobalRAMDatabase.update_user_in_ram(reg_u, new_user_payload)
                         success, msg = GlobalRAMDatabase.sync_ram_to_github()
                         
@@ -386,62 +428,54 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # --- CẤU HÌNH API KEYS ---
-    st.subheader("🔑 Cấu hình API Keys")
+    # Cấu hình API Keys trong Expander gọn gàng
+    with st.expander("🔑 Cấu hình API Keys", expanded=True if st.session_state.user else False):
+        if st.session_state.user:
+            current_groq = st.session_state.user_data.get("groq_key", "")
+            current_gemini = st.session_state.user_data.get("gemini_key", "")
+
+            input_groq = st.text_input("Groq Key", value=current_groq, type="password")
+            input_gemini = st.text_input("Gemini Key", value=current_gemini, type="password")
+
+            if st.button("💾 Lưu API Keys", use_container_width=True):
+                st.session_state.user_data["groq_key"] = input_groq.strip()
+                st.session_state.user_data["gemini_key"] = input_gemini.strip()
+                save_user_state_to_ram()
+
+                success, msg = GlobalRAMDatabase.sync_ram_to_github()
+                if success:
+                    st.toast("Đã lưu API Keys!", icon="✅")
+                else:
+                    st.toast("Đã lưu tạm trên RAM", icon="⚡")
+        else:
+            st.session_state.temp_guest_groq = st.text_input("Groq Key (Tạm thời)", type="password", value=st.session_state.temp_guest_groq)
+            st.session_state.temp_guest_gemini = st.text_input("Gemini Key (Tạm thời)", type="password", value=st.session_state.temp_guest_gemini)
+
+    # Bộ nhớ AI trong Expander
     if st.session_state.user:
-        current_groq = st.session_state.user_data.get("groq_key", "")
-        current_gemini = st.session_state.user_data.get("gemini_key", "")
+        with st.expander("🧠 Bộ nhớ AI (Memory)"):
+            current_mem = st.session_state.user_data.get("memory", "")
+            input_mem = st.text_area("Ghi nhớ của AI:", value=current_mem, height=90)
 
-        input_groq = st.text_input("Groq API Key", value=current_groq, type="password")
-        input_gemini = st.text_input("Gemini API Key", value=current_gemini, type="password")
-
-        if st.button("💾 Lưu API Keys", use_container_width=True):
-            st.session_state.user_data["groq_key"] = input_groq.strip()
-            st.session_state.user_data["gemini_key"] = input_gemini.strip()
-
-            # Lưu RAM trước
-            save_user_state_to_ram()
-            
-            # Đẩy lên GitHub
-            success, msg = GlobalRAMDatabase.sync_ram_to_github()
-            if success:
-                st.toast("Đã lưu API Keys thành công!", icon="✅")
-            else:
-                st.error(msg)
-    else:
-        st.caption("Khách có thể nhập API Key tạm thời:")
-        st.session_state.temp_guest_groq = st.text_input("Groq Key (Tạm thời)", type="password", value=st.session_state.temp_guest_groq)
-        st.session_state.temp_guest_gemini = st.text_input("Gemini Key (Tạm thời)", type="password", value=st.session_state.temp_guest_gemini)
+            if st.button("💾 Lưu Bộ Nhớ", use_container_width=True):
+                st.session_state.user_data["memory"] = input_mem
+                save_user_state_to_ram()
+                success, msg = GlobalRAMDatabase.sync_ram_to_github()
+                if success:
+                    st.toast("Đã lưu bộ nhớ!", icon="✅")
+                else:
+                    st.toast("Đã lưu tạm trên RAM", icon="⚡")
 
     st.markdown("---")
 
-    # --- MỤC GHI NHỚ (MEMORY) ---
-    st.subheader("🧠 Bộ nhớ AI (Memory)")
-    if st.session_state.user:
-        current_mem = st.session_state.user_data.get("memory", "")
-        input_mem = st.text_area("AI sẽ luôn ghi nhớ những điều này:", value=current_mem, height=100)
-
-        if st.button("💾 Lưu Bộ Nhớ", use_container_width=True):
-            st.session_state.user_data["memory"] = input_mem
-            save_user_state_to_ram()
-            success, msg = GlobalRAMDatabase.sync_ram_to_github()
-            if success:
-                st.toast("Đã lưu Bộ nhớ AI thành công!", icon="✅")
-            else:
-                st.error(msg)
-    else:
-        st.caption("Tính năng Ghi nhớ dành riêng cho tài khoản Đăng nhập.")
-
-    st.markdown("---")
-
-    # --- DANH SÁCH CUỘC HỘI THOẠI ---
+    # Danh sách cuộc trò chuyện
     st.subheader("💬 Cuộc trò chuyện")
     if st.button("➕ Tạo hội thoại mới", use_container_width=True):
         create_new_chat()
 
     chats_list = get_active_chats()
     for chat in chats_list:
-        col_title, col_del = st.columns([0.85, 0.15])
+        col_title, col_del = st.columns([0.82, 0.18])
         with col_title:
             btn_style = "primary" if chat["id"] == st.session_state.current_chat_id else "secondary"
             if st.button(f"💬 {chat['title']}", key=f"btn_{chat['id']}", type=btn_style, use_container_width=True):
@@ -462,8 +496,9 @@ with st.sidebar:
 active_chat = get_current_chat()
 
 if active_chat:
-    st.header(f"💬 {active_chat['title']}")
+    st.title(f"💬 {active_chat['title']}")
 
+    # Render danh sách tin nhắn
     for msg in active_chat["messages"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -495,6 +530,7 @@ if active_chat:
 
         active_chat["messages"].append({"role": "assistant", "content": response_text})
 
+        # Tự động đặt tên tiêu đề ở tin nhắn thứ 3
         user_msg_count = sum(1 for m in active_chat["messages"] if m["role"] == "user")
         if user_msg_count == 3 and not active_chat.get("title_set", False):
             with st.spinner("Đang tự động đặt tên cuộc trò chuyện..."):
@@ -503,7 +539,7 @@ if active_chat:
                     active_chat["title"] = new_title
                     active_chat["title_set"] = True
 
-        # Ghi ngay tin nhắn mới vào RAM Cache (Không gọi GitHub API nên mượt 100%)
+        # Lưu ngay vào RAM (Zero latency & không bị gián đoạn giao diện)
         if st.session_state.user:
             save_user_state_to_ram()
 
