@@ -7,6 +7,7 @@ import hashlib
 import requests
 import streamlit as st
 import google.generativeai as genai
+from PIL import Image
 from datetime import datetime
 from cryptography.fernet import Fernet
 from streamlit_cookies_controller import CookieController
@@ -42,7 +43,6 @@ if not device_id:
 # ==========================================
 st.markdown("""
 <style>
-    /* Gradient Header */
     .main-header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         -webkit-background-clip: text;
@@ -52,7 +52,6 @@ st.markdown("""
         margin-bottom: 0.2rem;
     }
     
-    /* Custom Loading Spinner & Text */
     .ai-loading-box {
         display: flex;
         align-items: center;
@@ -86,7 +85,6 @@ st.markdown("""
         animation: shine 2s linear infinite;
     }
 
-    /* Status Pulse Dot */
     .pulse-dot {
         width: 8px;
         height: 8px;
@@ -98,28 +96,15 @@ st.markdown("""
         margin-right: 6px;
     }
 
-    /* Keyframe Animations */
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
-
-    @keyframes shine {
-        to { background-position: 200% center; }
-    }
-
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    @keyframes shine { to { background-position: 200% center; } }
     @keyframes pulse {
         0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
         70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
         100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
     }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(4px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* Style Thẻ Thông Tin Sidebar */
     .user-card {
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
@@ -205,7 +190,7 @@ class GitHubStorage:
         content_b64 = base64.b64encode(json_bytes).decode('utf-8')
         
         payload = {
-            "message": "Update users_db.json (Chats, Keys & Devices)",
+            "message": "Update users_db.json (Chats, Keys, Memory & Devices)",
             "content": content_b64
         }
         if sha:
@@ -221,9 +206,25 @@ class GitHubStorage:
             return False, f"Lỗi lưu GitHub: {e}"
 
 # ==========================================
-# 5. HÀM TÓM TẮT HỘI THOẠI CŨ
+# 5. HÀM XỬ LÝ AI (Đặt tên & Tóm tắt)
 # ==========================================
+def generate_chat_title(user_prompt: str, api_key: str, model_name: str) -> str:
+    """Tự động đặt tên ngắn gọn cho cuộc trò chuyện bằng AI"""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        prompt = (
+            "Hãy tạo 1 tiêu đề cực kỳ ngắn gọn (từ 2 đến 5 từ, không đặt trong dấu ngoặc kép, không dùng markdown) "
+            f"tóm tắt chủ đề của câu hỏi sau:\n\"{user_prompt}\""
+        )
+        res = model.generate_content(prompt)
+        title = res.text.strip().replace('"', '').replace("'", "")
+        return title[:35] if title else user_prompt[:25]
+    except Exception:
+        return user_prompt[:25] + "..." if len(user_prompt) > 25 else user_prompt
+
 def generate_summary(older_messages: list, existing_summary: str, api_key: str, model_name: str) -> str:
+    """Tóm tắt lịch sử hội thoại cũ để tiết kiệm context window"""
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
@@ -326,6 +327,7 @@ def render_auth_ui():
                             db[reg_u] = {
                                 "password": hash_password(reg_p),
                                 "api_keys": [],
+                                "custom_instructions": "",
                                 "chats": {},
                                 "remembered_devices": [device_id]
                             }
@@ -344,6 +346,7 @@ if not st.session_state.user:
 # ==========================================
 user_data = db_data.get(st.session_state.user, {})
 user_data.setdefault("api_keys", [])
+user_data.setdefault("custom_instructions", "")
 user_data.setdefault("chats", {})
 user_data.setdefault("remembered_devices", [])
 
@@ -351,7 +354,6 @@ encrypted_keys = user_data["api_keys"]
 user_chats = user_data["chats"]
 active_api_keys = [decrypt_key(k) for k in encrypted_keys if decrypt_key(k)]
 
-# Kiểm tra an toàn trạng thái cuộc trò chuyện hiện tại
 if st.session_state.current_chat_id and st.session_state.current_chat_id not in user_chats:
     st.session_state.current_chat_id = None
     st.session_state.messages = []
@@ -386,9 +388,8 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
+    # --- DANH SÁCH CHAT ---
     st.subheader("💬 Danh sách trò chuyện")
-    
-    # --- DANH SÁCH & XÓA CHAT (ĐÃ SỬA LỖI KEYERROR) ---
     if not user_chats:
         st.caption("Chưa có cuộc trò chuyện nào.")
     else:
@@ -433,8 +434,28 @@ with st.sidebar:
 
     st.divider()
 
-    # --- QUẢN LÝ API KEY ---
-    st.subheader("🔑 Quản lý API Key (AES-256)")
+    # --- QUẢN LÝ BỘ NHỚ CỐ ĐỊNH (SYSTEM INSTRUCTION) ---
+    with st.expander("🧠 Bộ nhớ cố định / Chỉ dẫn AI", expanded=False):
+        st.caption("AI sẽ luôn ghi nhớ và tuân thủ các quy tắc này trong mọi cuộc trò chuyện.")
+        memory_text = st.text_area(
+            "Nhập ghi nhớ của bạn:", 
+            value=user_data.get("custom_instructions", ""), 
+            height=120,
+            placeholder="Ví dụ: Bạn là trợ lý lập trình Python chuyên nghiệp. Luôn trả lời bằng Tiếng Việt."
+        )
+        if st.button("💾 Lưu ghi nhớ cố định", use_container_width=True):
+            user_data["custom_instructions"] = memory_text.strip()
+            db_data[st.session_state.user] = user_data
+            ok, msg = GitHubStorage.save_db(db_data)
+            if ok:
+                st.toast("Đã ghi nhớ thông tin!", icon="🧠")
+                time.sleep(0.3)
+                st.rerun()
+            else:
+                st.error(f"Lỗi lưu: {msg}")
+
+    # --- QUẢN LÝ API KEY & MODEL SELECTION ---
+    st.subheader("🔑 Quản lý API Key & Model")
     
     if active_api_keys:
         for idx, raw_k in enumerate(active_api_keys):
@@ -461,40 +482,52 @@ with st.sidebar:
                 time.sleep(0.5)
                 st.rerun()
 
+    # Quét danh sách Model có sẵn từ API Key
     available_models = []
     if active_api_keys:
         try:
             genai.configure(api_key=active_api_keys[0])
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
-                    available_models.append(m.name.replace('models/', ''))
+                    name = m.name.replace('models/', '')
+                    available_models.append(name)
         except Exception:
             pass
 
+    if not available_models:
+        available_models = ["gemini-3.7-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+
+    # Đặt mặc định chọn `gemini-3.7-flash` nếu có trong danh sách
+    default_index = 0
+    target_default = "gemini-3.7-flash"
+    for idx, model_name in enumerate(available_models):
+        if target_default in model_name:
+            default_index = idx
+            break
+
     selected_model = st.selectbox(
-        "Chọn Model Gemini:", 
-        options=available_models if available_models else ["gemini-1.5-flash"]
+        "Chọn Phiên bản Gemini:", 
+        options=available_models,
+        index=default_index
     )
 
 # ==========================================
-# 9. KHUNG CHAT CHÍNH VỚI HIỆU ỨNG LOADING
+# 9. KHUNG CHAT CHÍNH (Xử lý Đa phương tiện)
 # ==========================================
 st.markdown("<h1 class='main-header'>⚡ Nexus AI Online</h1>", unsafe_allow_html=True)
 
 current_chat_title = "Cuộc trò chuyện mới"
 current_summary = ""
 
-# Lấy thông tin chat an toàn từ dictionary
 if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
     chat_obj = user_chats.get(st.session_state.current_chat_id, {})
     current_chat_title = chat_obj.get("title", "Cuộc trò chuyện")
     current_summary = chat_obj.get("summary", "")
 
-st.caption(f"Đang mở: **{current_chat_title}** | Tài khoản: **{st.session_state.user}**")
+st.caption(f"Đang mở: **{current_chat_title}** | Model: **{selected_model}**")
 
-# Hiển thị bối cảnh tóm tắt nếu có
 if current_summary:
-    with st.expander("📝 Bối cảnh hội thoại cũ (Đã tóm tắt tiết kiệm Token)", expanded=False):
+    with st.expander("📝 Bối cảnh hội thoại cũ (Đã tóm tắt)", expanded=False):
         st.info(current_summary)
 
 if not active_api_keys:
@@ -503,40 +536,75 @@ if not active_api_keys:
 
 # Hiển thị lịch sử tin nhắn
 for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["content"])
+    with st.chat_message(msg["role"]):
+        if msg.get("image_bytes"):
+            st.image(msg["image_bytes"], caption=msg.get("file_name", "Ảnh đính kèm"), use_column_width=True)
+        if msg.get("file_info"):
+            st.info(f"📄 File đính kèm: `{msg['file_info']}`")
+        st.write(msg["content"])
+
+# --- BỘ TẢI FILE / HÌNH ẢNH ĐÍNH KÈM ---
+with st.expander("📎 Đính kèm Hình ảnh hoặc File văn bản (Tùy chọn)", expanded=False):
+    uploaded_file = st.file_uploader(
+        "Tải lên hình ảnh (PNG, JPG, WEBP) hoặc file văn bản/code (TXT, MD, PY, JSON...)",
+        type=["png", "jpg", "jpeg", "webp", "txt", "md", "py", "json", "csv"]
+    )
 
 # Nhập tin nhắn mới
 if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
-    st.chat_message("user").write(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    image_data = None
+    file_content_text = ""
+    file_name = ""
+    image_bytes = None
 
-    # Tạo Chat ID mới nếu đang ở giao diện chat mới
+    if uploaded_file is not None:
+        file_name = uploaded_file.name
+        file_type = uploaded_file.type
+        
+        # Xử lý File Ảnh
+        if file_type.startswith("image/"):
+            image_bytes = uploaded_file.getvalue()
+            image_data = Image.open(uploaded_file)
+        # Xử lý File Văn bản / Code
+        else:
+            try:
+                file_content_text = uploaded_file.getvalue().decode("utf-8")
+            except Exception:
+                file_content_text = str(uploaded_file.getvalue())
+
+    # Tạo tin nhắn của người dùng
+    user_msg = {
+        "role": "user",
+        "content": prompt,
+        "image_bytes": image_bytes,
+        "file_info": file_name if (file_name and not image_bytes) else None
+    }
+    
+    st.session_state.messages.append(user_msg)
+    
+    with st.chat_message("user"):
+        if image_bytes:
+            st.image(image_bytes, caption=file_name, use_column_width=True)
+        if file_name and not image_bytes:
+            st.info(f"📄 File đính kèm: `{file_name}`")
+        st.write(prompt)
+
+    # Khởi tạo ID cuộc trò chuyện mới nếu chưa có
+    is_new_chat = False
     if not st.session_state.current_chat_id:
+        is_new_chat = True
         new_cid = f"chat_{uuid.uuid4().hex[:8]}"
         st.session_state.current_chat_id = new_cid
-        chat_title = prompt[:30] + "..." if len(prompt) > 30 else prompt
         user_chats[new_cid] = {
-            "title": chat_title,
+            "title": "Đang tạo tiêu đề...",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "summary": "",
             "summarized_count": 0,
-            "messages": st.session_state.messages
+            "messages": []
         }
     
     cid = st.session_state.current_chat_id
-    
-    # Kiểm tra và lấy chat_info an toàn
-    if cid not in user_chats:
-        user_chats[cid] = {
-            "title": prompt[:30] + "..." if len(prompt) > 30 else prompt,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "summary": "",
-            "summarized_count": 0,
-            "messages": st.session_state.messages
-        }
-    
     chat_info = user_chats[cid]
 
     # Xử lý tóm tắt nếu quá 6 tin nhắn
@@ -559,13 +627,23 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
 
     recent_messages = st.session_state.messages[-6:] if total_msgs > 6 else st.session_state.messages
 
-    # --- KHUNG AI PHẢN HỒI KÈM HIỆU ỨNG LOADING VÒNG XOAY ---
+    # --- TỔNG HỢP SYSTEM INSTRUCTIONS (Ghi nhớ cố định + Tóm tắt) ---
+    sys_parts = []
+    custom_mem = user_data.get("custom_instructions", "").strip()
+    if custom_mem:
+        sys_parts.append(f"Quy tắc & Ghi nhớ cố định từ người dùng:\n{custom_mem}")
+    if current_summary:
+        sys_parts.append(f"Bối cảnh các lượt trò chuyện trước đó:\n{current_summary}")
+
+    full_sys_instruction = "\n\n".join(sys_parts) if sys_parts else None
+
+    # --- KHUNG AI PHẢN HỒI KÈM HIỆU ỨNG LOADING ---
     with st.chat_message("assistant"):
         loading_placeholder = st.empty()
         loading_placeholder.markdown("""
         <div class="ai-loading-box">
             <div class="spinner"></div>
-            <div class="ai-loading-text">Nexus AI đang soạn câu trả lời cho bạn...</div>
+            <div class="ai-loading-text">Nexus AI đang phân tích và soạn câu trả lời...</div>
         </div>
         """, unsafe_allow_html=True)
         
@@ -577,26 +655,31 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
             try:
                 genai.configure(api_key=current_key)
                 
-                sys_instruction = None
-                if current_summary:
-                    sys_instruction = (
-                        "Bối cảnh các lượt trò chuyện trước đó đã được tóm tắt như sau:\n"
-                        f"{current_summary}\n\n"
-                        "Hãy tiếp tục phản hồi dựa trên bối cảnh trên và 6 tin nhắn gần nhất."
-                    )
-                
                 model_engine = genai.GenerativeModel(
                     selected_model, 
-                    system_instruction=sys_instruction
+                    system_instruction=full_sys_instruction
                 )
 
-                chat_history = []
-                for m in recent_messages[:-1]:
-                    role = "model" if m["role"] == "assistant" else "user"
-                    chat_history.append({"role": role, "parts": [m["content"]]})
+                # Chuẩn bị nội dung gửi đi (Prompt + Ảnh / File văn bản)
+                content_parts = []
+                if image_data:
+                    content_parts.append(image_data)
+                if file_content_text:
+                    content_parts.append(f"\n--- NỘI DUNG FILE ĐÍNH KÈM ({file_name}) ---\n{file_content_text}\n--- KẾT THÚC FILE ---\n")
+                
+                content_parts.append(prompt)
 
-                chat_session = model_engine.start_chat(history=chat_history)
-                response = chat_session.send_message(prompt, stream=True)
+                # Nếu có ảnh/file thì gọi trực tiếp generate_content; nếu thoại thuần túy thì dùng chat_session
+                if image_data or file_content_text:
+                    response = model_engine.generate_content(content_parts, stream=True)
+                else:
+                    chat_history = []
+                    for m in recent_messages[:-1]:
+                        role = "model" if m["role"] == "assistant" else "user"
+                        chat_history.append({"role": role, "parts": [m["content"]]})
+
+                    chat_session = model_engine.start_chat(history=chat_history)
+                    response = chat_session.send_message(prompt, stream=True)
 
                 is_first_chunk = True
                 for chunk in response:
@@ -619,7 +702,12 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
         if success and full_response:
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
-            # Cập nhật & lưu đồng bộ GitHub
+            # Tự động đặt tên trò chuyện bằng AI nếu là lượt thoại đầu tiên
+            if is_new_chat or chat_info.get("title") == "Đang tạo tiêu đề...":
+                ai_title = generate_chat_title(prompt, active_api_keys[0], selected_model)
+                chat_info["title"] = ai_title
+            
+            # Cập nhật & lưu dữ liệu
             chat_info["messages"] = st.session_state.messages
             chat_info["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
@@ -628,5 +716,10 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
             db_data[st.session_state.user] = user_data
             
             GitHubStorage.save_db(db_data)
+            
+            # Cập nhật lại UI nếu có thay đổi tiêu đề
+            if is_new_chat:
+                time.sleep(0.3)
+                st.rerun()
         else:
-            st.error("❌ Không thể tạo phản hồi từ AI. Vui lòng kiểm tra lại API Key.")
+            st.error("❌ Không thể tạo phản hồi từ AI. Vui lòng kiểm tra lại API Key hoặc File đính kèm.")
