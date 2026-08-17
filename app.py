@@ -4,6 +4,7 @@ import time
 import base64
 import requests
 import streamlit as st
+import google.generativeai as genai
 
 # ==========================================
 # 1. CẤU HÌNH TRANG & MODEL GEMINI CHUẨN 2026
@@ -15,9 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Danh sách Model ID chính thức hoạt động trên Google AI Studio REST API (Dùng API Key)
 AVAILABLE_FREE_MODELS = [
-    "🔄 Tự động chọn Model tốt nhất (gemini-2.0-flash)",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
     "gemini-1.5-flash",
@@ -40,9 +39,9 @@ st.markdown("""
 }
 .word-cursor {
     display: inline-block;
-    width: 4px;                   /* Viền dày giống con trỏ Word */
+    width: 4px;
     height: 1.2em;
-    background-color: #1a73e8;    /* Màu xanh lá/xanh dương nổi bật */
+    background-color: #1a73e8;
     margin-left: 2px;
     vertical-align: text-bottom;
     animation: blink-cursor 0.7s infinite;
@@ -57,7 +56,6 @@ CURSOR_HTML = '<span class="word-cursor"></span>'
 # 3. BỘ MÃ HÓA / GIẢI MÃ API KEY
 # ==========================================
 def encode_key(raw_key: str) -> str:
-    """Mã hóa API Key vượt qua kiểm duyệt GitHub Secret Scanning"""
     if not raw_key:
         return ""
     if raw_key.startswith("ENC_"):
@@ -67,7 +65,6 @@ def encode_key(raw_key: str) -> str:
     return f"ENC_{b64_str}"
 
 def decode_key(encoded_key: str) -> str:
-    """Giải mã API Key ra dạng nguyên bản AIzaSy..."""
     if not encoded_key:
         return ""
     if not encoded_key.startswith("ENC_"):
@@ -81,7 +78,7 @@ def decode_key(encoded_key: str) -> str:
         return encoded_key
 
 # ==========================================
-# 4. CHUẨN HÓA DỮ LIỆU (SCHEMA V2)
+# 4. CHUẨN HÓA DỮ LIỆU SCHEMA
 # ==========================================
 def normalize_user_schema(raw_data: dict) -> dict:
     if not isinstance(raw_data, dict):
@@ -122,7 +119,7 @@ def normalize_user_schema(raw_data: dict) -> dict:
     }
 
 # ==========================================
-# 5. TRÍCH XUẤT SECRETS CHUẨN STREAMLIT
+# 5. TRÍCH XUẤT SECRETS STREAMLIT
 # ==========================================
 def fetch_streamlit_secret(key_name: str) -> str:
     try:
@@ -136,7 +133,7 @@ GITHUB_TOKEN = fetch_streamlit_secret("GITHUB_TOKEN")
 GITHUB_REPO = fetch_streamlit_secret("GITHUB_REPO")
 
 # ==========================================
-# 6. ENGINE XỬ LÝ DATABASE (LOCAL & GITHUB)
+# 6. ENGINE DỮ LIỆU (LOCAL & GITHUB)
 # ==========================================
 class DatabaseEngine:
     @staticmethod
@@ -179,7 +176,7 @@ class DatabaseEngine:
             elif res.status_code == 404:
                 return {}, None, None
             else:
-                return {}, None, f"GitHub HTTP {res.status_code}: {res.text}"
+                return {}, None, f"GitHub HTTP {res.status_code}"
         except Exception as e:
             return {}, None, str(e)
 
@@ -202,7 +199,7 @@ class DatabaseEngine:
         content_b64 = base64.b64encode(json_bytes).decode('utf-8')
 
         payload = {
-            "message": f"Update DB (Encrypted Keys) 2026 - {time.strftime('%H:%M:%S %d/%m/%Y')}",
+            "message": f"Update DB 2026 - {time.strftime('%H:%M:%S %d/%m/%Y')}",
             "content": content_b64
         }
         if latest_sha:
@@ -213,7 +210,7 @@ class DatabaseEngine:
             if res.status_code in [200, 201]:
                 return True, "Thành công!"
             else:
-                return False, f"GitHub HTTP {res.status_code}: {res.text}"
+                return False, f"GitHub HTTP {res.status_code}"
         except Exception as e:
             return False, f"Lỗi kết nối GitHub: {str(e)}"
 
@@ -272,7 +269,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 8.1 ĐĂNG NHẬP
+    # ĐĂNG NHẬP
     if not st.session_state.user:
         st.subheader("👤 Đăng nhập")
         username_input = st.text_input("Tên tài khoản (viết liền, không dấu):")
@@ -308,7 +305,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 8.2 CẤU HÌNH API KEY VÀ MODEL
+    # CẤU HÌNH API KEY VÀ MODEL
     if st.session_state.user and st.session_state.user_data:
         st.subheader("🔑 Cấu hình Gemini")
 
@@ -364,7 +361,7 @@ with st.sidebar:
 
         st.markdown("---")
 
-        # 8.3 QUẢN LÝ CHAT
+        # QUẢN LÝ CHAT
         st.subheader("💬 Danh sách Chat")
         if st.button("➕ Tạo hội thoại mới", use_container_width=True):
             new_id = str(int(time.time()))
@@ -390,7 +387,7 @@ with st.sidebar:
                 st.rerun()
 
 # ==========================================
-# 9. KHU VỰC KHUNG CHAT CHÍNH (STREAMING + WORD TYPING)
+# 9. KHU VỰC CHAT CHÍNH (STREAMING SDK + WORD TYPING)
 # ==========================================
 st.title("💬 Nexus AI Chatbot")
 
@@ -418,66 +415,49 @@ else:
                 st.error("⚠️ Bạn chưa lưu API Key nào vào Database! Vui lòng thêm Key ở thanh Sidebar.")
             else:
                 st.chat_message("user").write(prompt)
-                active_chat["messages"].append({"role": "user", "content": prompt})
 
-                if len(active_chat["messages"]) == 1:
+                if len(active_chat["messages"]) == 0:
                     active_chat["title"] = prompt[:20] + "..." if len(prompt) > 20 else prompt
 
                 sel_model = st.session_state.user_data.get("selected_model", AVAILABLE_FREE_MODELS[0])
-                target_model = "gemini-2.0-flash" if sel_model == AVAILABLE_FREE_MODELS[0] else sel_model
-
                 active_raw_key = decode_key(enc_keys[0])
 
-                # API Stream Endpoint chuẩn Google REST
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:streamGenerateContent?alt=sse"
-                headers = {
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": active_raw_key
-                }
-
                 with st.chat_message("assistant"):
-                    # Hiển thị ngay con trỏ nhấp nháy viền dày kiểu Word trong thời gian chờ AI
                     message_placeholder = st.empty()
                     message_placeholder.markdown(CURSOR_HTML, unsafe_allow_html=True)
 
                     try:
-                        payload_contents = []
+                        # Cấu hình SDK chính thức của Google Generative AI
+                        genai.configure(api_key=active_raw_key)
+                        model_engine = genai.GenerativeModel(sel_model)
+
+                        # Chuyển đổi lịch sử chat sang định dạng SDK Google
+                        formatted_history = []
                         for m in active_chat["messages"]:
                             role_name = "model" if m["role"] == "assistant" else "user"
-                            payload_contents.append({
+                            formatted_history.append({
                                 "role": role_name,
-                                "parts": [{"text": m["content"]}]
+                                "parts": [m["content"]]
                             })
 
-                        res = requests.post(url, headers=headers, json={"contents": payload_contents}, stream=True, timeout=30)
+                        chat_session = model_engine.start_chat(history=formatted_history)
+                        response = chat_session.send_message(prompt, stream=True)
 
-                        if res.status_code == 200:
-                            full_text = ""
-                            for line in res.iter_lines():
-                                if line:
-                                    decoded_line = line.decode('utf-8')
-                                    if decoded_line.startswith("data: "):
-                                        try:
-                                            json_str = decoded_line[6:]
-                                            data = json.loads(json_str)
-                                            parts = data['candidates'][0]['content']['parts']
-                                            chunk = "".join([p.get('text', '') for p in parts])
+                        full_text = ""
+                        for chunk in response:
+                            if chunk.text:
+                                for char in chunk.text:
+                                    full_text += char
+                                    message_placeholder.markdown(full_text + CURSOR_HTML, unsafe_allow_html=True)
+                                    time.sleep(0.003)
 
-                                            # Gõ từng ký tự mượt mà kèm con trỏ
-                                            for char in chunk:
-                                                full_text += char
-                                                message_placeholder.markdown(full_text + CURSOR_HTML, unsafe_allow_html=True)
-                                                time.sleep(0.005)
-                                        except Exception:
-                                            pass
+                        # Kết thúc câu trả lời: Xóa con trỏ và lưu dữ liệu
+                        message_placeholder.markdown(full_text)
+                        
+                        active_chat["messages"].append({"role": "user", "content": prompt})
+                        active_chat["messages"].append({"role": "assistant", "content": full_text})
+                        DatabaseEngine.save_user_data(st.session_state.user, st.session_state.user_data)
 
-                            # Xóa con trỏ sau khi kết thúc phản hồi
-                            message_placeholder.markdown(full_text)
-                            active_chat["messages"].append({"role": "assistant", "content": full_text})
-                            DatabaseEngine.save_user_data(st.session_state.user, st.session_state.user_data)
-                        else:
-                            message_placeholder.empty()
-                            st.error(f"⚠️ Lỗi Gemini API (HTTP {res.status_code}): {res.text}")
                     except Exception as e:
                         message_placeholder.empty()
-                        st.error(f"Lỗi kết nối: {str(e)}")
+                        st.error(f"⚠️ Lỗi kết nối Google API: {str(e)}")
