@@ -1,7 +1,9 @@
 {
   "phát": {
     "password": "aed6d8fac62b43b59f48d7450ec1011358d198a2a9533211d46322c1ba6eafc1",
-    "api_keys": [],
+    "api_keys": [
+      "gAAAAABqgpLCooLUh3tRZNk_nZgByjZn8DiumSDlJ49eQHBmDVJR2wsKevhN0_BRLmdO-pxkpBnU3SIW0uC7-EfswVTd6A97iBctUB7I8EhpvTZP0ePcSuZSJrrVNF55xvdtVd2E5ye_gqxRJjTwREk6yR8EY_PqEw=="
+    ],
     "chats": {},
     "remembered_devices": [
       "23507fbc-11a2-43a3-bba8-e3ccad502682"
