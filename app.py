@@ -75,7 +75,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# CẤU HÌNH CƠ SỞ & DANH SÁCH MÔ HÌNH
+# CẤU HÌNH CƠ SỞ & DANH SÁCH MÔ HÌNH MỚI
 # ==========================================
 def get_admin_secret(key, default=""):
     try:
@@ -94,15 +94,22 @@ AUTO_MODEL_OPTION = "🔄 Tự động (Auto Switch)"
 
 AVAILABLE_GEMINI_MODELS = [
     AUTO_MODEL_OPTION,
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro"
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash"
 ]
 
 AUTO_FALLBACK_ORDER = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro"
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash"
 ]
 
 # ==========================================
@@ -234,12 +241,12 @@ class GlobalRAMDatabase:
             return True, "Đã lưu tạm vào RAM server."
 
 # ==========================================
-# MODULE AI ENGINE (LỌC THÔNG BÁO & TÓM TẮT)
+# MODULE AI ENGINE (XỬ LÝ API, NGỮ CẢNH & TÓM TẮT)
 # ==========================================
 class AutoAIEngine:
     @staticmethod
     def _is_system_error_msg(content: str) -> bool:
-        """Kiểm tra xem tin nhắn có phải là thông báo lỗi do hệ thống sinh ra hay không"""
+        """Kiểm tra xem tin nhắn có phải là thông báo lỗi của hệ thống hay không"""
         system_prefixes = [
             "⚠️ **Không thể kết nối Gemini API!**",
             "⚠️ **Chưa cấu hình Gemini API Key!**",
@@ -249,12 +256,12 @@ class AutoAIEngine:
 
     @staticmethod
     def _filter_valid_messages(messages: list) -> list:
-        """Lọc bỏ toàn bộ các tin nhắn thông báo lỗi của phần mềm"""
+        """Lọc bỏ các thông báo lỗi của phần mềm khỏi danh sách tin nhắn"""
         return [m for m in messages if not AutoAIEngine._is_system_error_msg(m.get("content", ""))]
 
     @staticmethod
     def _call_gemini_api(payload_contents: list, system_instruction: str, gemini_keys: list, selected_model: str) -> tuple[str, str]:
-        """Hàm phụ trách việc gửi HTTP Request tới Gemini API"""
+        """Gửi yêu cầu tới Gemini API"""
         models_to_try = AUTO_FALLBACK_ORDER if selected_model == AUTO_MODEL_OPTION else [selected_model]
         last_error = ""
 
@@ -295,7 +302,7 @@ class AutoAIEngine:
 
     @staticmethod
     def summarize_conversation(messages: list, gemini_keys: list, selected_model: str) -> str:
-        """Hàm yêu cầu AI tóm tắt lại các tin nhắn cũ"""
+        """AI tóm tắt toàn bộ tin nhắn cũ"""
         valid_messages = AutoAIEngine._filter_valid_messages(messages)
         if not valid_messages:
             return ""
@@ -315,17 +322,14 @@ class AutoAIEngine:
         if not gemini_keys or not any(k.strip() for k in gemini_keys):
             return "⚠️ **Chưa cấu hình Gemini API Key!** Vui lòng thêm API Key bên thanh Sidebar.", ""
 
-        # Lọc bỏ các thông báo lỗi của hệ thống trước khi đưa vào ngữ cảnh
         all_messages = active_chat.get("messages", [])
         valid_messages = AutoAIEngine._filter_valid_messages(all_messages)
 
-        # --- CƠ CHẾ QUẢN LÝ TOKEN: TÓM TẮT & LẤY 6 TIN NHẮN GẦN NHẤT ---
+        # --- QUẢN LÝ TOKEN: TÓM TẮT & GIỮ LẠI 6 TIN NHẮN GẦN NHẤT ---
         if len(valid_messages) >= 10:
-            # Lấy toàn bộ tin nhắn cũ ngoại trừ 6 tin nhắn gần nhất
             older_messages = valid_messages[:-6]
             recent_messages = valid_messages[-6:]
             
-            # Tóm tắt lại lịch sử cũ
             summary = AutoAIEngine.summarize_conversation(older_messages, gemini_keys, selected_model)
             
             formatted_contents = []
@@ -339,7 +343,6 @@ class AutoAIEngine:
                     "parts": [{"text": "Tôi đã nắm vững toàn bộ ngữ cảnh trước đó. Bạn cần hỗ trợ gì tiếp theo?"}]
                 })
 
-            # Đưa 6 tin nhắn gần nhất vào chuỗi hội thoại
             for msg in recent_messages:
                 role = "model" if msg["role"] == "assistant" else "user"
                 formatted_contents.append({
@@ -347,7 +350,6 @@ class AutoAIEngine:
                     "parts": [{"text": msg["content"]}]
                 })
         else:
-            # Nếu dưới 10 tin nhắn hợp lệ: Gửi toàn bộ
             formatted_contents = []
             for msg in valid_messages:
                 role = "model" if msg["role"] == "assistant" else "user"
@@ -533,7 +535,7 @@ with st.sidebar:
                 GlobalRAMDatabase.sync_ram_to_github()
 
             if selected_model == AUTO_MODEL_OPTION:
-                st.caption("⚡ **Tự động:** Thử `2.0-flash` ➔ `1.5-flash` ➔ `1.5-pro`...")
+                st.caption("⚡ **Tự động:** Thử `3.7-flash` ➔ `3.6-flash` ➔ `3.5-flash` ➔ `3.1-pro`...")
 
             st.markdown("---")
 
