@@ -19,15 +19,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Tối ưu giao diện đồ họa & hiệu ứng mượt
 st.markdown("""
 <style>
-    /* Chuyển cảnh mượt cho toàn bộ ứng dụng */
     * {
         transition: background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
     }
 
-    /* Hiệu ứng mờ dần (Fade In) khi hiển thị phần tử mới */
     @keyframes fadeIn {
         from { opacity: 0; transform: translateY(8px); }
         to { opacity: 1; transform: translateY(0); }
@@ -37,7 +34,6 @@ st.markdown("""
         animation: fadeIn 0.35s ease-out forwards;
     }
 
-    /* Tối ưu nút bấm (Buttons) */
     div.stButton > button {
         border-radius: 10px !important;
         border: 1px solid rgba(255, 255, 255, 0.1) !important;
@@ -50,30 +46,23 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
     }
 
-    div.stButton > button:active {
-        transform: translateY(0) !important;
-    }
-
-    /* Tối ưu ô nhập liệu */
-    .stTextInput input, .stTextArea textarea {
-        border-radius: 10px !important;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
-    }
-
-    .stTextInput input:focus, .stTextArea textarea:focus {
-        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3) !important;
-    }
-
-    /* Card hiển thị trạng thái người dùng */
     .user-card {
         padding: 12px 16px;
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(168, 85, 247, 0.1) 100%);
-        border: 1px solid rgba(168, 85, 247, 0.2);
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(168, 85, 247, 0.12) 100%);
+        border: 1px solid rgba(168, 85, 247, 0.25);
         border-radius: 12px;
         margin-bottom: 12px;
     }
 
-    /* Thanh cuộn mượt */
+    .key-item {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        font-family: monospace;
+        margin-bottom: 4px;
+    }
+
     ::-webkit-scrollbar {
         width: 6px;
         height: 6px;
@@ -81,9 +70,6 @@ st.markdown("""
     ::-webkit-scrollbar-thumb {
         background: rgba(156, 163, 175, 0.3);
         border-radius: 4px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-        background: rgba(156, 163, 175, 0.5);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -104,6 +90,13 @@ GITHUB_REPO = get_admin_secret("GITHUB_REPO", "username/repository-name")
 GITHUB_FILE_PATH = "data/users_encrypted.json"
 MAX_GUEST_LIMIT = 100
 
+AVAILABLE_GEMINI_MODELS = [
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash"
+]
+
 # ==========================================
 # MODULE MÃ HÓA BASE64 (UTF-8 SAFE)
 # ==========================================
@@ -115,6 +108,21 @@ def decode_data(b64_str: str) -> str:
         return base64.b64decode(b64_str.encode('utf-8')).decode('utf-8')
     except Exception:
         return "{}"
+
+def normalize_user_data(data: dict) -> dict:
+    """Chuẩn hóa cấu trúc dữ liệu người dùng (Migration từ bản cũ nếu có)"""
+    if "gemini_keys" not in data:
+        data["gemini_keys"] = []
+        # Chuyển đổi key đơn lẻ cũ sang danh sách
+        if "gemini_key" in data and data["gemini_key"].strip():
+            data["gemini_keys"].append(data["gemini_key"].strip())
+    if "selected_model" not in data:
+        data["selected_model"] = "gemini-1.5-flash"
+    if "memory" not in data:
+        data["memory"] = ""
+    if "chats" not in data:
+        data["chats"] = []
+    return data
 
 # ==========================================
 # BỘ QUẢN LÝ RAM & ĐỒNG BỘ CHỐNG LỖI 409
@@ -136,7 +144,6 @@ class GlobalRAMDatabase:
 
     @classmethod
     def _get_fresh_sha_and_data(cls):
-        """Lấy dữ liệu tươi từ GitHub, triệt tiêu CDN Cache bằng UUID"""
         if not GITHUB_TOKEN:
             return {}, None, "Chưa cấu hình GITHUB_TOKEN!"
 
@@ -151,6 +158,11 @@ class GlobalRAMDatabase:
                 content_b64 = res_data.get("content", "").replace("\n", "").replace("\r", "")
                 raw_json_str = decode_data(content_b64)
                 users = json.loads(raw_json_str) if raw_json_str else {}
+                
+                # Normalize dữ liệu cho toàn bộ users
+                for username in users:
+                    users[username] = normalize_user_data(users[username])
+
                 return users, sha, None
         except urllib.error.HTTPError as e:
             if e.code == 404:
@@ -161,7 +173,6 @@ class GlobalRAMDatabase:
 
     @classmethod
     def get_users_db(cls, force_reload=False):
-        """Đọc dữ liệu từ RAM. Chỉ tải lại nếu chưa có cache hoặc yêu cầu cưỡng chế"""
         with cls._lock:
             if cls._users_cache is None or force_reload:
                 users, _, err = cls._get_fresh_sha_and_data()
@@ -171,15 +182,13 @@ class GlobalRAMDatabase:
 
     @classmethod
     def update_user_in_ram(cls, username, user_payload):
-        """Cập nhật dữ liệu tức thì trên RAM (Không tốn thời gian chờ)"""
         with cls._lock:
             if cls._users_cache is None:
                 cls._users_cache = {}
-            cls._users_cache[username] = user_payload
+            cls._users_cache[username] = normalize_user_data(user_payload)
 
     @classmethod
     def sync_ram_to_github(cls, max_retries=3):
-        """Đồng bộ dữ liệu từ RAM lên GitHub với cơ chế xử lý 409 chủ động"""
         with cls._lock:
             if not cls._users_cache:
                 return True, "RAM trống."
@@ -220,56 +229,52 @@ class GlobalRAMDatabase:
             return True, "Đã lưu tạm vào RAM server."
 
 # ==========================================
-# MODULE AI ENGINE (GROQ -> GEMINI -> FALLBACK)
+# MODULE AI ENGINE (GEMINI ONLY)
 # ==========================================
 class AutoAIEngine:
     @staticmethod
-    def generate_response(prompt: str, system_instruction: str = "", groq_key: str = "", gemini_key: str = "") -> str:
-        if groq_key.strip():
-            try:
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                messages = []
-                if system_instruction:
-                    messages.append({"role": "system", "content": system_instruction})
-                messages.append({"role": "user", "content": prompt})
+    def generate_response(prompt: str, system_instruction: str = "", gemini_keys: list = None, model: str = "gemini-1.5-flash") -> str:
+        if not gemini_keys or not any(k.strip() for k in gemini_keys):
+            return "⚠️ **Chưa cấu hình Gemini API Key!** Vui lòng thêm API Key bên thanh Sidebar."
 
-                payload = {
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": messages,
-                    "temperature": 0.7,
-                    "max_tokens": 2048,
-                }
-                headers = {
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {groq_key.strip()}'
-                }
-                res = requests.post(url, json=payload, headers=headers, timeout=20)
-                if res.status_code == 200:
-                    return res.json()['choices'][0]['message']['content']
-            except Exception:
-                pass
+        # Thử lần lượt từng API Key nếu có nhiều key (Failover Support)
+        for key in gemini_keys:
+            clean_key = key.strip()
+            if not clean_key:
+                continue
 
-        if gemini_key.strip():
             try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key.strip()}"
-                combined_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
-                payload = {"contents": [{"parts": [{"text": combined_prompt}]}]}
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={clean_key}"
+                
+                payload = {"contents": []}
+                if system_instruction.strip():
+                    payload["system_instruction"] = {
+                        "parts": [{"text": system_instruction.strip()}]
+                    }
+                
+                payload["contents"].append({
+                    "role": "user",
+                    "parts": [{"text": prompt}]
+                })
+
                 headers = {'Content-Type': 'application/json'}
-                res = requests.post(url, json=payload, headers=headers, timeout=20)
+                res = requests.post(url, json=payload, headers=headers, timeout=25)
+                
                 if res.status_code == 200:
-                    return res.json()['candidates'][0]['content']['parts'][0]['text']
+                    data = res.json()
+                    return data['candidates'][0]['content']['parts'][0]['text']
             except Exception:
-                pass
+                continue  # Nếu Key hiện tại lỗi/hết hạn ngạch, tự động nhảy sang Key tiếp theo
 
-        return "⚠️ **Không thể kết nối API AI!** Vui lòng kiểm tra lại **Groq API Key** hoặc **Gemini API Key** bên thanh Sidebar."
+        return "⚠️ **Không thể kết nối Gemini API!** Tất cả API Key đều không khả dụng hoặc bị từ chối. Vui lòng kiểm tra lại Key/Mô hình."
 
     @staticmethod
-    def generate_title(chat_messages: list, groq_key: str = "", gemini_key: str = "") -> str:
+    def generate_title(chat_messages: list, gemini_keys: list = None, model: str = "gemini-1.5-flash") -> str:
         conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in chat_messages if m['role'] != 'system'])
         prompt = f"Dựa trên nội dung cuộc hội thoại sau, hãy đặt một tiêu đề ngắn gọn (từ 2 đến 5 từ). Chỉ trả về duy nhất chuỗi tiêu đề:\n\n{conversation_text}"
-        response = AutoAIEngine.generate_response(prompt, "", groq_key, gemini_key)
+        response = AutoAIEngine.generate_response(prompt, "", gemini_keys, model)
         clean_title = response.strip().replace('"', '').replace("'", "").replace("\n", "")[:40]
-        return clean_title if clean_title and "Không thể kết nối" not in clean_title else "Cuộc trò chuyện mới"
+        return clean_title if clean_title and "Không thể kết nối" not in clean_title and "Chưa cấu hình" not in clean_title else "Cuộc trò chuyện mới"
 
 # ==========================================
 # KHỞI TẠO SESSION STATE & DỮ LIỆU
@@ -277,15 +282,15 @@ class AutoAIEngine:
 if "user" not in st.session_state:
     st.session_state.user = None
 if "user_data" not in st.session_state:
-    st.session_state.user_data = {"groq_key": "", "gemini_key": "", "memory": "", "chats": []}
+    st.session_state.user_data = normalize_user_data({})
 if "current_chat_id" not in st.session_state:
     st.session_state.current_chat_id = None
 if "guest_timestamps" not in st.session_state:
     st.session_state.guest_timestamps = []
-if "temp_guest_groq" not in st.session_state:
-    st.session_state.temp_guest_groq = ""
 if "temp_guest_gemini" not in st.session_state:
     st.session_state.temp_guest_gemini = ""
+if "guest_model" not in st.session_state:
+    st.session_state.guest_model = "gemini-1.5-flash"
 
 query_params = st.query_params
 if st.session_state.user is None and "session_token" in query_params:
@@ -296,9 +301,7 @@ if st.session_state.user is None and "session_token" in query_params:
             users_db = GlobalRAMDatabase.get_users_db()
             if decoded_user in users_db:
                 st.session_state.user = decoded_user
-                st.session_state.user_data = users_db[decoded_user]
-                if "chats" not in st.session_state.user_data:
-                    st.session_state.user_data["chats"] = []
+                st.session_state.user_data = normalize_user_data(users_db[decoded_user])
     except Exception:
         pass
 
@@ -354,11 +357,11 @@ if st.session_state.current_chat_id is None and get_active_chats():
 with st.sidebar:
     st.title("🤖 Nexus AI Gateway")
 
-    # Hiển thị thẻ người dùng
+    # Thẻ tài khoản
     if st.session_state.user:
         st.markdown(f"""
         <div class="user-card">
-            <span style="font-size: 0.9em; opacity: 0.8;">Tài khoản đăng nhập</span><br>
+            <span style="font-size: 0.85em; opacity: 0.8;">Đã đăng nhập</span><br>
             <strong style="font-size: 1.1em;">👤 {st.session_state.user}</strong>
         </div>
         """, unsafe_allow_html=True)
@@ -366,7 +369,7 @@ with st.sidebar:
             save_user_state_to_ram()
             GlobalRAMDatabase.sync_ram_to_github()
             st.session_state.user = None
-            st.session_state.user_data = {"groq_key": "", "gemini_key": "", "memory": "", "chats": []}
+            st.session_state.user_data = normalize_user_data({})
             st.query_params.clear()
             st.rerun()
     else:
@@ -385,9 +388,7 @@ with st.sidebar:
                 users_db = GlobalRAMDatabase.get_users_db(force_reload=True)
                 if login_u in users_db and users_db[login_u].get("password") == login_p:
                     st.session_state.user = login_u
-                    st.session_state.user_data = users_db[login_u]
-                    if "chats" not in st.session_state.user_data:
-                        st.session_state.user_data["chats"] = []
+                    st.session_state.user_data = normalize_user_data(users_db[login_u])
 
                     if remember_me:
                         st.query_params["session_token"] = encode_data(login_u)
@@ -407,13 +408,13 @@ with st.sidebar:
                     if reg_u in users_db:
                         st.error("Tài khoản đã tồn tại!")
                     else:
-                        new_user_payload = {
+                        new_user_payload = normalize_user_data({
                             "password": reg_p,
-                            "groq_key": "",
-                            "gemini_key": "",
+                            "gemini_keys": [],
+                            "selected_model": "gemini-1.5-flash",
                             "memory": "",
                             "chats": []
-                        }
+                        })
                         GlobalRAMDatabase.update_user_in_ram(reg_u, new_user_payload)
                         success, msg = GlobalRAMDatabase.sync_ram_to_github()
                         
@@ -428,30 +429,72 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Cấu hình API Keys trong Expander gọn gàng
-    with st.expander("🔑 Cấu hình API Keys", expanded=True if st.session_state.user else False):
+    # --- CẤU HÌNH GEMINI API & MÔ HÌNH ---
+    with st.expander("🔑 Cấu hình Gemini API & Mô hình", expanded=True if st.session_state.user else False):
         if st.session_state.user:
-            current_groq = st.session_state.user_data.get("groq_key", "")
-            current_gemini = st.session_state.user_data.get("gemini_key", "")
-
-            input_groq = st.text_input("Groq Key", value=current_groq, type="password")
-            input_gemini = st.text_input("Gemini Key", value=current_gemini, type="password")
-
-            if st.button("💾 Lưu API Keys", use_container_width=True):
-                st.session_state.user_data["groq_key"] = input_groq.strip()
-                st.session_state.user_data["gemini_key"] = input_gemini.strip()
+            # 1. Chọn Mô hình Gemini
+            current_model = st.session_state.user_data.get("selected_model", "gemini-1.5-flash")
+            model_index = AVAILABLE_GEMINI_MODELS.index(current_model) if current_model in AVAILABLE_GEMINI_MODELS else 0
+            
+            selected_model = st.selectbox("Chọn mô hình Gemini:", AVAILABLE_GEMINI_MODELS, index=model_index)
+            if selected_model != current_model:
+                st.session_state.user_data["selected_model"] = selected_model
                 save_user_state_to_ram()
+                GlobalRAMDatabase.sync_ram_to_github()
 
-                success, msg = GlobalRAMDatabase.sync_ram_to_github()
-                if success:
-                    st.toast("Đã lưu API Keys!", icon="✅")
+            st.markdown("---")
+
+            # 2. Quản lý danh sách Gemini API Keys
+            st.markdown("**Danh sách API Keys đã lưu:**")
+            gemini_keys = st.session_state.user_data.get("gemini_keys", [])
+
+            if not gemini_keys:
+                st.caption("Chưa có API Key nào được lưu.")
+
+            keys_to_remove = []
+            for idx, k in enumerate(gemini_keys):
+                col_k, col_del = st.columns([0.8, 0.2])
+                masked_key = f"{k[:6]}...{k[-4:]}" if len(k) > 10 else "••••••••"
+                col_k.markdown(f"<div class='key-item'>Key {idx+1}: {masked_key}</div>", unsafe_allow_html=True)
+                if col_del.button("❌", key=f"del_key_{idx}"):
+                    keys_to_remove.append(k)
+
+            if keys_to_remove:
+                for k in keys_to_remove:
+                    gemini_keys.remove(k)
+                st.session_state.user_data["gemini_keys"] = gemini_keys
+                save_user_state_to_ram()
+                GlobalRAMDatabase.sync_ram_to_github()
+                st.toast("Đã xóa API Key!", icon="🗑️")
+                st.rerun()
+
+            # Thêm API Key mới
+            new_key_input = st.text_input("Thêm Gemini API Key mới:", type="password", key="add_new_key_input")
+            if st.button("➕ Thêm Key", use_container_width=True):
+                clean_new_key = new_key_input.strip()
+                if clean_new_key:
+                    if clean_new_key not in gemini_keys:
+                        gemini_keys.append(clean_new_key)
+                        st.session_state.user_data["gemini_keys"] = gemini_keys
+                        save_user_state_to_ram()
+                        success, msg = GlobalRAMDatabase.sync_ram_to_github()
+                        if success:
+                            st.toast("Đã thêm và lưu API Key!", icon="✅")
+                        else:
+                            st.toast("Đã lưu tạm trên RAM", icon="⚡")
+                        st.rerun()
+                    else:
+                        st.warning("API Key này đã tồn tại.")
                 else:
-                    st.toast("Đã lưu tạm trên RAM", icon="⚡")
+                    st.warning("Vui lòng nhập API Key hợp lệ.")
         else:
-            st.session_state.temp_guest_groq = st.text_input("Groq Key (Tạm thời)", type="password", value=st.session_state.temp_guest_groq)
-            st.session_state.temp_guest_gemini = st.text_input("Gemini Key (Tạm thời)", type="password", value=st.session_state.temp_guest_gemini)
+            # Chế độ Khách
+            guest_selected_model = st.selectbox("Chọn mô hình Gemini:", AVAILABLE_GEMINI_MODELS, index=0)
+            st.session_state.guest_model = guest_selected_model
+            guest_key_input = st.text_input("Gemini Key (Khách)", type="password", value=st.session_state.temp_guest_gemini)
+            st.session_state.temp_guest_gemini = guest_key_input.strip()
 
-    # Bộ nhớ AI trong Expander
+    # --- BỘ NHỚ AI (MEMORY) ---
     if st.session_state.user:
         with st.expander("🧠 Bộ nhớ AI (Memory)"):
             current_mem = st.session_state.user_data.get("memory", "")
@@ -468,7 +511,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Danh sách cuộc trò chuyện
+    # --- DANH SÁCH CUỘC TRÒ CHUYỆN ---
     st.subheader("💬 Cuộc trò chuyện")
     if st.button("➕ Tạo hội thoại mới", use_container_width=True):
         create_new_chat()
@@ -514,18 +557,24 @@ if active_chat:
         with st.chat_message("user"):
             st.markdown(prompt)
 
+        # Lấy danh sách Key & Mô hình tương ứng với tài khoản/khách
         if st.session_state.user:
-            active_groq = st.session_state.user_data.get("groq_key", "")
-            active_gemini = st.session_state.user_data.get("gemini_key", "")
+            active_keys = st.session_state.user_data.get("gemini_keys", [])
+            active_model = st.session_state.user_data.get("selected_model", "gemini-1.5-flash")
             system_mem = st.session_state.user_data.get("memory", "")
         else:
-            active_groq = st.session_state.temp_guest_groq
-            active_gemini = st.session_state.temp_guest_gemini
+            active_keys = [st.session_state.temp_guest_gemini] if st.session_state.temp_guest_gemini else []
+            active_model = st.session_state.get("guest_model", "gemini-1.5-flash")
             system_mem = ""
 
         with st.chat_message("assistant"):
-            with st.spinner("Đang suy nghĩ..."):
-                response_text = AutoAIEngine.generate_response(prompt, system_mem, active_groq, active_gemini)
+            with st.spinner(f"Đang xử lý với {active_model}..."):
+                response_text = AutoAIEngine.generate_response(
+                    prompt=prompt,
+                    system_instruction=system_mem,
+                    gemini_keys=active_keys,
+                    model=active_model
+                )
                 st.markdown(response_text)
 
         active_chat["messages"].append({"role": "assistant", "content": response_text})
@@ -534,12 +583,12 @@ if active_chat:
         user_msg_count = sum(1 for m in active_chat["messages"] if m["role"] == "user")
         if user_msg_count == 3 and not active_chat.get("title_set", False):
             with st.spinner("Đang tự động đặt tên cuộc trò chuyện..."):
-                new_title = AutoAIEngine.generate_title(active_chat["messages"], active_groq, active_gemini)
+                new_title = AutoAIEngine.generate_title(active_chat["messages"], active_keys, active_model)
                 if new_title:
                     active_chat["title"] = new_title
                     active_chat["title_set"] = True
 
-        # Lưu ngay vào RAM (Zero latency & không bị gián đoạn giao diện)
+        # Lưu ngay vào RAM
         if st.session_state.user:
             save_user_state_to_ram()
 
