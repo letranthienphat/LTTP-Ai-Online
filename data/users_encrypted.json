@@ -1,7 +1,9 @@
 {
   "Phát": {
     "password": "Tp27111510",
-    "gemini_keys": [],
+    "gemini_keys": [
+      "AQ.Ab8RN6J07psZ0HBYAR4AM2rguh8q2f0w9-g7dPKAGhhLU7y2Cw"
+    ],
     "selected_model": "🔄 Tự động chọn Model Free khả dụng",
     "memory": "",
     "chats": [
