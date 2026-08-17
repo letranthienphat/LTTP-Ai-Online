@@ -9,6 +9,7 @@ import streamlit as st
 import google.generativeai as genai
 from datetime import datetime
 from cryptography.fernet import Fernet
+from cookies_controller import CookieController
 
 # ==========================================
 # 1. CẤU HÌNH TRANG & SECRETS
@@ -27,6 +28,18 @@ GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "NexusAI_Master_Secret_Key_2026")
 FERNET_KEY = base64.urlsafe_b64encode(hashlib.sha256(MASTER_SECRET.encode()).digest())
 cipher = Fernet(FERNET_KEY)
+
+# Quản lý Cookie thiết bị
+cookies = CookieController()
+
+# Khoản thời gian sống của Cookie thiết bị (30 ngày)
+COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+
+# Lấy hoặc tạo mới DEVICE ID cho thiết bị truy cập
+device_id = cookies.get("nexus_device_id")
+if not device_id:
+    device_id = str(uuid.uuid4())
+    cookies.set("nexus_device_id", device_id, max_age=COOKIE_MAX_AGE)
 
 # ==========================================
 # 2. HÀM MÃ HÓA & GIẢI MÃ API KEY
@@ -71,7 +84,6 @@ def generate_summary(older_messages: list, existing_summary: str, api_key: str, 
         res = model.generate_content(prompt)
         return res.text.strip()
     except Exception:
-        # Dự phòng nếu lỗi API tóm tắt: ghép chuỗi đơn giản
         parts = [existing_summary] if existing_summary else []
         for m in older_messages:
             r = "User" if m["role"] == "user" else "AI"
@@ -138,7 +150,7 @@ class GitHubStorage:
         content_b64 = base64.b64encode(json_bytes).decode('utf-8')
         
         payload = {
-            "message": "Update users_db.json (API Keys, Chat History & Summaries)",
+            "message": "Update users_db.json (API Keys, Chats & Devices)",
             "content": content_b64
         }
         if sha:
@@ -154,7 +166,7 @@ class GitHubStorage:
             return False, f"Lỗi lưu GitHub: {e}"
 
 # ==========================================
-# 5. KHỞI TẠO STATE & MÀN HÌNH ĐĂNG NHẬP
+# 5. KHỞI TẠO STATE & TỰ ĐỘNG ĐĂNG NHẬP THEO DEVICE ID
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -163,23 +175,47 @@ if "current_chat_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Tải cơ sở dữ liệu
+db_data = GitHubStorage.load_db()
+
+# Kiểm tra tính năng Auto Login bằng Device ID
+if not st.session_state.user and device_id and db_data:
+    for username, uinfo in db_data.items():
+        remembered_devices = uinfo.get("remembered_devices", [])
+        if device_id in remembered_devices:
+            st.session_state.user = username
+            st.toast(f"Tự động đăng nhập thiết bị thành công! Xin chào {username}", icon="⚡")
+            break
+
+# UI Đăng nhập / Đăng ký nếu chưa có User
 def render_auth_ui():
     st.markdown("<h2 style='text-align: center;'>⚡ Cổng Truy Cập Nexus AI</h2>", unsafe_allow_html=True)
     _, col, _ = st.columns([1, 2, 1])
 
     with col:
+        st.caption(f"🆔 ID Thiết bị của bạn: `{device_id[:8]}...{device_id[-4:]}`")
         tab_login, tab_register = st.tabs(["🔑 Đăng nhập", "📝 Đăng ký"])
         
         with tab_login:
             with st.form("login_form"):
                 u_name = st.text_input("Tên đăng nhập:").strip().lower()
                 u_pass = st.text_input("Mật khẩu:", type="password")
+                remember_me = st.checkbox("📌 Ghi nhớ đăng nhập trên thiết bị này", value=True)
+                
                 if st.form_submit_button("Đăng nhập", use_container_width=True):
                     db = GitHubStorage.load_db()
                     if u_name in db and db[u_name]["password"] == hash_password(u_pass):
                         st.session_state.user = u_name
                         st.session_state.current_chat_id = None
                         st.session_state.messages = []
+                        
+                        # Lưu Device ID vào tài khoản người dùng
+                        if remember_me:
+                            db[u_name].setdefault("remembered_devices", [])
+                            if device_id not in db[u_name]["remembered_devices"]:
+                                db[u_name]["remembered_devices"].append(device_id)
+                                GitHubStorage.save_db(db)
+                        
                         st.toast("Đăng nhập thành công!", icon="✅")
                         st.rerun()
                     else:
@@ -203,7 +239,8 @@ def render_auth_ui():
                             db[reg_u] = {
                                 "password": hash_password(reg_p),
                                 "api_keys": [],
-                                "chats": {}
+                                "chats": {},
+                                "remembered_devices": [device_id]
                             }
                             ok, msg = GitHubStorage.save_db(db)
                             if ok:
@@ -216,24 +253,32 @@ if not st.session_state.user:
     st.stop()
 
 # ==========================================
-# 6. TẢI DỮ LIỆU TÀI KHOẢN
+# 6. TẢI DỮ LIỆU TÀI KHOẢN HIỆN TẠI
 # ==========================================
-db_data = GitHubStorage.load_db()
 user_data = db_data.get(st.session_state.user, {})
 
 user_data.setdefault("api_keys", [])
 user_data.setdefault("chats", {})
+user_data.setdefault("remembered_devices", [])
 
 encrypted_keys = user_data["api_keys"]
 user_chats = user_data["chats"]
 active_api_keys = [decrypt_key(k) for k in encrypted_keys if decrypt_key(k)]
 
 # ==========================================
-# 7. SIDEBAR: LỊCH SỬ CHAT & API KEY
+# 7. SIDEBAR: LỊCH SỬ CHAT, MÃ THIẾT BỊ & API KEY
 # ==========================================
 with st.sidebar:
     st.header(f"👤 {st.session_state.user}")
+    st.caption(f"💻 Device ID: `{device_id[:6]}...{device_id[-4:]}`")
+
     if st.button("🚪 Đăng xuất", use_container_width=True):
+        # Hủy liên kết Device ID hiện tại khi đăng xuất
+        if device_id in user_data["remembered_devices"]:
+            user_data["remembered_devices"].remove(device_id)
+            db_data[st.session_state.user] = user_data
+            GitHubStorage.save_db(db_data)
+
         st.session_state.user = None
         st.session_state.current_chat_id = None
         st.session_state.messages = []
@@ -241,7 +286,7 @@ with st.sidebar:
 
     st.divider()
 
-    # --- TÍNH NĂNG 1: TRÒ CHUYỆN MỚI & LỊCH SỬ CHAT ---
+    # --- LỊCH SỬ CHAT ---
     if st.button("➕ Cuộc trò chuyện mới", type="primary", use_container_width=True):
         st.session_state.current_chat_id = None
         st.session_state.messages = []
@@ -284,7 +329,7 @@ with st.sidebar:
 
     st.divider()
 
-    # --- TÍNH NĂNG 2: QUẢN LÝ LƯU API KEY (MÃ HÓA) ---
+    # --- QUẢN LÝ LƯU API KEY (MÃ HÓA) ---
     st.subheader("🔑 Quản lý API Key (AES-256)")
     
     if active_api_keys:
@@ -385,7 +430,6 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
         older_msgs = st.session_state.messages[:-6]
         summarized_count = chat_info.get("summarized_count", 0)
         
-        # Nếu có tin nhắn mới rơi ra ngoài cửa sổ 6 tin gần nhất -> tiến hành tóm tắt
         if len(older_msgs) > summarized_count:
             unsummarized_msgs = older_msgs[summarized_count:]
             updated_summary = generate_summary(
@@ -424,7 +468,7 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
                     system_instruction=sys_instruction
                 )
 
-                # Dựng lịch sử CHỈ GỒM các tin nhắn thuộc 6 tin nhắn mới nhất (loại bỏ prompt hiện tại)
+                # Dựng lịch sử CHỈ GỒM các tin nhắn thuộc 6 tin nhắn mới nhất
                 chat_history = []
                 for m in recent_messages[:-1]:
                     role = "model" if m["role"] == "assistant" else "user"
