@@ -6,6 +6,13 @@
     ],
     "selected_model": "gemini-2.5-flash",
     "memory": "",
-    "chats": []
+    "chats": [
+      {
+        "id": "1786936749949",
+        "title": "Cuộc trò chuyện mới",
+        "title_set": false,
+        "messages": []
+      }
+    ]
   }
 }
