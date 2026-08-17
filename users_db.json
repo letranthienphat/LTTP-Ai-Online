@@ -4,25 +4,7 @@
     "api_keys": [
       "gAAAAABqgoxZfK1leEN6GFJ-Nynd1tdNJirKeqdcNefQabmiUtmkAyTBLm0Ez94qtAPl2d30edZSRI732N7kvXQoFjgDyLiIq3J-2LMQ5lBHHazZQvKXCQfK_YYV7mM2dYEdZdYDIuOeetjhzwFPvAB5KEIuC6RN2w=="
     ],
-    "chats": {
-      "chat_4c60b1dd": {
-        "title": "Con người là nhân tạo hay tự n...",
-        "created_at": "2026-08-17 04:38",
-        "updated_at": "2026-08-17 04:39:01",
-        "summary": "",
-        "summarized_count": 0,
-        "messages": [
-          {
-            "role": "user",
-            "content": "Con người là nhân tạo hay tự nhiên?"
-          },
-          {
-            "role": "assistant",
-            "content": "Về mặt nguồn gốc và bản chất sinh học, **con người là sản phẩm của tự nhiên**. \n\nTuy nhiên, để hiểu một cách đầy đủ, chúng ta có thể nhìn nhận qua các góc độ sau:\n\n### 1. Về mặt sinh học và tiến hóa (Hoàn toàn Tự nhiên)\n* **Nguồn gốc:** Con người (loài *Homo sapiens*) là kết quả của quá trình tiến hóa sinh học kéo dài hàng triệu năm, bắt nguồn từ các loài linh trưởng cổ đại, chịu sự chi phối của các quy luật chọn lọc tự nhiên.\n* **Cơ thể:** Cơ thể chúng ta được cấu tạo từ các vật chất hữu cơ, hoạt động dựa trên các quy luật sinh hóa, di truyền, và phụ thuộc hoàn toàn vào hệ sinh thái Trái Đất (oxy, nước, thức ăn) để tồn tại.\n* **Quy luật tự nhiên:** Con người vẫn phải tuân theo quy luật \"sinh, lão, bệnh, tử\" giống như mọi sinh vật khác.\n\n### 2. Về mặt ngữ nghĩa và logic\n* Từ **\"Nhân tạo\"** (Artificial) có nghĩa là *do con người tạo ra* (\"Nhân\" là người, \"tạo\" là làm ra). \n* Con người không thể tự tạo ra sự tồn tại ban đầu của chính giống loài mình. Do đó, xét theo định nghĩa, con người không thể là \"nhân tạo\".\n\n---\n\n### *Góc nhìn mở rộng: Con người hiện đại và yếu tố \"Nhân tạo\"*\nDù có nguồn gốc tự nhiên, con người hiện nay đang ngày càng tích hợp nhiều yếu tố **nhân tạo** vào sự tồn tại của mình:\n\n* **Can thiệp sinh học:** Thụ tinh trong ống nghiệm (IVF), chỉnh sửa gen (CRISPR), nuôi cấy mô...\n* **Công nghệ tích hợp:** Sử dụng các bộ phận nhân tạo (tim nhân tạo, khớp nhân tạo, máy tạo nhịp tim) hay tương lai là các giao diện não - máy tính (như Neuralink).\n* **Môi trường sống và Văn hóa:** Con người hầu như không còn sống hoàn toàn dựa vào tự nhiên hoang dã mà sống trong một \"thế giới nhân tạo\" (nhà cửa, thành phố, công nghệ, quy chuẩn xã hội) do chính mình kiến tạo.\n\n### Tóm lại:\n**Con người là một thực thể tự nhiên**, nhưng là loài sinh vật duy nhất có khả năng can thiệp, tái định hình tự nhiên và đang từng bước đưa các yếu tố **nhân tạo** vào chính quá trình tiến hóa của mình."
-          }
-        ]
-      }
-    },
+    "chats": {},
     "remembered_devices": [
       "23507fbc-11a2-43a3-bba8-e3ccad502682"
     ]
