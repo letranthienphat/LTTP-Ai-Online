@@ -13,6 +13,10 @@
           {
             "role": "user",
             "content": "Chơi trò thám tử với tôi không? Bạn sẽ nghỉ ra một bối cảnh của một hiện trường vụ án nào đó (ví dụ cwps tiệm vàng, cướp đò vật gì đó hoặc bối cảnh khác). Sau đó khi tôi hỏi hoặc yêu cầu hành động gì thì bạn sẽ làm như thế để bắt được tên cướp. Bạn là cảnh sát, tôi là thám tử."
+          },
+          {
+            "role": "user",
+            "content": "Chơi trò thám tử với tôi không? Bạn sẽ nghỉ ra một bối cảnh của một hiện trường vụ án nào đó (ví dụ cwps tiệm vàng, cướp đò vật gì đó hoặc bối cảnh khác). Sau đó khi tôi hỏi hoặc yêu cầu hành động gì thì bạn sẽ làm như thế để bắt được tên cướp. Bạn là cảnh sát, tôi là thám tử."
           }
         ]
       }
