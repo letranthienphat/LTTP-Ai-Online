@@ -10,7 +10,7 @@ import streamlit as st
 import requests
 
 # ==========================================
-# CẤU HÌNH TRANG & CUSTOM CSS (UI/UX SMOOTHING)
+# CẤU HÌNH TRANG & CUSTOM CSS
 # ==========================================
 st.set_page_config(
     page_title="Nexus AI Gateway",
@@ -75,7 +75,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# CẤU HÌNH CƠ SỞ
+# CẤU HÌNH CƠ SỞ & CÁC MÔ HÌNH GEMINI MỚI
 # ==========================================
 def get_admin_secret(key, default=""):
     try:
@@ -91,19 +91,28 @@ GITHUB_FILE_PATH = "data/users_encrypted.json"
 MAX_GUEST_LIMIT = 100
 
 AUTO_MODEL_OPTION = "🔄 Tự động (Auto Switch)"
+
+# Danh sách đầy đủ các mô hình bao gồm thế hệ Gemini 3 & 3.5
 AVAILABLE_GEMINI_MODELS = [
     AUTO_MODEL_OPTION,
+    "gemini-3.5-flash",
+    "gemini-3.1-pro",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash",
     "gemini-2.5-flash",
+    "gemini-2.5-pro",
     "gemini-2.0-flash",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash"
+    "gemini-1.5-flash",
+    "gemini-1.5-pro"
 ]
 
-# Danh sách thứ tự ưu tiên khi ở chế độ Tự động (Từ mới/mạnh nhất xuống cũ hơn)
+# Thứ tự thử nghiệm ở chế độ Tự động (Ưu tiên mô hình mạnh & mới nhất xuống dần)
 AUTO_FALLBACK_ORDER = [
+    "gemini-3.5-flash",
+    "gemini-3.1-pro",
+    "gemini-3-flash",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-pro",
     "gemini-1.5-flash"
 ]
 
@@ -120,7 +129,6 @@ def decode_data(b64_str: str) -> str:
         return "{}"
 
 def normalize_user_data(data: dict) -> dict:
-    """Chuẩn hóa cấu trúc dữ liệu người dùng"""
     if "gemini_keys" not in data:
         data["gemini_keys"] = []
         if "gemini_key" in data and data["gemini_key"].strip():
@@ -134,7 +142,7 @@ def normalize_user_data(data: dict) -> dict:
     return data
 
 # ==========================================
-# BỘ QUẢN LÝ RAM & ĐỒNG BỘ CHỐNG LỖI 409
+# QUẢN LÝ DATABASE RAM & ĐỒNG BỘ GITHUB
 # ==========================================
 class GlobalRAMDatabase:
     _lock = threading.Lock()
@@ -237,7 +245,7 @@ class GlobalRAMDatabase:
             return True, "Đã lưu tạm vào RAM server."
 
 # ==========================================
-# MODULE AI ENGINE (GEMINI WITH AUTO FALLBACK)
+# MODULE AI ENGINE (XỬ LÝ DỮ LIỆU & CALL API)
 # ==========================================
 class AutoAIEngine:
     @staticmethod
@@ -248,33 +256,23 @@ class AutoAIEngine:
         if not gemini_keys or not any(k.strip() for k in gemini_keys):
             return "⚠️ **Chưa cấu hình Gemini API Key!** Vui lòng thêm API Key bên thanh Sidebar.", ""
 
-        # Xác định danh sách mô hình cần thử
-        if selected_model == AUTO_MODEL_OPTION:
-            models_to_try = AUTO_FALLBACK_ORDER
-        else:
-            models_to_try = [selected_model]
+        models_to_try = AUTO_FALLBACK_ORDER if selected_model == AUTO_MODEL_OPTION else [selected_model]
+        last_error = ""
 
-        # Duyệt qua tất cả API Keys khả dụng
         for key in gemini_keys:
             clean_key = key.strip()
             if not clean_key:
                 continue
 
-            # Thử lần lượt các mô hình theo thứ tự ưu tiên
             for model in models_to_try:
                 try:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={clean_key}"
                     
-                    payload = {"contents": []}
-                    if system_instruction.strip():
+                    payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+                    if system_instruction and system_instruction.strip():
                         payload["system_instruction"] = {
                             "parts": [{"text": system_instruction.strip()}]
                         }
-                    
-                    payload["contents"].append({
-                        "role": "user",
-                        "parts": [{"text": prompt}]
-                    })
 
                     headers = {'Content-Type': 'application/json'}
                     res = requests.post(url, json=payload, headers=headers, timeout=25)
@@ -283,15 +281,18 @@ class AutoAIEngine:
                         data = res.json()
                         text = data['candidates'][0]['content']['parts'][0]['text']
                         return text, model
-                    
-                    # Nếu bị lỗi Rate Limit (429), Quá tải (503/500), hoặc không tìm thấy Model (404) -> Hạ cấp xuống mô hình tiếp theo
-                    elif res.status_code in (429, 404, 500, 503):
-                        continue
+                    else:
+                        try:
+                            err_json = res.json()
+                            err_msg = err_json.get("error", {}).get("message", res.text)
+                        except Exception:
+                            err_msg = res.text
+                        last_error = f"Mô hình `{model}` báo lỗi HTTP {res.status_code}: {err_msg}"
 
-                except Exception:
-                    continue  # Lỗi mạng hoặc trễ kết nối -> Thử mô hình tiếp theo
+                except Exception as e:
+                    last_error = f"Lỗi kết nối ({model}): {str(e)}"
 
-        return "⚠️ **Không thể kết nối Gemini API!** Tất cả API Keys hoặc Mô hình khả dụng đều gặp lỗi/hết hạn ngạch.", ""
+        return f"⚠️ **Không thể kết nối Gemini API!**\n\n**Chi tiết phản hồi từ Google:**\n`{last_error}`", ""
 
     @staticmethod
     def generate_title(chat_messages: list, gemini_keys: list = None, selected_model: str = AUTO_MODEL_OPTION) -> str:
@@ -302,7 +303,7 @@ class AutoAIEngine:
         return clean_title if clean_title and "Không thể kết nối" not in clean_title and "Chưa cấu hình" not in clean_title else "Cuộc trò chuyện mới"
 
 # ==========================================
-# KHỞI TẠO SESSION STATE & DỮ LIỆU
+# KHỞI TẠO SESSION STATE
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -382,7 +383,6 @@ if st.session_state.current_chat_id is None and get_active_chats():
 with st.sidebar:
     st.title("🤖 Nexus AI Gateway")
 
-    # Thẻ tài khoản
     if st.session_state.user:
         st.markdown(f"""
         <div class="user-card">
@@ -457,7 +457,6 @@ with st.sidebar:
     # --- CẤU HÌNH GEMINI API & MÔ HÌNH ---
     with st.expander("🔑 Cấu hình Gemini API & Mô hình", expanded=True if st.session_state.user else False):
         if st.session_state.user:
-            # 1. Chọn Mô hình Gemini
             current_model = st.session_state.user_data.get("selected_model", AUTO_MODEL_OPTION)
             model_index = AVAILABLE_GEMINI_MODELS.index(current_model) if current_model in AVAILABLE_GEMINI_MODELS else 0
             
@@ -468,11 +467,10 @@ with st.sidebar:
                 GlobalRAMDatabase.sync_ram_to_github()
 
             if selected_model == AUTO_MODEL_OPTION:
-                st.caption("⚡ **Tự động:** Hệ thống thử `2.5-flash` ➔ `2.0-flash` ➔ `1.5-pro` ➔ `1.5-flash` nếu bị hết lượt.")
+                st.caption("⚡ **Tự động:** Thử từ `3.5-flash` ➔ `3.1-pro` ➔ `3-flash` ➔ `2.5-flash`...")
 
             st.markdown("---")
 
-            # 2. Quản lý danh sách Gemini API Keys
             st.markdown("**Danh sách API Keys đã lưu:**")
             gemini_keys = st.session_state.user_data.get("gemini_keys", [])
 
@@ -496,7 +494,6 @@ with st.sidebar:
                 st.toast("Đã xóa API Key!", icon="🗑️")
                 st.rerun()
 
-            # Thêm API Key mới
             new_key_input = st.text_input("Thêm Gemini API Key mới:", type="password", key="add_new_key_input")
             if st.button("➕ Thêm Key", use_container_width=True):
                 clean_new_key = new_key_input.strip()
@@ -516,7 +513,6 @@ with st.sidebar:
                 else:
                     st.warning("Vui lòng nhập API Key hợp lệ.")
         else:
-            # Chế độ Khách
             guest_selected_model = st.selectbox("Chọn mô hình Gemini:", AVAILABLE_GEMINI_MODELS, index=0)
             st.session_state.guest_model = guest_selected_model
             guest_key_input = st.text_input("Gemini Key (Khách)", type="password", value=st.session_state.temp_guest_gemini)
@@ -569,7 +565,6 @@ active_chat = get_current_chat()
 if active_chat:
     st.title(f"💬 {active_chat['title']}")
 
-    # Render danh sách tin nhắn
     for msg in active_chat["messages"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -585,7 +580,6 @@ if active_chat:
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Lấy danh sách Key & Mô hình tương ứng
         if st.session_state.user:
             active_keys = st.session_state.user_data.get("gemini_keys", [])
             active_model = st.session_state.user_data.get("selected_model", AUTO_MODEL_OPTION)
@@ -606,11 +600,10 @@ if active_chat:
                 )
                 st.markdown(response_text)
                 if used_model and active_model == AUTO_MODEL_OPTION:
-                    st.caption(f"⚡ *Đã tự động phản hồi bằng: `{used_model}`*")
+                    st.caption(f"⚡ *Đã phản hồi bằng mô hình: `{used_model}`*")
 
         active_chat["messages"].append({"role": "assistant", "content": response_text})
 
-        # Tự động đặt tên tiêu đề ở tin nhắn thứ 3
         user_msg_count = sum(1 for m in active_chat["messages"] if m["role"] == "user")
         if user_msg_count == 3 and not active_chat.get("title_set", False):
             with st.spinner("Đang tự động đặt tên cuộc trò chuyện..."):
@@ -619,7 +612,6 @@ if active_chat:
                     active_chat["title"] = new_title
                     active_chat["title_set"] = True
 
-        # Lưu ngay vào RAM
         if st.session_state.user:
             save_user_state_to_ram()
 
