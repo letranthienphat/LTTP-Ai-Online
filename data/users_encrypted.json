@@ -4,6 +4,13 @@
     "gemini_keys": [],
     "selected_model": "🔄 Tự động chọn Model Free khả dụng",
     "memory": "",
-    "chats": []
+    "chats": [
+      {
+        "id": "1786935704197",
+        "title": "Cuộc trò chuyện mới",
+        "title_set": false,
+        "messages": []
+      }
+    ]
   }
 }
