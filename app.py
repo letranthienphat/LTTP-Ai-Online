@@ -17,32 +17,121 @@ from streamlit_cookies_controller import CookieController
 st.set_page_config(
     page_title="Nexus AI Online",
     page_icon="⚡",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 DB_FILE = "users_db.json"
 GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
 GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 
-# Khóa mã hóa AES từ Secret (Dùng mã hóa API Key)
 MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "NexusAI_Master_Secret_Key_2026")
 FERNET_KEY = base64.urlsafe_b64encode(hashlib.sha256(MASTER_SECRET.encode()).digest())
 cipher = Fernet(FERNET_KEY)
 
-# Quản lý Cookie thiết bị
 cookies = CookieController()
-
-# Khoảng thời gian sống của Cookie thiết bị (30 ngày)
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 
-# Lấy hoặc tạo mới DEVICE ID cho thiết bị truy cập
 device_id = cookies.get("nexus_device_id")
 if not device_id:
     device_id = str(uuid.uuid4())
     cookies.set("nexus_device_id", device_id, max_age=COOKIE_MAX_AGE)
 
 # ==========================================
-# 2. HÀM MÃ HÓA & MẬT KHẨU
+# 2. CUSTOM CSS - HIỆU ỨNG ĐỒ HỌA & UI
+# ==========================================
+st.markdown("""
+<style>
+    /* Gradient Header */
+    .main-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
+        font-size: 2.5rem;
+        margin-bottom: 0.2rem;
+    }
+    
+    /* Custom Loading Spinner & Text */
+    .ai-loading-box {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 18px;
+        background: rgba(102, 126, 234, 0.08);
+        border: 1px solid rgba(102, 126, 234, 0.2);
+        border-radius: 12px;
+        margin-bottom: 15px;
+        animation: fadeIn 0.3s ease-in-out;
+    }
+
+    .spinner {
+        width: 22px;
+        height: 22px;
+        border: 3px solid rgba(102, 126, 234, 0.2);
+        border-top: 3px solid #667eea;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+
+    .ai-loading-text {
+        color: #667eea;
+        font-weight: 600;
+        font-size: 0.95rem;
+        letter-spacing: 0.3px;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #667eea 100%);
+        background-size: 200% auto;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        animation: shine 2s linear infinite;
+    }
+
+    /* Status Pulse Dot */
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background-color: #10b981;
+        border-radius: 50%;
+        display: inline-block;
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+        animation: pulse 1.6s infinite;
+        margin-right: 6px;
+    }
+
+    /* Keyframe Animations */
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    @keyframes shine {
+        to { background-position: 200% center; }
+    }
+
+    @keyframes pulse {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+        70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(4px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Style Thẻ Thông Tin Sidebar */
+    .user-card {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 10px 14px;
+        border-radius: 10px;
+        margin-bottom: 12px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 3. HÀM MÃ HÓA & MẬT KHẨU
 # ==========================================
 def encrypt_key(raw_key: str) -> str:
     if not raw_key: return ""
@@ -59,7 +148,7 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 # ==========================================
-# 3. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
+# 4. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
 # ==========================================
 class GitHubStorage:
     @staticmethod
@@ -71,7 +160,6 @@ class GitHubStorage:
 
     @staticmethod
     def load_db() -> dict:
-        """Tải DB từ file users_db.json trên GitHub Repo."""
         if not GITHUB_TOKEN or not GITHUB_REPO:
             st.error("⚠️ Thiếu GITHUB_TOKEN hoặc GITHUB_REPO trong Streamlit Secrets!")
             return {}
@@ -99,7 +187,6 @@ class GitHubStorage:
 
     @staticmethod
     def save_db(data: dict) -> tuple[bool, str]:
-        """Lưu đè file users_db.json lên GitHub Repo."""
         if not GITHUB_TOKEN or not GITHUB_REPO:
             return False, "Thiếu cấu hình GitHub Token/Repo trong Secrets."
 
@@ -134,10 +221,9 @@ class GitHubStorage:
             return False, f"Lỗi lưu GitHub: {e}"
 
 # ==========================================
-# 4. HÀM TÓM TẮT HỘI THOẠI CŨ (TIẾT KIỆM TOKEN)
+# 5. HÀM TÓM TẮT HỘI THOẠI CŨ
 # ==========================================
 def generate_summary(older_messages: list, existing_summary: str, api_key: str, model_name: str) -> str:
-    """Gọi AI tóm tắt các lượt nhắn cũ hơn 6 tin nhắn gần nhất."""
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
@@ -166,7 +252,7 @@ def generate_summary(older_messages: list, existing_summary: str, api_key: str, 
         return " | ".join(parts)
 
 # ==========================================
-# 5. KHỞI TẠO SESSION STATE & TỰ ĐỘNG ĐĂNG NHẬP
+# 6. KHỞI TẠO SESSION STATE & DỮ LIỆU
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -175,32 +261,34 @@ if "current_chat_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Tải cơ sở dữ liệu
 db_data = GitHubStorage.load_db()
 
-# Tự động đăng nhập nếu Device ID đã được ghi nhớ
+# Tự động đăng nhập bằng Device Cookie
 if not st.session_state.user and device_id and db_data:
     for username, uinfo in db_data.items():
         remembered_devices = uinfo.get("remembered_devices", [])
         if device_id in remembered_devices:
             st.session_state.user = username
-            st.toast(f"Tự động đăng nhập thiết bị thành công! Xin chào {username}", icon="⚡")
+            st.toast(f"Tự động đăng nhập thành công! Xin chào {username}", icon="⚡")
             break
 
 # UI Đăng nhập / Đăng ký
 def render_auth_ui():
-    st.markdown("<h2 style='text-align: center;'>⚡ Cổng Truy Cập Nexus AI</h2>", unsafe_allow_html=True)
-    _, col, _ = st.columns([1, 2, 1])
+    st.markdown("<h1 class='main-header' style='text-align: center;'>⚡ Nexus AI Online</h1>", unsafe_allow_html=True)
+    st.caption("<p style='text-align: center;'>Hệ thống Trí tuệ Nhân tạo Đa Năng Đồng bộ GitHub</p>", unsafe_allow_html=True)
+    st.divider()
+    
+    _, col, _ = st.columns([1, 1.8, 1])
 
     with col:
-        st.caption(f"🆔 ID Thiết bị của bạn: `{device_id[:8]}...{device_id[-4:]}`")
+        st.caption(f"🆔 Device ID: `{device_id[:8]}...{device_id[-4:]}`")
         tab_login, tab_register = st.tabs(["🔑 Đăng nhập", "📝 Đăng ký"])
         
         with tab_login:
             with st.form("login_form"):
                 u_name = st.text_input("Tên đăng nhập:").strip().lower()
                 u_pass = st.text_input("Mật khẩu:", type="password")
-                remember_me = st.checkbox("📌 Ghi nhớ đăng nhập trên thiết bị này", value=True)
+                remember_me = st.checkbox("📌 Ghi nhớ thiết bị này (30 ngày)", value=True)
                 
                 if st.form_submit_button("Đăng nhập", use_container_width=True):
                     db = GitHubStorage.load_db()
@@ -218,22 +306,22 @@ def render_auth_ui():
                         st.toast("Đăng nhập thành công!", icon="✅")
                         st.rerun()
                     else:
-                        st.error("❌ Mật khẩu hoặc tên đăng nhập không đúng!")
+                        st.error("❌ Mật khẩu hoặc tên đăng nhập không chính xác!")
 
         with tab_register:
             with st.form("register_form"):
                 reg_u = st.text_input("Tạo tên đăng nhập:").strip().lower()
                 reg_p = st.text_input("Tạo mật khẩu:", type="password")
                 reg_p2 = st.text_input("Xác nhận mật khẩu:", type="password")
-                if st.form_submit_button("Tạo tài khoản", use_container_width=True):
+                if st.form_submit_button("Tạo tài khoản mới", use_container_width=True):
                     if not reg_u or not reg_p:
-                        st.warning("⚠️ Vui lòng nhập đủ thông tin.")
+                        st.warning("⚠️ Vui lòng điền đầy đủ thông tin.")
                     elif reg_p != reg_p2:
-                        st.error("❌ Mật khẩu xác nhận không đúng.")
+                        st.error("❌ Mật khẩu xác nhận không khớp.")
                     else:
                         db = GitHubStorage.load_db()
                         if reg_u in db:
-                            st.error("❌ Tài khoản đã tồn tại.")
+                            st.error("❌ Tên đăng nhập đã được sử dụng.")
                         else:
                             db[reg_u] = {
                                 "password": hash_password(reg_p),
@@ -243,7 +331,7 @@ def render_auth_ui():
                             }
                             ok, msg = GitHubStorage.save_db(db)
                             if ok:
-                                st.success("🎉 Đăng ký thành công! Hãy chuyển sang tab Đăng nhập.")
+                                st.success("🎉 Đăng ký thành công! Hãy chuyển qua tab Đăng nhập.")
                             else:
                                 st.error(f"❌ {msg}")
 
@@ -252,7 +340,7 @@ if not st.session_state.user:
     st.stop()
 
 # ==========================================
-# 6. TẢI DỮ LIỆU TÀI KHOẢN
+# 7. TẢI DỮ LIỆU TÀI KHOẢN
 # ==========================================
 user_data = db_data.get(st.session_state.user, {})
 user_data.setdefault("api_keys", [])
@@ -264,11 +352,15 @@ user_chats = user_data["chats"]
 active_api_keys = [decrypt_key(k) for k in encrypted_keys if decrypt_key(k)]
 
 # ==========================================
-# 7. SIDEBAR: LỊCH SỬ CHAT, MÃ THIẾT BỊ & API KEY
+# 8. SIDEBAR CHÍNH
 # ==========================================
 with st.sidebar:
-    st.header(f"👤 {st.session_state.user}")
-    st.caption(f"💻 Device ID: `{device_id[:6]}...{device_id[-4:]}`")
+    st.markdown(f"""
+    <div class="user-card">
+        <div style="font-weight: 700; font-size: 1.1rem; color: #667eea;">👤 {st.session_state.user}</div>
+        <div style="font-size: 0.8rem; opacity: 0.7;"><span class="pulse-dot"></span>Online | Device: {device_id[:6]}...</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     if st.button("🚪 Đăng xuất", use_container_width=True):
         if device_id in user_data["remembered_devices"]:
@@ -283,7 +375,7 @@ with st.sidebar:
 
     st.divider()
 
-    # --- THÊM CHAT MỚI ---
+    # --- NÚT TẠO CHAT MỚI ---
     if st.button("➕ Cuộc trò chuyện mới", type="primary", use_container_width=True):
         st.session_state.current_chat_id = None
         st.session_state.messages = []
@@ -291,11 +383,10 @@ with st.sidebar:
 
     st.subheader("💬 Danh sách trò chuyện")
     
-    # --- HIỂN THỊ & XÓA CUỘC TRÒ CHUYỆN ---
+    # --- DANH SÁCH & XÓA CHAT ---
     if not user_chats:
         st.caption("Chưa có cuộc trò chuyện nào.")
     else:
-        # Sắp xếp cuộc trò chuyện theo thời gian mới nhất
         sorted_chat_ids = sorted(
             user_chats.keys(), 
             key=lambda cid: user_chats[cid].get("updated_at", ""), 
@@ -311,30 +402,26 @@ with st.sidebar:
             
             col_select, col_del = st.columns([0.8, 0.2])
             
-            # Chọn cuộc trò chuyện
             if col_select.button(btn_label, key=f"select_{cid}", use_container_width=True):
                 st.session_state.current_chat_id = cid
                 st.session_state.messages = user_chats[cid].get("messages", [])
                 st.rerun()
 
-            # Xóa cuộc trò chuyện
-            if col_del.button("🗑️", key=f"del_{cid}", help="Xóa hội thoại này"):
+            if col_del.button("🗑️", key=f"del_{cid}", help="Xóa cuộc trò chuyện"):
                 del user_chats[cid]
                 user_data["chats"] = user_chats
                 db_data[st.session_state.user] = user_data
                 
-                # Lưu đồng bộ lập tức lên GitHub
                 ok, msg = GitHubStorage.save_db(db_data)
                 
-                # Nếu đang mở cuộc hội thoại bị xóa, xóa state hiện tại
                 if st.session_state.current_chat_id == cid:
                     st.session_state.current_chat_id = None
                     st.session_state.messages = []
                 
                 if ok:
-                    st.toast("Đã xóa cuộc trò chuyện và đồng bộ Database!", icon="🗑️")
+                    st.toast("Đã xóa cuộc trò chuyện!", icon="🗑️")
                 else:
-                    st.error(f"Xóa thất bại: {msg}")
+                    st.error(f"Lỗi: {msg}")
                 time.sleep(0.3)
                 st.rerun()
 
@@ -368,7 +455,6 @@ with st.sidebar:
                 time.sleep(0.5)
                 st.rerun()
 
-    # Dò danh sách Model Gemini
     available_models = []
     if active_api_keys:
         try:
@@ -380,14 +466,14 @@ with st.sidebar:
             pass
 
     selected_model = st.selectbox(
-        "Chọn Model:", 
+        "Chọn Model Gemini:", 
         options=available_models if available_models else ["gemini-1.5-flash"]
     )
 
 # ==========================================
-# 8. KHU VỰC KHUNG CHAT CHÍNH
+# 9. KHUNG CHAT CHÍNH VỚI HIỆU ỨNG LOADING
 # ==========================================
-st.title("⚡ Nexus AI Online")
+st.markdown("<h1 class='main-header'>⚡ Nexus AI Online</h1>", unsafe_allow_html=True)
 
 current_chat_title = "Cuộc trò chuyện mới"
 current_summary = ""
@@ -401,23 +487,23 @@ st.caption(f"Đang mở: **{current_chat_title}** | Tài khoản: **{st.session_
 
 # Hiển thị bối cảnh tóm tắt nếu có
 if current_summary:
-    with st.expander("📝 Bối cảnh hội thoại cũ (Đã tóm tắt để tiết kiệm Token)", expanded=False):
+    with st.expander("📝 Bối cảnh hội thoại cũ (Đã tóm tắt tiết kiệm Token)", expanded=False):
         st.info(current_summary)
 
 if not active_api_keys:
-    st.warning("👈 Vui lòng thêm ít nhất 1 Gemini API Key ở thanh bên (Sidebar) để bắt đầu trò chuyện.")
+    st.warning("👈 Vui lòng thêm ít nhất 1 Gemini API Key ở Sidebar để bắt đầu trò chuyện.")
     st.stop()
 
-# Hiển thị lịch sử tin nhắn của hội thoại hiện tại
+# Hiển thị lịch sử tin nhắn
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# Xử lý nhập tin nhắn mới
-if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
+# Nhập tin nhắn mới
+if prompt := st.chat_input("Nhập câu hỏi của bạn cho Nexus AI..."):
     st.chat_message("user").write(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # Tự động tạo Chat ID mới nếu đang ở giao diện New Chat
+    # Tạo Chat ID nếu là tin nhắn đầu tiên
     if not st.session_state.current_chat_id:
         new_cid = f"chat_{uuid.uuid4().hex[:8]}"
         st.session_state.current_chat_id = new_cid
@@ -434,7 +520,7 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
     cid = st.session_state.current_chat_id
     chat_info = user_chats[cid]
 
-    # --- TÓM TẮT HỘI THOẠI KHI > 6 TIN NHẮN ---
+    # Xử lý tóm tắt nếu quá 6 tin nhắn
     total_msgs = len(st.session_state.messages)
     if total_msgs > 6:
         older_msgs = st.session_state.messages[:-6]
@@ -452,11 +538,19 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
             chat_info["summarized_count"] = len(older_msgs)
             current_summary = updated_summary
 
-    # Lấy 6 tin nhắn mới nhất
     recent_messages = st.session_state.messages[-6:] if total_msgs > 6 else st.session_state.messages
 
-    # AI Phản hồi Stream
+    # --- KHUNG AI PHẢN HỒI KÈM HIỆU ỨNG LOADING VÒNG XOAY ---
     with st.chat_message("assistant"):
+        # Hiển thị Widget Đồ họa Spinner Chờ AI
+        loading_placeholder = st.empty()
+        loading_placeholder.markdown("""
+        <div class="ai-loading-box">
+            <div class="spinner"></div>
+            <div class="ai-loading-text">Nexus AI đang soạn câu trả lời cho bạn...</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
         placeholder = st.empty()
         full_response = ""
         success = False
@@ -486,8 +580,14 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
                 chat_session = model_engine.start_chat(history=chat_history)
                 response = chat_session.send_message(prompt, stream=True)
 
+                is_first_chunk = True
                 for chunk in response:
                     if chunk.text:
+                        # Khi có phản hồi đầu tiên -> Ẩn hiệu ứng xoay loading
+                        if is_first_chunk:
+                            loading_placeholder.empty()
+                            is_first_chunk = False
+
                         full_response += chunk.text
                         placeholder.markdown(full_response + "▌")
 
@@ -497,10 +597,13 @@ if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
             except Exception:
                 pass
 
+        # Xóa loading placeholder nếu xảy ra lỗi
+        loading_placeholder.empty()
+
         if success and full_response:
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
-            # --- CẬP NHẬT & ĐỒNG BỘ LÊN GITHUB DATABASE ---
+            # Cập nhật & lưu đồng bộ GitHub
             chat_info["messages"] = st.session_state.messages
             chat_info["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
