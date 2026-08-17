@@ -6,23 +6,23 @@ import requests
 import streamlit as st
 
 # ==========================================
-# 1. CẤU HÌNH TRANG & MODEL GEMINI CHUẨN
+# 1. CẤU HÌNH TRANG & MODEL GEMINI CHUẨN 2026
 # ==========================================
 st.set_page_config(
-    page_title="Nexus AI Gateway",
+    page_title="Nexus AI Gateway 2026",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Danh sách Model ID chuẩn chính thức của Google AI Studio (Dùng API Key)
+# Danh sách Model ID chính thức hoạt động trên Google AI Studio REST API (Dùng API Key)
 AVAILABLE_FREE_MODELS = [
-    "🔄 Tự động chọn Model Free tốt nhất",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
+    "🔄 Tự động chọn Model tốt nhất (gemini-2.0-flash)",
     "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
     "gemini-1.5-flash",
-    "gemini-1.5-pro"
+    "gemini-1.5-pro",
+    "gemini-1.5-flash-8b"
 ]
 
 LOCAL_DB_FILE = "nexus_db.json"
@@ -30,7 +30,7 @@ GITHUB_FILE_PATH = "data/users_encrypted.json"
 CURRENT_SCHEMA_VERSION = 2
 
 # ==========================================
-# 2. CSS CUSTOM CON TRỎ NHẤP NHÁY VIỀN DÀY
+# 2. CSS CON TRỎ NHẤP NHÁY VIỀN DÀY (WORD STYLE)
 # ==========================================
 st.markdown("""
 <style>
@@ -40,9 +40,9 @@ st.markdown("""
 }
 .word-cursor {
     display: inline-block;
-    width: 4px;                   /* Viền dày lên giống con trỏ Word */
+    width: 4px;                   /* Viền dày giống con trỏ Word */
     height: 1.2em;
-    background-color: #1a73e8;    /* Màu xanh nổi bật */
+    background-color: #1a73e8;    /* Màu xanh lá/xanh dương nổi bật */
     margin-left: 2px;
     vertical-align: text-bottom;
     animation: blink-cursor 0.7s infinite;
@@ -81,7 +81,7 @@ def decode_key(encoded_key: str) -> str:
         return encoded_key
 
 # ==========================================
-# 4. CHUẨN HÓA DỮ LIỆU (SCHEMA MÃ HÓA)
+# 4. CHUẨN HÓA DỮ LIỆU (SCHEMA V2)
 # ==========================================
 def normalize_user_schema(raw_data: dict) -> dict:
     if not isinstance(raw_data, dict):
@@ -202,7 +202,7 @@ class DatabaseEngine:
         content_b64 = base64.b64encode(json_bytes).decode('utf-8')
 
         payload = {
-            "message": f"Update DB (Encrypted Keys) - {time.strftime('%H:%M:%S %d/%m/%Y')}",
+            "message": f"Update DB (Encrypted Keys) 2026 - {time.strftime('%H:%M:%S %d/%m/%Y')}",
             "content": content_b64
         }
         if latest_sha:
@@ -272,7 +272,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 8.1 ĐĂNG NHẬP / NẠP DỮ LIỆU
+    # 8.1 ĐĂNG NHẬP
     if not st.session_state.user:
         st.subheader("👤 Đăng nhập")
         username_input = st.text_input("Tên tài khoản (viết liền, không dấu):")
@@ -310,7 +310,7 @@ with st.sidebar:
 
     # 8.2 CẤU HÌNH API KEY VÀ MODEL
     if st.session_state.user and st.session_state.user_data:
-        st.subheader("🔑 Cấu hình Gemini Free")
+        st.subheader("🔑 Cấu hình Gemini")
 
         cur_model = st.session_state.user_data.get("selected_model", AVAILABLE_FREE_MODELS[0])
         idx = AVAILABLE_FREE_MODELS.index(cur_model) if cur_model in AVAILABLE_FREE_MODELS else 0
@@ -321,7 +321,7 @@ with st.sidebar:
             DatabaseEngine.save_user_data(st.session_state.user, st.session_state.user_data)
 
         enc_keys_list = st.session_state.user_data.get("gemini_keys", [])
-        st.markdown(f"**API Keys đã lưu trong DB ({len(enc_keys_list)}):**")
+        st.markdown(f"**API Keys đã lưu ({len(enc_keys_list)}):**")
 
         keys_to_delete = None
         for i, enc_k in enumerate(enc_keys_list):
@@ -390,7 +390,7 @@ with st.sidebar:
                 st.rerun()
 
 # ==========================================
-# 9. KHU VỰC KHUNG CHAT CHÍNH (STREAMING + TYPING CURSOR)
+# 9. KHU VỰC KHUNG CHAT CHÍNH (STREAMING + WORD TYPING)
 # ==========================================
 st.title("💬 Nexus AI Chatbot")
 
@@ -424,11 +424,11 @@ else:
                     active_chat["title"] = prompt[:20] + "..." if len(prompt) > 20 else prompt
 
                 sel_model = st.session_state.user_data.get("selected_model", AVAILABLE_FREE_MODELS[0])
-                target_model = "gemini-2.5-flash" if sel_model == AVAILABLE_FREE_MODELS[0] else sel_model
+                target_model = "gemini-2.0-flash" if sel_model == AVAILABLE_FREE_MODELS[0] else sel_model
 
                 active_raw_key = decode_key(enc_keys[0])
 
-                # Endpoint Stream SSE của Gemini REST API
+                # API Stream Endpoint chuẩn Google REST
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:streamGenerateContent?alt=sse"
                 headers = {
                     "Content-Type": "application/json",
@@ -436,7 +436,7 @@ else:
                 }
 
                 with st.chat_message("assistant"):
-                    # Màn hình chờ: Hiện ngay con trỏ nhấp nháy viền dày trong lúc đợi AI phản hồi
+                    # Hiển thị ngay con trỏ nhấp nháy viền dày kiểu Word trong thời gian chờ AI
                     message_placeholder = st.empty()
                     message_placeholder.markdown(CURSOR_HTML, unsafe_allow_html=True)
 
@@ -463,15 +463,15 @@ else:
                                             parts = data['candidates'][0]['content']['parts']
                                             chunk = "".join([p.get('text', '') for p in parts])
 
-                                            # Hiệu ứng gõ từng ký tự mượt như người gõ
+                                            # Gõ từng ký tự mượt mà kèm con trỏ
                                             for char in chunk:
                                                 full_text += char
                                                 message_placeholder.markdown(full_text + CURSOR_HTML, unsafe_allow_html=True)
-                                                time.sleep(0.006)  # Tốc độ gõ chữ mượt mà
+                                                time.sleep(0.005)
                                         except Exception:
                                             pass
 
-                            # Sau khi hoàn tất: Gỡ con trỏ nhấp nháy và lưu văn bản chuẩn
+                            # Xóa con trỏ sau khi kết thúc phản hồi
                             message_placeholder.markdown(full_text)
                             active_chat["messages"].append({"role": "assistant", "content": full_text})
                             DatabaseEngine.save_user_data(st.session_state.user, st.session_state.user_data)
