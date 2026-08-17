@@ -6,7 +6,7 @@ import requests
 import streamlit as st
 
 # ==========================================
-# 1. CẤU HÌNH TRANG & MODEL GEMINI FREE TIER
+# 1. CẤU HÌNH TRANG & MODEL GEMINI CHUẨN
 # ==========================================
 st.set_page_config(
     page_title="Nexus AI Gateway",
@@ -15,10 +15,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Danh sách Model ID chuẩn chính thức của Google AI Studio (Dùng API Key)
 AVAILABLE_FREE_MODELS = [
     "🔄 Tự động chọn Model Free tốt nhất",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
+    "gemini-2.0-flash",
     "gemini-1.5-flash",
     "gemini-1.5-pro"
 ]
@@ -28,38 +30,60 @@ GITHUB_FILE_PATH = "data/users_encrypted.json"
 CURRENT_SCHEMA_VERSION = 2
 
 # ==========================================
-# 2. BỘ MÃ HÓA / GIẢI MÃ API KEY (MẮT THẦN GITHUB KHÔNG PHÁT HIỆN)
+# 2. CSS CUSTOM CON TRỎ NHẤP NHÁY VIỀN DÀY
+# ==========================================
+st.markdown("""
+<style>
+@keyframes blink-cursor {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+.word-cursor {
+    display: inline-block;
+    width: 4px;                   /* Viền dày lên giống con trỏ Word */
+    height: 1.2em;
+    background-color: #1a73e8;    /* Màu xanh nổi bật */
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: blink-cursor 0.7s infinite;
+    border-radius: 1px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+CURSOR_HTML = '<span class="word-cursor"></span>'
+
+# ==========================================
+# 3. BỘ MÃ HÓA / GIẢI MÃ API KEY
 # ==========================================
 def encode_key(raw_key: str) -> str:
-    """Mã hóa API Key để vượt qua kiểm duyệt GitHub Secret Scanning"""
+    """Mã hóa API Key vượt qua kiểm duyệt GitHub Secret Scanning"""
     if not raw_key:
         return ""
     if raw_key.startswith("ENC_"):
-        return raw_key  # Đã mã hóa trước đó
-    # Đảo ngược chuỗi + Mã hóa Base64 + Gắn tiền tố ENC_
+        return raw_key
     reversed_key = raw_key[::-1]
     b64_str = base64.b64encode(reversed_key.encode('utf-8')).decode('utf-8')
     return f"ENC_{b64_str}"
 
 def decode_key(encoded_key: str) -> str:
-    """Giải mã API Key ra dạng nguyên bản AIzaSy... để gọi Gemini API"""
+    """Giải mã API Key ra dạng nguyên bản AIzaSy..."""
     if not encoded_key:
         return ""
     if not encoded_key.startswith("ENC_"):
-        return encoded_key  # Key chưa mã hóa (fallback)
+        return encoded_key
     try:
         pure_b64 = encoded_key.replace("ENC_", "", 1)
         decoded_bytes = base64.b64decode(pure_b64.encode('utf-8'))
         reversed_key = decoded_bytes.decode('utf-8')
-        return reversed_key[::-1]  # Đảo ngược lại về ban đầu
+        return reversed_key[::-1]
     except Exception:
         return encoded_key
 
 # ==========================================
-# 3. CHUẨN HÓA DỮ LIỆU (SCHEMA MÃ HÓA)
+# 4. CHUẨN HÓA DỮ LIỆU (SCHEMA MÃ HÓA)
 # ==========================================
 def normalize_user_schema(raw_data: dict) -> dict:
-    """Tự động ép kiểu và mã hóa toàn bộ API Keys trong danh sách"""
     if not isinstance(raw_data, dict):
         raw_data = {}
 
@@ -67,7 +91,6 @@ def normalize_user_schema(raw_data: dict) -> dict:
     if isinstance(raw_keys, str):
         raw_keys = [raw_keys] if raw_keys.strip() else []
 
-    # Đảm bảo 100% key lưu trữ đều được mã hóa (bắt đầu bằng ENC_)
     encrypted_keys = []
     for k in raw_keys:
         k_str = str(k).strip()
@@ -99,7 +122,7 @@ def normalize_user_schema(raw_data: dict) -> dict:
     }
 
 # ==========================================
-# 4. TRÍCH XUẤT SECRETS CHUẨN STREAMLIT
+# 5. TRÍCH XUẤT SECRETS CHUẨN STREAMLIT
 # ==========================================
 def fetch_streamlit_secret(key_name: str) -> str:
     try:
@@ -113,7 +136,7 @@ GITHUB_TOKEN = fetch_streamlit_secret("GITHUB_TOKEN")
 GITHUB_REPO = fetch_streamlit_secret("GITHUB_REPO")
 
 # ==========================================
-# 5. ENGINE XỬ LÝ DATABASE (LOCAL & GITHUB)
+# 6. ENGINE XỬ LÝ DATABASE (LOCAL & GITHUB)
 # ==========================================
 class DatabaseEngine:
     @staticmethod
@@ -211,12 +234,10 @@ class DatabaseEngine:
     def save_user_data(cls, username: str, user_info: dict) -> tuple[bool, str]:
         clean_user_info = normalize_user_schema(user_info)
 
-        # 1. Lưu Local
         local_db = cls.load_local_db()
         local_db[username] = clean_user_info
         cls.save_local_db(local_db)
 
-        # 2. Đồng bộ GitHub
         if GITHUB_TOKEN and GITHUB_REPO:
             gh_db, _, err = cls.fetch_github_db()
             if err and "404" not in err:
@@ -229,7 +250,7 @@ class DatabaseEngine:
         return True, "Lưu thành công!"
 
 # ==========================================
-# 6. KHỞI TẠO SESSION STATE
+# 7. KHỞI TẠO SESSION STATE
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -239,7 +260,7 @@ if "current_chat_id" not in st.session_state:
     st.session_state.current_chat_id = None
 
 # ==========================================
-# 7. GIAO DIỆN THANH SIDEBAR
+# 8. GIAO DIỆN THANH SIDEBAR
 # ==========================================
 with st.sidebar:
     st.title("🤖 Nexus AI Gateway")
@@ -251,14 +272,14 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 7.1 ĐĂNG NHẬP / NẠP DỮ LIỆU
+    # 8.1 ĐĂNG NHẬP / NẠP DỮ LIỆU
     if not st.session_state.user:
         st.subheader("👤 Đăng nhập")
         username_input = st.text_input("Tên tài khoản (viết liền, không dấu):")
         if st.button("🔑 Đăng nhập & Đồng bộ", use_container_width=True):
             clean_u = username_input.strip().lower()
             if clean_u:
-                with st.spinner("Đang nạp và chuẩn hóa dữ liệu..."):
+                with st.spinner("Đang nạp dữ liệu..."):
                     u_data = DatabaseEngine.get_user_data(clean_u)
                     st.session_state.user = clean_u
                     st.session_state.user_data = u_data
@@ -287,7 +308,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 7.2 CẤU HÌNH API KEY VÀ MODEL
+    # 8.2 CẤU HÌNH API KEY VÀ MODEL
     if st.session_state.user and st.session_state.user_data:
         st.subheader("🔑 Cấu hình Gemini Free")
 
@@ -299,13 +320,12 @@ with st.sidebar:
             st.session_state.user_data["selected_model"] = selected_model
             DatabaseEngine.save_user_data(st.session_state.user, st.session_state.user_data)
 
-        # Hiển thị danh sách Key (được giải mã để xem trên UI)
         enc_keys_list = st.session_state.user_data.get("gemini_keys", [])
         st.markdown(f"**API Keys đã lưu trong DB ({len(enc_keys_list)}):**")
 
         keys_to_delete = None
         for i, enc_k in enumerate(enc_keys_list):
-            raw_k = decode_key(enc_k)  # Giải mã để hiển thị
+            raw_k = decode_key(enc_k)
             col_txt, col_del = st.columns([0.8, 0.2])
             col_txt.code(f"{raw_k[:6]}...{raw_k[-4:]}" if len(raw_k) > 10 else raw_k)
             if col_del.button("❌", key=f"del_k_{i}"):
@@ -320,26 +340,23 @@ with st.sidebar:
             else:
                 st.error(f"Lỗi lưu: {msg}")
 
-        # Thêm Key Mới
         new_key_val = st.text_input("Nhập Gemini API Key mới:", type="password", key="input_new_key")
         if st.button("💾 LƯU KEY VÀO DATABASE", type="primary", use_container_width=True):
             clean_k = new_key_val.strip()
             if not clean_k:
                 st.warning("Vui lòng nhập API Key!")
             else:
-                # Kiểm tra trùng lặp sau khi giải mã
                 existing_raw_keys = [decode_key(k) for k in enc_keys_list]
                 if clean_k in existing_raw_keys:
                     st.warning("API Key này đã tồn tại trong Database!")
                 else:
-                    with st.spinner("Đang mã hóa & lưu lên GitHub..."):
-                        # Mã hóa trước khi lưu
+                    with st.spinner("Đang mã hóa & lưu..."):
                         enc_new_key = encode_key(clean_k)
                         st.session_state.user_data["gemini_keys"].append(enc_new_key)
 
                         ok, msg = DatabaseEngine.save_user_data(st.session_state.user, st.session_state.user_data)
                         if ok:
-                            st.success("🎉 ĐÃ MÃ HÓA VÀ LƯU THÀNH CÔNG VÀO DATABASE!")
+                            st.success("🎉 ĐÃ LƯU THÀNH CÔNG VÀO DATABASE!")
                             time.sleep(0.5)
                             st.rerun()
                         else:
@@ -347,7 +364,7 @@ with st.sidebar:
 
         st.markdown("---")
 
-        # 7.3 QUẢN LÝ CHAT
+        # 8.3 QUẢN LÝ CHAT
         st.subheader("💬 Danh sách Chat")
         if st.button("➕ Tạo hội thoại mới", use_container_width=True):
             new_id = str(int(time.time()))
@@ -373,7 +390,7 @@ with st.sidebar:
                 st.rerun()
 
 # ==========================================
-# 8. KHU VỰC KHUNG CHAT CHÍNH
+# 9. KHU VỰC KHUNG CHAT CHÍNH (STREAMING + TYPING CURSOR)
 # ==========================================
 st.title("💬 Nexus AI Chatbot")
 
@@ -409,35 +426,58 @@ else:
                 sel_model = st.session_state.user_data.get("selected_model", AVAILABLE_FREE_MODELS[0])
                 target_model = "gemini-2.5-flash" if sel_model == AVAILABLE_FREE_MODELS[0] else sel_model
 
-                # GIẢI MÃ KEY KHI GỌI GEMINI API
                 active_raw_key = decode_key(enc_keys[0])
 
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent"
+                # Endpoint Stream SSE của Gemini REST API
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:streamGenerateContent?alt=sse"
                 headers = {
                     "Content-Type": "application/json",
                     "x-goog-api-key": active_raw_key
                 }
 
                 with st.chat_message("assistant"):
-                    with st.spinner(f"Đang xử lý với `{target_model}`..."):
-                        try:
-                            payload_contents = []
-                            for m in active_chat["messages"]:
-                                role_name = "model" if m["role"] == "assistant" else "user"
-                                payload_contents.append({
-                                    "role": role_name,
-                                    "parts": [{"text": m["content"]}]
-                                })
+                    # Màn hình chờ: Hiện ngay con trỏ nhấp nháy viền dày trong lúc đợi AI phản hồi
+                    message_placeholder = st.empty()
+                    message_placeholder.markdown(CURSOR_HTML, unsafe_allow_html=True)
 
-                            res = requests.post(url, headers=headers, json={"contents": payload_contents}, timeout=30)
+                    try:
+                        payload_contents = []
+                        for m in active_chat["messages"]:
+                            role_name = "model" if m["role"] == "assistant" else "user"
+                            payload_contents.append({
+                                "role": role_name,
+                                "parts": [{"text": m["content"]}]
+                            })
 
-                            if res.status_code == 200:
-                                ans_text = res.json()['candidates'][0]['content']['parts'][0]['text']
-                                st.write(ans_text)
+                        res = requests.post(url, headers=headers, json={"contents": payload_contents}, stream=True, timeout=30)
 
-                                active_chat["messages"].append({"role": "assistant", "content": ans_text})
-                                DatabaseEngine.save_user_data(st.session_state.user, st.session_state.user_data)
-                            else:
-                                st.error(f"⚠️ Lỗi Gemini API (HTTP {res.status_code}): {res.text}")
-                        except Exception as e:
-                            st.error(f"Lỗi kết nối: {str(e)}")
+                        if res.status_code == 200:
+                            full_text = ""
+                            for line in res.iter_lines():
+                                if line:
+                                    decoded_line = line.decode('utf-8')
+                                    if decoded_line.startswith("data: "):
+                                        try:
+                                            json_str = decoded_line[6:]
+                                            data = json.loads(json_str)
+                                            parts = data['candidates'][0]['content']['parts']
+                                            chunk = "".join([p.get('text', '') for p in parts])
+
+                                            # Hiệu ứng gõ từng ký tự mượt như người gõ
+                                            for char in chunk:
+                                                full_text += char
+                                                message_placeholder.markdown(full_text + CURSOR_HTML, unsafe_allow_html=True)
+                                                time.sleep(0.006)  # Tốc độ gõ chữ mượt mà
+                                        except Exception:
+                                            pass
+
+                            # Sau khi hoàn tất: Gỡ con trỏ nhấp nháy và lưu văn bản chuẩn
+                            message_placeholder.markdown(full_text)
+                            active_chat["messages"].append({"role": "assistant", "content": full_text})
+                            DatabaseEngine.save_user_data(st.session_state.user, st.session_state.user_data)
+                        else:
+                            message_placeholder.empty()
+                            st.error(f"⚠️ Lỗi Gemini API (HTTP {res.status_code}): {res.text}")
+                    except Exception as e:
+                        message_placeholder.empty()
+                        st.error(f"Lỗi kết nối: {str(e)}")
