@@ -4,7 +4,14 @@
     "groq_key": "",
     "gemini_key": "",
     "memory": "",
-    "chats": [],
+    "chats": [
+      {
+        "id": "1786934785124",
+        "title": "Cuộc trò chuyện mới",
+        "title_set": false,
+        "messages": []
+      }
+    ],
     "gemini_keys": [],
     "selected_model": "gemini-3.5-flash"
   }
