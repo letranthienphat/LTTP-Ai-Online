@@ -9,7 +9,7 @@ import streamlit as st
 import google.generativeai as genai
 from datetime import datetime
 from cryptography.fernet import Fernet
-from cookies_controller import CookieController
+from streamlit_cookies_controller import CookieController
 
 # ==========================================
 # 1. CẤU HÌNH TRANG & SECRETS
@@ -32,7 +32,7 @@ cipher = Fernet(FERNET_KEY)
 # Quản lý Cookie thiết bị
 cookies = CookieController()
 
-# Khoản thời gian sống của Cookie thiết bị (30 ngày)
+# Khoảng thời gian sống của Cookie thiết bị (30 ngày)
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 
 # Lấy hoặc tạo mới DEVICE ID cho thiết bị truy cập
@@ -403,7 +403,6 @@ for msg in st.session_state.messages:
 
 # Nhập tin nhắn mới
 if prompt := st.chat_input("Nhập nội dung tin nhắn..."):
-    # Render tin nhắn người dùng
     st.chat_message("user").write(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
