@@ -75,7 +75,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# CẤU HÌNH CƠ SỞ & CÁC MÔ HÌNH GEMINI MỚI
+# CẤU HÌNH CƠ SỞ & DANH SÁCH MÔ HÌNH
 # ==========================================
 def get_admin_secret(key, default=""):
     try:
@@ -92,28 +92,17 @@ MAX_GUEST_LIMIT = 100
 
 AUTO_MODEL_OPTION = "🔄 Tự động (Auto Switch)"
 
-# Danh sách đầy đủ các mô hình bao gồm thế hệ Gemini 3 & 3.5
 AVAILABLE_GEMINI_MODELS = [
     AUTO_MODEL_OPTION,
-    "gemini-3.5-flash",
-    "gemini-3.1-pro",
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
     "gemini-2.0-flash",
     "gemini-1.5-flash",
     "gemini-1.5-pro"
 ]
 
-# Thứ tự thử nghiệm ở chế độ Tự động (Ưu tiên mô hình mạnh & mới nhất xuống dần)
 AUTO_FALLBACK_ORDER = [
-    "gemini-3.5-flash",
-    "gemini-3.1-pro",
-    "gemini-3-flash",
-    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-flash"
+    "gemini-1.5-flash",
+    "gemini-1.5-pro"
 ]
 
 # ==========================================
@@ -245,17 +234,27 @@ class GlobalRAMDatabase:
             return True, "Đã lưu tạm vào RAM server."
 
 # ==========================================
-# MODULE AI ENGINE (XỬ LÝ DỮ LIỆU & CALL API)
+# MODULE AI ENGINE (LỌC THÔNG BÁO & TÓM TẮT)
 # ==========================================
 class AutoAIEngine:
     @staticmethod
-    def generate_response(prompt: str, system_instruction: str = "", gemini_keys: list = None, selected_model: str = AUTO_MODEL_OPTION) -> tuple[str, str]:
-        """
-        Trả về: (response_text, actual_model_used)
-        """
-        if not gemini_keys or not any(k.strip() for k in gemini_keys):
-            return "⚠️ **Chưa cấu hình Gemini API Key!** Vui lòng thêm API Key bên thanh Sidebar.", ""
+    def _is_system_error_msg(content: str) -> bool:
+        """Kiểm tra xem tin nhắn có phải là thông báo lỗi do hệ thống sinh ra hay không"""
+        system_prefixes = [
+            "⚠️ **Không thể kết nối Gemini API!**",
+            "⚠️ **Chưa cấu hình Gemini API Key!**",
+            "⚠️ Bạn đã dùng hết"
+        ]
+        return any(content.startswith(prefix) for prefix in system_prefixes)
 
+    @staticmethod
+    def _filter_valid_messages(messages: list) -> list:
+        """Lọc bỏ toàn bộ các tin nhắn thông báo lỗi của phần mềm"""
+        return [m for m in messages if not AutoAIEngine._is_system_error_msg(m.get("content", ""))]
+
+    @staticmethod
+    def _call_gemini_api(payload_contents: list, system_instruction: str, gemini_keys: list, selected_model: str) -> tuple[str, str]:
+        """Hàm phụ trách việc gửi HTTP Request tới Gemini API"""
         models_to_try = AUTO_FALLBACK_ORDER if selected_model == AUTO_MODEL_OPTION else [selected_model]
         last_error = ""
 
@@ -268,14 +267,14 @@ class AutoAIEngine:
                 try:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={clean_key}"
                     
-                    payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+                    payload = {"contents": payload_contents}
                     if system_instruction and system_instruction.strip():
                         payload["system_instruction"] = {
                             "parts": [{"text": system_instruction.strip()}]
                         }
 
                     headers = {'Content-Type': 'application/json'}
-                    res = requests.post(url, json=payload, headers=headers, timeout=25)
+                    res = requests.post(url, json=payload, headers=headers, timeout=60)
                     
                     if res.status_code == 200:
                         data = res.json()
@@ -292,13 +291,80 @@ class AutoAIEngine:
                 except Exception as e:
                     last_error = f"Lỗi kết nối ({model}): {str(e)}"
 
-        return f"⚠️ **Không thể kết nối Gemini API!**\n\n**Chi tiết phản hồi từ Google:**\n`{last_error}`", ""
+        return f"⚠️ **Không thể kết nối Gemini API!**\n\n`{last_error}`", ""
+
+    @staticmethod
+    def summarize_conversation(messages: list, gemini_keys: list, selected_model: str) -> str:
+        """Hàm yêu cầu AI tóm tắt lại các tin nhắn cũ"""
+        valid_messages = AutoAIEngine._filter_valid_messages(messages)
+        if not valid_messages:
+            return ""
+
+        chat_text = "\n".join([f"{m['role']}: {m['content']}" for m in valid_messages])
+        summary_prompt = (
+            "Hãy tóm tắt ngắn gọn cuộc hội thoại sau thành một đoạn văn vắn tắt (khoảng 3-5 câu), "
+            "nêu rõ các ý chính, thông tin hoặc yêu cầu quan trọng của người dùng để làm ngữ cảnh tiếp theo:\n\n"
+            f"{chat_text}"
+        )
+        payload = [{"role": "user", "parts": [{"text": summary_prompt}]}]
+        summary, _ = AutoAIEngine._call_gemini_api(payload, "", gemini_keys, selected_model)
+        return summary if "Không thể kết nối" not in summary else ""
+
+    @staticmethod
+    def generate_response(active_chat: dict, system_instruction: str = "", gemini_keys: list = None, selected_model: str = AUTO_MODEL_OPTION) -> tuple[str, str]:
+        if not gemini_keys or not any(k.strip() for k in gemini_keys):
+            return "⚠️ **Chưa cấu hình Gemini API Key!** Vui lòng thêm API Key bên thanh Sidebar.", ""
+
+        # Lọc bỏ các thông báo lỗi của hệ thống trước khi đưa vào ngữ cảnh
+        all_messages = active_chat.get("messages", [])
+        valid_messages = AutoAIEngine._filter_valid_messages(all_messages)
+
+        # --- CƠ CHẾ QUẢN LÝ TOKEN: TÓM TẮT & LẤY 6 TIN NHẮN GẦN NHẤT ---
+        if len(valid_messages) >= 10:
+            # Lấy toàn bộ tin nhắn cũ ngoại trừ 6 tin nhắn gần nhất
+            older_messages = valid_messages[:-6]
+            recent_messages = valid_messages[-6:]
+            
+            # Tóm tắt lại lịch sử cũ
+            summary = AutoAIEngine.summarize_conversation(older_messages, gemini_keys, selected_model)
+            
+            formatted_contents = []
+            if summary:
+                formatted_contents.append({
+                    "role": "user",
+                    "parts": [{"text": f"[TÓM TẮT LỊCH SỬ TRÒ CHUYỆN TRƯỚC ĐÓ]:\n{summary}"}]
+                })
+                formatted_contents.append({
+                    "role": "model",
+                    "parts": [{"text": "Tôi đã nắm vững toàn bộ ngữ cảnh trước đó. Bạn cần hỗ trợ gì tiếp theo?"}]
+                })
+
+            # Đưa 6 tin nhắn gần nhất vào chuỗi hội thoại
+            for msg in recent_messages:
+                role = "model" if msg["role"] == "assistant" else "user"
+                formatted_contents.append({
+                    "role": role,
+                    "parts": [{"text": msg["content"]}]
+                })
+        else:
+            # Nếu dưới 10 tin nhắn hợp lệ: Gửi toàn bộ
+            formatted_contents = []
+            for msg in valid_messages:
+                role = "model" if msg["role"] == "assistant" else "user"
+                formatted_contents.append({
+                    "role": role,
+                    "parts": [{"text": msg["content"]}]
+                })
+
+        return AutoAIEngine._call_gemini_api(formatted_contents, system_instruction, gemini_keys, selected_model)
 
     @staticmethod
     def generate_title(chat_messages: list, gemini_keys: list = None, selected_model: str = AUTO_MODEL_OPTION) -> str:
-        conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in chat_messages if m['role'] != 'system'])
+        valid_messages = AutoAIEngine._filter_valid_messages(chat_messages)
+        conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in valid_messages if m['role'] != 'system'])
         prompt = f"Dựa trên nội dung cuộc hội thoại sau, hãy đặt một tiêu đề ngắn gọn (từ 2 đến 5 từ). Chỉ trả về duy nhất chuỗi tiêu đề:\n\n{conversation_text}"
-        response_text, _ = AutoAIEngine.generate_response(prompt, "", gemini_keys, selected_model)
+        payload = [{"role": "user", "parts": [{"text": prompt}]}]
+        response_text, _ = AutoAIEngine._call_gemini_api(payload, "", gemini_keys, selected_model)
         clean_title = response_text.strip().replace('"', '').replace("'", "").replace("\n", "")[:40]
         return clean_title if clean_title and "Không thể kết nối" not in clean_title and "Chưa cấu hình" not in clean_title else "Cuộc trò chuyện mới"
 
@@ -467,7 +533,7 @@ with st.sidebar:
                 GlobalRAMDatabase.sync_ram_to_github()
 
             if selected_model == AUTO_MODEL_OPTION:
-                st.caption("⚡ **Tự động:** Thử từ `3.5-flash` ➔ `3.1-pro` ➔ `3-flash` ➔ `2.5-flash`...")
+                st.caption("⚡ **Tự động:** Thử `2.0-flash` ➔ `1.5-flash` ➔ `1.5-pro`...")
 
             st.markdown("---")
 
@@ -590,10 +656,11 @@ if active_chat:
             system_mem = ""
 
         with st.chat_message("assistant"):
-            spinner_msg = "Đang xử lý với Tự động chuyển đổi mô hình..." if active_model == AUTO_MODEL_OPTION else f"Đang xử lý với {active_model}..."
+            valid_count = len(AutoAIEngine._filter_valid_messages(active_chat["messages"]))
+            spinner_msg = "Đang tối ưu ngữ cảnh & phản hồi..." if valid_count >= 10 else "Đang xử lý..."
             with st.spinner(spinner_msg):
                 response_text, used_model = AutoAIEngine.generate_response(
-                    prompt=prompt,
+                    active_chat=active_chat,
                     system_instruction=system_mem,
                     gemini_keys=active_keys,
                     selected_model=active_model
