@@ -507,7 +507,7 @@ with st.sidebar:
 # ==========================================
 # 9. GIAO DIỆN CHAT CHÍNH (MAIN UI)
 # ==========================================
-st.markdown("<h1 class='main-header'>⚡ Nexus AI Workspace</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='main-header'>⚡ Nexus AI Online Edition</h1>", unsafe_allow_html=True)
 
 if not active_api_keys:
     st.warning("⚠️ Vui lòng thêm ít nhất một **Gemini API Key** ở thanh bên trái để bắt đầu trò chuyện!")
