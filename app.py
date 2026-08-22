@@ -16,7 +16,7 @@ from streamlit_cookies_controller import CookieController
 # 1. CẤU HÌNH TRANG & SECRETS
 # ==========================================
 st.set_page_config(
-    page_title="Nexus AI Online",
+    page_title="LTTP AI Online",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -26,17 +26,17 @@ DB_FILE = "users_db.json"
 GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
 GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 
-MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "NexusAI_Master_Secret_Key_2026")
+MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "LTTPAI_Master_Secret_Key_2026")
 FERNET_KEY = base64.urlsafe_b64encode(hashlib.sha256(MASTER_SECRET.encode()).digest())
 cipher = Fernet(FERNET_KEY)
 
 cookies = CookieController()
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 
-device_id = cookies.get("nexus_device_id")
+device_id = cookies.get("LTTP_device_id")
 if not device_id:
     device_id = str(uuid.uuid4())
-    cookies.set("nexus_device_id", device_id, max_age=COOKIE_MAX_AGE)
+    cookies.set("LTTP_device_id", device_id, max_age=COOKIE_MAX_AGE)
 
 # ==========================================
 # 2. CUSTOM CSS - HIỆU ỨNG ĐỒ HỌA & UI
@@ -275,7 +275,7 @@ if not st.session_state.user and device_id and db_data:
 
 # UI Đăng nhập / Đăng ký
 def render_auth_ui():
-    st.markdown("<h1 class='main-header' style='text-align: center;'>⚡ Nexus AI Online</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='main-header' style='text-align: center;'>⚡ LTTP AI Online</h1>", unsafe_allow_html=True)
     st.caption("<p style='text-align: center;'>Hệ thống Trí tuệ Nhân tạo Đa Năng Đồng bộ GitHub</p>", unsafe_allow_html=True)
     st.divider()
     
@@ -507,7 +507,7 @@ with st.sidebar:
 # ==========================================
 # 9. GIAO DIỆN CHAT CHÍNH (MAIN UI)
 # ==========================================
-st.markdown("<h1 class='main-header'>⚡ Nexus AI Online Edition</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='main-header'>⚡ LTTP AI Online Edition</h1>", unsafe_allow_html=True)
 
 if not active_api_keys:
     st.warning("⚠️ Vui lòng thêm ít nhất một **Gemini API Key** ở thanh bên trái để bắt đầu trò chuyện!")
@@ -535,7 +535,7 @@ for msg in st.session_state.messages:
 # ==========================================
 # 10. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
 # ==========================================
-if user_prompt := st.chat_input("Hỏi Nexus AI bất cứ điều gì..."):
+if user_prompt := st.chat_input("Hỏi LTTP AI bất cứ điều gì..."):
     # 1. Thêm tin nhắn người dùng vào UI
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
@@ -580,7 +580,7 @@ if user_prompt := st.chat_input("Hỏi Nexus AI bất cứ điều gì..."):
         loading_placeholder.markdown("""
         <div class="ai-loading-box">
             <div class="spinner"></div>
-            <div class="ai-loading-text">Nexus AI đang suy nghĩ và tổng hợp câu trả lời...</div>
+            <div class="ai-loading-text">LTTP AI đang suy nghĩ và tổng hợp câu trả lời...</div>
         </div>
         """, unsafe_allow_html=True)
 
