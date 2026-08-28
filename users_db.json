@@ -5,7 +5,24 @@
       "gAAAAABqiZwSW30HBYiw4y58hShqqar1O57EgKE03yw5V4vJJD1pPuIJeEZGvMFi_KGqvRZmUG2jVIhPNQAQSpHoSFyktKst4RoS3c-8I58Rf16rcpes-I4omisAgfYUcwwm_Wj2fb5SjmDZRXBTn6MnG3WUxAXXQA=="
     ],
     "custom_instructions": "",
-    "chats": {},
+    "chats": {
+      "aa98852a-ffc6-4814-a333-1c74a072b54b": {
+        "title": "Hạn mức API Gemini",
+        "messages": [
+          {
+            "role": "user",
+            "content": "lượt dùng miễn phí cho các AI có trong gói API free của gemini là bao nhiêu?"
+          },
+          {
+            "role": "assistant",
+            "content": "Gói miễn phí (Free Tier) của Gemini API được cung cấp thông qua **Google AI Studio** rất hào phóng. Dưới đây là giới hạn lượt dùng chi tiết cho các mô hình AI phổ biến nhất hiện nay (cập nhật mới nhất):\n\n### 1. Gemini 1.5 Flash (Mô hình nhanh, tối ưu chi phí và hiệu năng)\nĐây là mô hình phù hợp cho hầu hết các tác vụ thông thường, xử lý đa phương tiện (hình ảnh, video, âm thanh) tốc độ cao.\n*   **Số yêu cầu mỗi phút (RPM):** 15 yêu cầu (Requests Per Minute)\n*   **Số yêu cầu mỗi ngày (RPD):** 1.500 yêu cầu (Requests Per Day)\n*   **Số token mỗi phút (TPM):** 1.000.000 token (Tokens Per Minute)\n\n### 2. Gemini 1.5 Pro (Mô hình mạnh mẽ nhất, xử lý tác vụ phức tạp)\nMô hình này có khả năng suy luận cực cao và hỗ trợ ngữ cảnh siêu lớn (lên đến 2 triệu token), nhưng giới hạn miễn phí sẽ thấp hơn.\n*   **Số yêu cầu mỗi phút (RPM):** 2 yêu cầu\n*   **Số yêu cầu mỗi ngày (RPD):** 50 yêu cầu\n*   **Số token mỗi phút (TPM):** 32.000 token\n\n### 3. Text Embedding (Mô hình nhúng văn bản)\nDùng để vector hóa văn bản (phục vụ cho tìm kiếm ngữ nghĩa, RAG...).\n*   **Số yêu cầu mỗi phút (RPM):** 1.500 yêu cầu\n*   **Số yêu cầu mỗi ngày (RPD):** Không giới hạn (hoặc giới hạn rất cao tùy thuộc vào hệ thống)\n\n---\n\n### Các lưu ý quan trọng khi dùng gói Free:\n\n1.  **Quyền riêng tư dữ liệu (Quan trọng nhất):**\n    *   Ở **gói miễn phí**, Google có quyền sử dụng dữ liệu đầu vào (prompt) và phản hồi (response) của bạn để huấn luyện và cải thiện các mô hình AI của họ. Dữ liệu này có thể được xem xét bởi các kiểm duyệt viên là con người.\n    *   *Khuyên dùng:* Không gửi thông tin cá nhân nhạy cảm, mật khẩu hoặc dữ liệu nội bộ doanh nghiệp lên gói Free.\n2.  **Khi dùng hết giới hạn (Rate Limit):**\n    *   Nếu bạn vượt quá số RPM hoặc RPD, API sẽ trả về lỗi `429 Too Many Requests`. Bạn chỉ cần đợi đến phút tiếp theo hoặc ngày tiếp theo để tiếp tục sử dụng.\n    *   Bạn sẽ **không bị tự động trừ tiền** trừ khi bạn chủ động nâng cấp lên gói trả phí (Pay-as-you-go) và liên kết thẻ tín dụng.\n3.  **Cách nâng cấp:**\n    *   Nếu muốn nâng cấp để tăng giới hạn và bảo mật dữ liệu (Google cam kết không dùng dữ liệu gói trả phí để huấn luyện AI), bạn có thể chuyển sang gói **Pay-as-you-go** trong Google AI Studio. Gói này chỉ tính tiền trên lượng token thực tế bạn sử dụng."
+          }
+        ],
+        "summary": "",
+        "created_at": "2026-08-28T09:17:40.975057",
+        "updated_at": "2026-08-28T09:17:55.416877"
+      }
+    },
     "remembered_devices": [
       "871c408a-062c-46c7-ae9b-0b8410aafd06",
       "834f7f4e-019e-4d13-a032-32f235b425f0"
