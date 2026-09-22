@@ -30,6 +30,11 @@ MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "LTTPAI_Master_Secret_Key_20
 FERNET_KEY = base64.urlsafe_b64encode(hashlib.sha256(MASTER_SECRET.encode()).digest())
 cipher = Fernet(FERNET_KEY)
 
+# Lấy 2 API Key từ Secrets
+API_KEY_1 = st.secrets.get("GEMINI_API_KEY_1", "").strip()
+API_KEY_2 = st.secrets.get("GEMINI_API_KEY_2", "").strip()
+SECRET_API_KEYS = [k for k in [API_KEY_1, API_KEY_2] if k]
+
 cookies = CookieController()
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 
@@ -37,6 +42,9 @@ device_id = cookies.get("LTTP_device_id")
 if not device_id:
     device_id = str(uuid.uuid4())
     cookies.set("LTTP_device_id", device_id, max_age=COOKIE_MAX_AGE)
+
+# Model mặc định
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 # ==========================================
 # 2. CUSTOM CSS - HIỆU ỨNG ĐỒ HỌA & UI
@@ -113,9 +121,25 @@ st.markdown("""
         margin-bottom: 12px;
     }
     
-    /* Tối ưu hiển thị nút trong sidebar */
     .stButton button {
         width: 100%;
+    }
+    
+    .status-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-left: 6px;
+    }
+    .badge-ready {
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+    }
+    .badge-missing {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -143,12 +167,12 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 # ==========================================
-# 4. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API (TỐI ƯU)
+# 4. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
 # ==========================================
 class GitHubStorage:
     _cache = None
     _cache_time = 0
-    CACHE_DURATION = 5  # Cache 5 giây để tránh gọi API quá nhiều
+    CACHE_DURATION = 5
     
     @staticmethod
     def get_api_headers():
@@ -159,7 +183,8 @@ class GitHubStorage:
     
     @staticmethod
     def _is_cache_valid():
-        return GitHubStorage._cache is not None and (time.time() - GitHubStorage._cache_time) < GitHubStorage.CACHE_DURATION
+        return (GitHubStorage._cache is not None and 
+                (time.time() - GitHubStorage._cache_time) < GitHubStorage.CACHE_DURATION)
 
     @staticmethod
     def load_db(force_refresh=False) -> dict:
@@ -167,7 +192,7 @@ class GitHubStorage:
             return GitHubStorage._cache
             
         if not GITHUB_TOKEN or not GITHUB_REPO:
-            st.error("⚠️ Thiếu GITHUB_TOKEN hoặc GITHUB_REPO trong Streamlit Secrets!")
+            st.error("⚠️ Missing GITHUB_TOKEN or GITHUB_REPO in Secrets!")
             return {}
 
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
@@ -190,24 +215,23 @@ class GitHubStorage:
                 GitHubStorage._cache_time = time.time()
                 return {}
             else:
-                st.error(f"Lỗi đọc GitHub (HTTP {res.status_code})")
+                st.error(f"GitHub read error (HTTP {res.status_code})")
                 return GitHubStorage._cache if GitHubStorage._cache is not None else {}
         except requests.exceptions.Timeout:
-            st.warning("⚠️ Kết nối GitHub bị timeout, sử dụng dữ liệu cache...")
+            st.warning("⚠️ GitHub connection timeout, using cached data...")
             return GitHubStorage._cache if GitHubStorage._cache is not None else {}
         except Exception as e:
-            st.error(f"Lỗi kết nối GitHub API: {e}")
+            st.error(f"GitHub API error: {e}")
             return GitHubStorage._cache if GitHubStorage._cache is not None else {}
 
     @staticmethod
     def save_db(data: dict) -> tuple[bool, str]:
         if not GITHUB_TOKEN or not GITHUB_REPO:
-            return False, "Thiếu cấu hình GitHub Token/Repo trong Secrets."
+            return False, "Missing GitHub Token/Repo configuration."
 
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
         headers = GitHubStorage.get_api_headers()
 
-        # Lấy SHA hiện tại
         sha = None
         try:
             res_get = requests.get(url, headers=headers, timeout=5)
@@ -229,59 +253,71 @@ class GitHubStorage:
         try:
             res_put = requests.put(url, headers=headers, json=payload, timeout=10)
             if res_put.status_code in [200, 201]:
-                # Cập nhật cache sau khi lưu thành công
                 GitHubStorage._cache = data
                 GitHubStorage._cache_time = time.time()
-                return True, "Đã lưu thành công lên GitHub!"
+                return True, "Saved successfully!"
             else:
-                return False, f"Lỗi GitHub (HTTP {res_put.status_code})"
+                return False, f"GitHub error (HTTP {res_put.status_code})"
         except requests.exceptions.Timeout:
-            return False, "Lỗi timeout khi lưu lên GitHub"
+            return False, "Timeout saving to GitHub"
         except Exception as e:
-            return False, f"Lỗi lưu GitHub: {e}"
+            return False, f"Save error: {e}"
 
 # ==========================================
 # 5. HÀM XỬ LÝ AI (Đặt tên & Tóm tắt)
 # ==========================================
-def generate_chat_title(user_prompt: str, api_key: str, model_name: str) -> str:
-    """Tự động đặt tên ngắn gọn cho cuộc trò chuyện bằng AI"""
+def generate_chat_title(user_prompt: str, api_key: str, model_name: str, lang: str = "en") -> str:
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
-        prompt = (
-            "Hãy tạo 1 tiêu đề cực kỳ ngắn gọn (từ 2 đến 5 từ, không đặt trong dấu ngoặc kép, không dùng markdown) "
-            f"tóm tắt chủ đề của câu hỏi sau:\n\"{user_prompt}\""
-        )
+        if lang == "vi":
+            prompt = (
+                "Hãy tạo 1 tiêu đề cực kỳ ngắn gọn (từ 2 đến 5 từ, không đặt trong dấu ngoặc kép, không dùng markdown) "
+                f"tóm tắt chủ đề của câu hỏi sau:\n\"{user_prompt}\""
+            )
+        else:
+            prompt = (
+                "Generate an extremely short title (2-5 words, no quotes, no markdown) "
+                f"summarizing the topic of this question:\n\"{user_prompt}\""
+            )
         res = model.generate_content(prompt)
         title = res.text.strip().replace('"', '').replace("'", "")
         return title[:35] if title else user_prompt[:25]
     except Exception:
         return user_prompt[:25] + "..." if len(user_prompt) > 25 else user_prompt
 
-def generate_summary(older_messages: list, existing_summary: str, api_key: str, model_name: str) -> str:
-    """Tóm tắt lịch sử hội thoại cũ để tiết kiệm context window"""
+def generate_summary(older_messages: list, existing_summary: str, api_key: str, model_name: str, lang: str = "en") -> str:
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
         
         text_to_summarize = ""
         if existing_summary:
-            text_to_summarize += f"Bối cảnh tóm tắt trước đó:\n{existing_summary}\n\nCác tin nhắn mới phát sinh:\n"
+            prefix = "Bối cảnh tóm tắt trước đó" if lang == "vi" else "Previous summary context"
+            text_to_summarize += f"{prefix}:\n{existing_summary}\n\n"
         
-        # Giới hạn số lượng tin nhắn cũ để tóm tắt
         limited_messages = older_messages[-15:] if len(older_messages) > 15 else older_messages
         
         for m in limited_messages:
-            role_label = "Người dùng" if m["role"] == "user" else "AI"
-            # Cắt ngắn nội dung quá dài
+            if lang == "vi":
+                role_label = "Người dùng" if m["role"] == "user" else "AI"
+            else:
+                role_label = "User" if m["role"] == "user" else "AI"
             content = m['content'][:500] + "..." if len(m['content']) > 500 else m['content']
             text_to_summarize += f"- {role_label}: {content}\n"
-            
-        prompt = (
-            "Hãy tóm tắt ngắn gọn và đúc kết các ý chính, thông tin quan trọng của đoạn hội thoại sau "
-            "thành 1 đoạn văn (dưới 150 từ) để làm bối cảnh cho các câu hỏi tiếp theo:\n\n"
-            f"{text_to_summarize}"
-        )
+        
+        if lang == "vi":
+            prompt = (
+                "Hãy tóm tắt ngắn gọn và đúc kết các ý chính, thông tin quan trọng của đoạn hội thoại sau "
+                "thành 1 đoạn văn (dưới 150 từ) để làm bối cảnh cho các câu hỏi tiếp theo:\n\n"
+                f"{text_to_summarize}"
+            )
+        else:
+            prompt = (
+                "Briefly summarize the key points and important information from the following conversation "
+                "into one paragraph (under 150 words) to serve as context for follow-up questions:\n\n"
+                f"{text_to_summarize}"
+            )
         
         res = model.generate_content(prompt)
         return res.text.strip()
@@ -293,7 +329,125 @@ def generate_summary(older_messages: list, existing_summary: str, api_key: str, 
         return " | ".join(parts)
 
 # ==========================================
-# 6. KHỞI TẠO SESSION STATE & DỮ LIỆU
+# 6. HỆ THỐNG ĐA NGÔN NGỮ (i18n)
+# ==========================================
+TRANSLATIONS = {
+    "en": {
+        "app_title": "⚡ LTTP AI Online",
+        "app_subtitle": "Multi-purpose AI System with GitHub Sync",
+        "login_tab": "🔑 Login",
+        "register_tab": "📝 Register",
+        "username": "Username:",
+        "password": "Password:",
+        "confirm_password": "Confirm password:",
+        "remember_device": "📌 Remember this device (30 days)",
+        "login_btn": "Login",
+        "register_btn": "Create account",
+        "fill_all": "⚠️ Please fill in all fields.",
+        "pass_min": "❌ Password must be at least 6 characters.",
+        "pass_mismatch": "❌ Passwords do not match.",
+        "username_taken": "❌ Username is already taken.",
+        "register_success": "🎉 Registration successful! Please switch to Login tab.",
+        "login_fail": "❌ Invalid username or password!",
+        "login_success": "Login successful!",
+        "auto_login": "Auto-login successful! Welcome",
+        "logout_btn": "🚪 Logout",
+        "new_chat_btn": "➕ New Conversation",
+        "chat_list": "💬 Conversations",
+        "no_chats": "No conversations yet.",
+        "delete_chat_tooltip": "Delete conversation",
+        "chat_deleted": "Conversation deleted!",
+        "memory_title": "🧠 Persistent Memory / AI Instructions",
+        "memory_desc": "AI will always remember and follow these rules in every conversation.",
+        "memory_placeholder": "Example: You are a professional Python programming assistant. Always respond in English.",
+        "save_memory_btn": "💾 Save Memory",
+        "memory_saved": "Memory saved!",
+        "api_title": "🔑 API Keys & Model",
+        "api_from_secrets": "API Keys are loaded from Streamlit Secrets",
+        "api_status_ready": "Ready",
+        "api_status_missing": "Missing",
+        "model_select": "Select AI model:",
+        "gen_config": "⚙️ Generation Parameters",
+        "temperature": "Temperature (creativity):",
+        "top_p": "Top P:",
+        "top_k": "Top K:",
+        "chat_placeholder": "Ask LTTP AI anything...",
+        "current_chat": "Currently in",
+        "model_label": "Model",
+        "new_chat": "New Conversation",
+        "upload_image": "📎 Attach image (optional):",
+        "image_caption": "Uploaded image",
+        "image_error": "❌ Could not read image file.",
+        "no_api_key": "⚠️ No Gemini API Keys found in Secrets! Please add GEMINI_API_KEY_1 and GEMINI_API_KEY_2 to Streamlit Secrets.",
+        "ai_thinking": "LTTP AI is thinking and composing a response...",
+        "ai_error": "❌ Could not generate AI response.",
+        "device_id": "Device ID",
+        "online": "Online",
+        "language": "🌐 Language",
+        "settings": "Settings",
+    },
+    "vi": {
+        "app_title": "⚡ LTTP AI Online",
+        "app_subtitle": "Hệ thống Trí tuệ Nhân tạo Đa Năng Đồng bộ GitHub",
+        "login_tab": "🔑 Đăng nhập",
+        "register_tab": "📝 Đăng ký",
+        "username": "Tên đăng nhập:",
+        "password": "Mật khẩu:",
+        "confirm_password": "Xác nhận mật khẩu:",
+        "remember_device": "📌 Ghi nhớ thiết bị này (30 ngày)",
+        "login_btn": "Đăng nhập",
+        "register_btn": "Tạo tài khoản mới",
+        "fill_all": "⚠️ Vui lòng điền đầy đủ thông tin.",
+        "pass_min": "❌ Mật khẩu phải có ít nhất 6 ký tự.",
+        "pass_mismatch": "❌ Mật khẩu xác nhận không khớp.",
+        "username_taken": "❌ Tên đăng nhập đã được sử dụng.",
+        "register_success": "🎉 Đăng ký thành công! Hãy chuyển qua tab Đăng nhập.",
+        "login_fail": "❌ Mật khẩu hoặc tên đăng nhập không chính xác!",
+        "login_success": "Đăng nhập thành công!",
+        "auto_login": "Tự động đăng nhập thành công! Xin chào",
+        "logout_btn": "🚪 Đăng xuất",
+        "new_chat_btn": "➕ Cuộc trò chuyện mới",
+        "chat_list": "💬 Danh sách trò chuyện",
+        "no_chats": "Chưa có cuộc trò chuyện nào.",
+        "delete_chat_tooltip": "Xóa cuộc trò chuyện",
+        "chat_deleted": "Đã xóa cuộc trò chuyện!",
+        "memory_title": "🧠 Bộ nhớ cố định / Chỉ dẫn AI",
+        "memory_desc": "AI sẽ luôn ghi nhớ và tuân thủ các quy tắc này trong mọi cuộc trò chuyện.",
+        "memory_placeholder": "Ví dụ: Bạn là trợ lý lập trình Python chuyên nghiệp. Luôn trả lời bằng Tiếng Việt.",
+        "save_memory_btn": "💾 Lưu ghi nhớ cố định",
+        "memory_saved": "Đã ghi nhớ thông tin!",
+        "api_title": "🔑 API Keys & Model",
+        "api_from_secrets": "API Keys được nạp từ Streamlit Secrets",
+        "api_status_ready": "Sẵn sàng",
+        "api_status_missing": "Thiếu",
+        "model_select": "Chọn mô hình AI:",
+        "gen_config": "⚙️ Cấu hình tham số sinh",
+        "temperature": "Temperature (Độ sáng tạo):",
+        "top_p": "Top P:",
+        "top_k": "Top K:",
+        "chat_placeholder": "Hỏi LTTP AI bất cứ điều gì...",
+        "current_chat": "Đang trò chuyện trong",
+        "model_label": "Mô hình",
+        "new_chat": "Cuộc trò chuyện mới",
+        "upload_image": "📎 Đính kèm hình ảnh (tùy chọn):",
+        "image_caption": "Hình ảnh đã tải lên",
+        "image_error": "❌ Không thể đọc file hình ảnh.",
+        "no_api_key": "⚠️ Không tìm thấy Gemini API Key trong Secrets! Vui lòng thêm GEMINI_API_KEY_1 và GEMINI_API_KEY_2 vào Streamlit Secrets.",
+        "ai_thinking": "LTTP AI đang suy nghĩ và tổng hợp câu trả lời...",
+        "ai_error": "❌ Không thể tạo phản hồi từ AI.",
+        "device_id": "Device ID",
+        "online": "Online",
+        "language": "🌐 Ngôn ngữ",
+        "settings": "Cài đặt",
+    }
+}
+
+def t(key: str, lang: str = "en") -> str:
+    """Translation helper"""
+    return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
+
+# ==========================================
+# 7. KHỞI TẠO SESSION STATE & DỮ LIỆU
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -305,8 +459,10 @@ if "db_data" not in st.session_state:
     st.session_state.db_data = {}
 if "last_save_time" not in st.session_state:
     st.session_state.last_save_time = 0
+if "language" not in st.session_state:
+    st.session_state.language = "en"  # Mặc định tiếng Anh
 
-# Tải dữ liệu từ GitHub (có cache)
+# Tải dữ liệu từ GitHub
 db_data = GitHubStorage.load_db()
 st.session_state.db_data = db_data
 
@@ -316,33 +472,56 @@ if not st.session_state.user and device_id and db_data:
         remembered_devices = uinfo.get("remembered_devices", [])
         if device_id in remembered_devices:
             st.session_state.user = username
-            st.toast(f"Tự động đăng nhập thành công! Xin chào {username}", icon="⚡")
+            # Load ngôn ngữ đã lưu
+            st.session_state.language = uinfo.get("language", "en")
+            st.toast(f"{t('auto_login', st.session_state.language)} {username}", icon="⚡")
             break
 
-# UI Đăng nhập / Đăng ký
+# ==========================================
+# 8. UI ĐĂNG NHẬP / ĐĂNG KÝ
+# ==========================================
 def render_auth_ui():
-    st.markdown("<h1 class='main-header' style='text-align: center;'>⚡ LTTP AI Online</h1>", unsafe_allow_html=True)
-    st.caption("<p style='text-align: center;'>Hệ thống Trí tuệ Nhân tạo Đa Năng Đồng bộ GitHub</p>", unsafe_allow_html=True)
+    lang = st.session_state.language
+    
+    # Language selector trên cùng
+    col_lang_left, col_lang_right = st.columns([5, 1])
+    with col_lang_right:
+        lang_choice = st.selectbox(
+            "🌐",
+            ["en", "vi"],
+            index=0 if lang == "en" else 1,
+            format_func=lambda x: "🇬🇧 EN" if x == "en" else "🇻🇳 VI",
+            key="auth_lang_selector",
+            label_visibility="collapsed"
+        )
+        if lang_choice != lang:
+            st.session_state.language = lang_choice
+            st.rerun()
+    
+    st.markdown(f"<h1 class='main-header' style='text-align: center;'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
+    st.caption(f"<p style='text-align: center;'>{t('app_subtitle', lang)}</p>", unsafe_allow_html=True)
     st.divider()
     
     _, col, _ = st.columns([1, 1.8, 1])
 
     with col:
-        st.caption(f"🆔 Device ID: `{device_id[:8]}...{device_id[-4:]}`")
-        tab_login, tab_register = st.tabs(["🔑 Đăng nhập", "📝 Đăng ký"])
+        st.caption(f"🆔 {t('device_id', lang)}: `{device_id[:8]}...{device_id[-4:]}`")
+        tab_login, tab_register = st.tabs([t("login_tab", lang), t("register_tab", lang)])
         
         with tab_login:
             with st.form("login_form"):
-                u_name = st.text_input("Tên đăng nhập:").strip().lower()
-                u_pass = st.text_input("Mật khẩu:", type="password")
-                remember_me = st.checkbox("📌 Ghi nhớ thiết bị này (30 ngày)", value=True)
+                u_name = st.text_input(t("username", lang)).strip().lower()
+                u_pass = st.text_input(t("password", lang), type="password")
+                remember_me = st.checkbox(t("remember_device", lang), value=True)
                 
-                if st.form_submit_button("Đăng nhập", use_container_width=True):
+                if st.form_submit_button(t("login_btn", lang), use_container_width=True):
                     db = GitHubStorage.load_db(force_refresh=True)
                     if u_name in db and db[u_name]["password"] == hash_password(u_pass):
                         st.session_state.user = u_name
                         st.session_state.current_chat_id = None
                         st.session_state.messages = []
+                        # Load ngôn ngữ đã lưu của user
+                        st.session_state.language = db[u_name].get("language", "en")
                         
                         if remember_me:
                             db[u_name].setdefault("remembered_devices", [])
@@ -350,38 +529,44 @@ def render_auth_ui():
                                 db[u_name]["remembered_devices"].append(device_id)
                                 GitHubStorage.save_db(db)
                         
-                        st.toast("Đăng nhập thành công!", icon="✅")
+                        st.toast(t("login_success", st.session_state.language), icon="✅")
                         st.rerun()
                     else:
-                        st.error("❌ Mật khẩu hoặc tên đăng nhập không chính xác!")
+                        st.error(t("login_fail", lang))
 
         with tab_register:
             with st.form("register_form"):
-                reg_u = st.text_input("Tạo tên đăng nhập:").strip().lower()
-                reg_p = st.text_input("Tạo mật khẩu:", type="password")
-                reg_p2 = st.text_input("Xác nhận mật khẩu:", type="password")
-                if st.form_submit_button("Tạo tài khoản mới", use_container_width=True):
+                reg_u = st.text_input(t("username", lang)).strip().lower()
+                reg_p = st.text_input(t("password", lang), type="password")
+                reg_p2 = st.text_input(t("confirm_password", lang), type="password")
+                if st.form_submit_button(t("register_btn", lang), use_container_width=True):
                     if not reg_u or not reg_p:
-                        st.warning("⚠️ Vui lòng điền đầy đủ thông tin.")
+                        st.warning(t("fill_all", lang))
                     elif len(reg_p) < 6:
-                        st.error("❌ Mật khẩu phải có ít nhất 6 ký tự.")
+                        st.error(t("pass_min", lang))
                     elif reg_p != reg_p2:
-                        st.error("❌ Mật khẩu xác nhận không khớp.")
+                        st.error(t("pass_mismatch", lang))
                     else:
                         db = GitHubStorage.load_db(force_refresh=True)
                         if reg_u in db:
-                            st.error("❌ Tên đăng nhập đã được sử dụng.")
+                            st.error(t("username_taken", lang))
                         else:
                             db[reg_u] = {
                                 "password": hash_password(reg_p),
-                                "api_keys": [],
                                 "custom_instructions": "",
                                 "chats": {},
-                                "remembered_devices": [device_id]
+                                "remembered_devices": [device_id],
+                                "language": "en",  # Mặc định tiếng Anh
+                                "preferences": {
+                                    "model": DEFAULT_MODEL,
+                                    "temperature": 0.7,
+                                    "top_p": 0.95,
+                                    "top_k": 40
+                                }
                             }
                             ok, msg = GitHubStorage.save_db(db)
                             if ok:
-                                st.success("🎉 Đăng ký thành công! Hãy chuyển qua tab Đăng nhập.")
+                                st.success(t("register_success", lang))
                             else:
                                 st.error(f"❌ {msg}")
 
@@ -390,38 +575,58 @@ if not st.session_state.user:
     st.stop()
 
 # ==========================================
-# 7. TẢI DỮ LIỆU TÀI KHOẢN
+# 9. TẢI DỮ LIỆU TÀI KHOẢN (CÁ NHÂN HÓA)
 # ==========================================
 user_data = db_data.get(st.session_state.user, {})
-user_data.setdefault("api_keys", [])
 user_data.setdefault("custom_instructions", "")
 user_data.setdefault("chats", {})
 user_data.setdefault("remembered_devices", [])
+user_data.setdefault("language", "en")
 
-encrypted_keys = user_data["api_keys"]
+# Preferences (cá nhân hóa)
+user_data.setdefault("preferences", {})
+user_data["preferences"].setdefault("model", DEFAULT_MODEL)
+user_data["preferences"].setdefault("temperature", 0.7)
+user_data["preferences"].setdefault("top_p", 0.95)
+user_data["preferences"].setdefault("top_k", 40)
+
+# Load language từ user
+st.session_state.language = user_data.get("language", "en")
+lang = st.session_state.language
+
 user_chats = user_data["chats"]
-active_api_keys = []
-for k in encrypted_keys:
-    decrypted = decrypt_key(k)
-    if decrypted:
-        active_api_keys.append(decrypted)
 
 if st.session_state.current_chat_id and st.session_state.current_chat_id not in user_chats:
     st.session_state.current_chat_id = None
     st.session_state.messages = []
 
 # ==========================================
-# 8. SIDEBAR CHÍNH (TỐI ƯU HIỂN THỊ)
+# 10. SIDEBAR CHÍNH
 # ==========================================
 with st.sidebar:
+    # Language selector
+    lang_choice = st.selectbox(
+        t("language", lang),
+        ["en", "vi"],
+        index=0 if lang == "en" else 1,
+        format_func=lambda x: "🇬🇧 English" if x == "en" else "🇻🇳 Tiếng Việt",
+        key="sidebar_lang"
+    )
+    if lang_choice != lang:
+        user_data["language"] = lang_choice
+        db_data[st.session_state.user] = user_data
+        GitHubStorage.save_db(db_data)
+        st.session_state.language = lang_choice
+        st.rerun()
+    
     st.markdown(f"""
     <div class="user-card">
         <div style="font-weight: 700; font-size: 1.1rem; color: #667eea;">👤 {st.session_state.user}</div>
-        <div style="font-size: 0.8rem; opacity: 0.7;"><span class="pulse-dot"></span>Online | Device: {device_id[:6]}...</div>
+        <div style="font-size: 0.8rem; opacity: 0.7;"><span class="pulse-dot"></span>{t('online', lang)} | {t('device_id', lang)}: {device_id[:6]}...</div>
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("🚪 Đăng xuất", use_container_width=True):
+    if st.button(t("logout_btn", lang), use_container_width=True):
         db = GitHubStorage.load_db(force_refresh=True)
         user = db.get(st.session_state.user, {})
         if device_id in user.get("remembered_devices", []):
@@ -437,29 +642,26 @@ with st.sidebar:
     st.divider()
 
     # --- NÚT TẠO CHAT MỚI ---
-    if st.button("➕ Cuộc trò chuyện mới", type="primary", use_container_width=True):
+    if st.button(t("new_chat_btn", lang), type="primary", use_container_width=True):
         st.session_state.current_chat_id = None
         st.session_state.messages = []
         st.rerun()
 
-    # --- DANH SÁCH CHAT (TỐI ƯU) ---
-    st.subheader("💬 Danh sách trò chuyện")
+    # --- DANH SÁCH CHAT ---
+    st.subheader(t("chat_list", lang))
     if not user_chats:
-        st.caption("Chưa có cuộc trò chuyện nào.")
+        st.caption(t("no_chats", lang))
     else:
-        # Sắp xếp theo thời gian cập nhật
         sorted_chat_ids = sorted(
             user_chats.keys(), 
             key=lambda cid: user_chats[cid].get("updated_at", ""), 
             reverse=True
         )
-
-        # Giới hạn hiển thị tối đa 50 cuộc trò chuyện để tránh chậm
         display_ids = sorted_chat_ids[:50]
         
         for cid in display_ids:
             chat_item = user_chats.get(cid, {})
-            title = chat_item.get("title", "Hội thoại mới")
+            title = chat_item.get("title", t("new_chat", lang))
             
             is_active = (cid == st.session_state.current_chat_id)
             btn_label = f"📌 {title}" if is_active else f"💬 {title}"
@@ -471,7 +673,7 @@ with st.sidebar:
                 st.session_state.messages = user_chats[cid].get("messages", [])
                 st.rerun()
 
-            if col_del.button("🗑️", key=f"del_{cid}", help="Xóa cuộc trò chuyện"):
+            if col_del.button("🗑️", key=f"del_{cid}", help=t("delete_chat_tooltip", lang)):
                 if cid in user_chats:
                     del user_chats[cid]
                     user_data["chats"] = user_chats
@@ -484,121 +686,146 @@ with st.sidebar:
                         st.session_state.messages = []
                     
                     if ok:
-                        st.toast("Đã xóa cuộc trò chuyện!", icon="🗑️")
+                        st.toast(t("chat_deleted", lang), icon="🗑️")
                     else:
-                        st.error(f"Lỗi: {msg}")
+                        st.error(f"Error: {msg}")
                     time.sleep(0.3)
                     st.rerun()
 
     st.divider()
 
-    # --- QUẢN LÝ BỘ NHỚ CỐ ĐỊNH (SYSTEM INSTRUCTION) ---
-    with st.expander("🧠 Bộ nhớ cố định / Chỉ dẫn AI", expanded=False):
-        st.caption("AI sẽ luôn ghi nhớ và tuân thủ các quy tắc này trong mọi cuộc trò chuyện.")
+    # --- QUẢN LÝ BỘ NHỚ CỐ ĐỊNH ---
+    with st.expander(t("memory_title", lang), expanded=False):
+        st.caption(t("memory_desc", lang))
         memory_text = st.text_area(
-            "Nhập ghi nhớ của bạn:", 
+            "Memory:" if lang == "en" else "Ghi nhớ:", 
             value=user_data.get("custom_instructions", ""), 
             height=120,
-            placeholder="Ví dụ: Bạn là trợ lý lập trình Python chuyên nghiệp. Luôn trả lời bằng Tiếng Việt."
+            placeholder=t("memory_placeholder", lang)
         )
-        if st.button("💾 Lưu ghi nhớ cố định", use_container_width=True):
+        if st.button(t("save_memory_btn", lang), use_container_width=True):
             user_data["custom_instructions"] = memory_text.strip()
             db_data[st.session_state.user] = user_data
             ok, msg = GitHubStorage.save_db(db_data)
             if ok:
-                st.toast("Đã ghi nhớ thông tin!", icon="🧠")
+                st.toast(t("memory_saved", lang), icon="🧠")
                 time.sleep(0.3)
                 st.rerun()
             else:
-                st.error(f"Lỗi lưu: {msg}")
+                st.error(f"Error: {msg}")
 
-    # --- QUẢN LÝ API KEY & MODEL SELECTION ---
-    st.subheader("🔑 Quản lý API Key & Model")
+    # --- API KEYS INFO (từ Secrets) ---
+    st.subheader(t("api_title", lang))
+    st.caption(t("api_from_secrets", lang))
     
-    if active_api_keys:
-        for idx, raw_k in enumerate(active_api_keys):
-            col_k, col_del_k = st.columns([0.8, 0.2])
-            masked = f"{raw_k[:6]}...{raw_k[-4:]}" if len(raw_k) > 10 else "••••••••"
-            col_k.code(masked, language="text")
-            if col_del_k.button("❌", key=f"del_key_{idx}"):
-                db = GitHubStorage.load_db(force_refresh=True)
-                user = db.get(st.session_state.user, {})
-                if "api_keys" in user and idx < len(user["api_keys"]):
-                    user["api_keys"].pop(idx)
-                    db[st.session_state.user] = user
-                    ok, _ = GitHubStorage.save_db(db)
-                    if ok:
-                        st.toast("Đã xóa API Key!", icon="🗑️")
-                        time.sleep(0.3)
-                        st.rerun()
+    # Hiển thị trạng thái 2 API Keys
+    for i, key in enumerate([API_KEY_1, API_KEY_2], start=1):
+        if key:
+            masked = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "••••••••"
+            st.markdown(
+                f"**Key {i}:** `{masked}` "
+                f"<span class='status-badge badge-ready'>{t('api_status_ready', lang)}</span>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f"**Key {i}:** *Not configured* "
+                f"<span class='status-badge badge-missing'>{t('api_status_missing', lang)}</span>",
+                unsafe_allow_html=True
+            )
 
-    new_key_input = st.text_input("Thêm Gemini API Key mới:", type="password")
-    if st.button("💾 Lưu API Key", use_container_width=True):
-        clean_k = new_key_input.strip()
-        if clean_k:
-            db = GitHubStorage.load_db(force_refresh=True)
-            user = db.get(st.session_state.user, {})
-            existing_keys = [decrypt_key(k) for k in user.get("api_keys", [])]
-            if clean_k not in existing_keys:
-                user.setdefault("api_keys", []).append(encrypt_key(clean_k))
-                db[st.session_state.user] = user
-                ok, msg = GitHubStorage.save_db(db)
-                if ok:
-                    st.success("🎉 Đã lưu API Key thành công!")
-                    time.sleep(0.5)
-                    st.rerun()
-                else:
-                    st.error(f"Lỗi lưu: {msg}")
-            else:
-                st.warning("⚠️ API Key này đã tồn tại!")
-
-    # Quét danh sách Model có sẵn từ API Key
-    available_models = []
-    if active_api_keys:
+    # Danh sách model (hard-coded để tránh phụ thuộc API call, và mặc định 3.5 flash)
+    available_models = [
+        "gemini-2.5-flash",       # Mặc định
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+    ]
+    
+    # Thử lấy danh sách động từ API nếu có key
+    if SECRET_API_KEYS:
         try:
-            genai.configure(api_key=active_api_keys[0])
+            genai.configure(api_key=SECRET_API_KEYS[0])
+            dynamic_models = []
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
-                    available_models.append(m.name.replace("models/", ""))
+                    name = m.name.replace("models/", "")
+                    dynamic_models.append(name)
+            if dynamic_models:
+                # Hợp nhất, ưu tiên dynamic
+                merged = list(dict.fromkeys(dynamic_models + available_models))
+                available_models = merged
         except Exception:
-            available_models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"]
+            pass
 
-    if not available_models:
-        available_models = ["gemini-1.5-flash", "gemini-1.5-pro"]
+    # Model mặc định từ preferences
+    saved_model = user_data["preferences"].get("model", DEFAULT_MODEL)
+    try:
+        model_index = available_models.index(saved_model)
+    except ValueError:
+        model_index = 0
+        user_data["preferences"]["model"] = available_models[0]
 
-    selected_model = st.selectbox("Chọn mô hình AI:", available_models, index=0)
+    selected_model = st.selectbox(t("model_select", lang), available_models, index=model_index)
+    
+    # Lưu model nếu thay đổi
+    if selected_model != user_data["preferences"].get("model"):
+        user_data["preferences"]["model"] = selected_model
+        db_data[st.session_state.user] = user_data
+        GitHubStorage.save_db(db_data)
 
-    # --- THAM SỐ CẤU HÌNH SINH VĂN BẢN ---
-    with st.expander("⚙️ Cấu hình tham số sinh", expanded=False):
-        temperature = st.slider("Temperature (Độ sáng tạo):", 0.0, 1.0, 0.7, 0.05)
-        top_p = st.slider("Top P:", 0.0, 1.0, 0.95, 0.05)
-        top_k = st.number_input("Top K:", min_value=1, max_value=100, value=40)
+    # --- THAM SỐ CẤU HÌNH SINH ---
+    with st.expander(t("gen_config", lang), expanded=False):
+        temperature = st.slider(
+            t("temperature", lang), 0.0, 1.0, 
+            float(user_data["preferences"].get("temperature", 0.7)), 0.05
+        )
+        top_p = st.slider(
+            t("top_p", lang), 0.0, 1.0, 
+            float(user_data["preferences"].get("top_p", 0.95)), 0.05
+        )
+        top_k = st.number_input(
+            t("top_k", lang), min_value=1, max_value=100, 
+            value=int(user_data["preferences"].get("top_k", 40))
+        )
+        
+        if st.button("💾 Save Parameters" if lang == "en" else "💾 Lưu tham số", use_container_width=True):
+            user_data["preferences"]["temperature"] = temperature
+            user_data["preferences"]["top_p"] = top_p
+            user_data["preferences"]["top_k"] = top_k
+            db_data[st.session_state.user] = user_data
+            ok, msg = GitHubStorage.save_db(db_data)
+            if ok:
+                st.toast("Parameters saved!" if lang == "en" else "Đã lưu tham số!", icon="⚙️")
+                time.sleep(0.3)
+                st.rerun()
 
 # ==========================================
-# 9. GIAO DIỆN CHAT CHÍNH (MAIN UI)
+# 11. GIAO DIỆN CHAT CHÍNH
 # ==========================================
-st.markdown("<h1 class='main-header'>⚡ LTTP AI Online Edition</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 class='main-header'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
 
-if not active_api_keys:
-    st.warning("⚠️ Vui lòng thêm ít nhất một **Gemini API Key** ở thanh bên trái để bắt đầu trò chuyện!")
+if not SECRET_API_KEYS:
+    st.warning(t("no_api_key", lang))
     st.stop()
 
-# Hiển thị tiêu đề chat hiện tại
-current_title = "Cuộc trò chuyện mới"
+current_title = t("new_chat", lang)
 if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
-    current_title = user_chats[st.session_state.current_chat_id].get("title", "Cuộc trò chuyện")
+    current_title = user_chats[st.session_state.current_chat_id].get("title", "Chat")
 
-st.caption(f"📌 Đang trò chuyện trong: **{current_title}** | Mô hình: `{selected_model}`")
+st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{selected_model}`")
 
-# Upload file / hình ảnh đính kèm
-uploaded_file = st.file_uploader("📎 Đính kèm hình ảnh (tùy chọn):", type=["png", "jpg", "jpeg", "webp"])
+# Upload file
+uploaded_file = st.file_uploader(t("upload_image", lang), type=["png", "jpg", "jpeg", "webp"])
 image_input = None
 if uploaded_file:
     try:
         image_input = Image.open(uploaded_file)
-        st.image(image_input, caption="Hình ảnh đã tải lên", width=250)
+        st.image(image_input, caption=t("image_caption", lang), width=250)
     except Exception:
-        st.error("❌ Không thể đọc file hình ảnh.")
+        st.error(t("image_error", lang))
 
 # Hiển thị lịch sử tin nhắn
 for msg in st.session_state.messages:
@@ -606,19 +833,19 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # ==========================================
-# 10. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
+# 12. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
 # ==========================================
-if user_prompt := st.chat_input("Hỏi LTTP AI bất cứ điều gì..."):
-    # 1. Thêm tin nhắn người dùng vào UI
+if user_prompt := st.chat_input(t("chat_placeholder", lang)):
+    # 1. Thêm tin nhắn người dùng
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
 
-    # 2. Khởi tạo Chat ID mới nếu chưa có
+    # 2. Khởi tạo Chat ID mới
     if not st.session_state.current_chat_id:
         st.session_state.current_chat_id = str(uuid.uuid4())
         user_chats[st.session_state.current_chat_id] = {
-            "title": "Cuộc trò chuyện mới",
+            "title": t("new_chat", lang),
             "messages": [],
             "summary": "",
             "created_at": datetime.now().isoformat(),
@@ -628,41 +855,38 @@ if user_prompt := st.chat_input("Hỏi LTTP AI bất cứ điều gì..."):
     chat_data = user_chats[st.session_state.current_chat_id]
     chat_summary = chat_data.get("summary", "")
 
-    # 3. Tự động nén/tóm tắt bối cảnh cũ nếu hội thoại dài (> 10 tin nhắn)
+    # 3. Tóm tắt nếu hội thoại dài
     if len(st.session_state.messages) > 10:
         older_msgs = st.session_state.messages[:-6]
         try:
             chat_summary = generate_summary(
-                older_msgs, 
-                chat_summary, 
-                active_api_keys[0], 
-                selected_model
+                older_msgs, chat_summary, SECRET_API_KEYS[0], selected_model, lang
             )
             chat_data["summary"] = chat_summary
         except Exception:
-            # Nếu tóm tắt lỗi, giữ nguyên summary cũ
             pass
 
-    # 4. Tạo System Instruction tổng hợp
+    # 4. System Instruction
     system_instruction = user_data.get("custom_instructions", "")
     if chat_summary:
-        system_instruction += f"\n\n[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]: {chat_summary}"
+        label = "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]" if lang == "vi" else "[SUMMARIZED HISTORY CONTEXT]"
+        system_instruction += f"\n\n{label}: {chat_summary}"
 
-    # 5. Gọi AI sinh phản hồi (Xoay vòng API Key nếu gặp lỗi Quota)
+    # 5. Gọi AI (xoay vòng 2 key)
     response_text = ""
     success = False
     
     with st.chat_message("assistant"):
         loading_placeholder = st.empty()
-        loading_placeholder.markdown("""
+        loading_placeholder.markdown(f"""
         <div class="ai-loading-box">
             <div class="spinner"></div>
-            <div class="ai-loading-text">LTTP AI đang suy nghĩ và tổng hợp câu trả lời...</div>
+            <div class="ai-loading-text">{t('ai_thinking', lang)}</div>
         </div>
         """, unsafe_allow_html=True)
 
         last_error = ""
-        for api_k in active_api_keys:
+        for api_k in SECRET_API_KEYS:
             try:
                 genai.configure(api_key=api_k)
                 model = genai.GenerativeModel(
@@ -675,20 +899,21 @@ if user_prompt := st.chat_input("Hỏi LTTP AI bất cứ điều gì..."):
                     }
                 )
 
-                # Chuẩn bị danh sách nội dung gửi tới mô hình
                 content_inputs = []
                 if image_input:
                     content_inputs.append(image_input)
                 
-                # Bổ sung các tin nhắn gần nhất làm context
                 recent_msgs = st.session_state.messages[-6:]
                 formatted_history = ""
                 for m in recent_msgs[:-1]:
-                    r = "Người dùng" if m["role"] == "user" else "AI"
+                    r = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
                     formatted_history += f"{r}: {m['content']}\n"
                 
                 if formatted_history:
-                    full_prompt = f"Lịch sử hội thoại gần đây:\n{formatted_history}\nCâu hỏi mới: {user_prompt}"
+                    if lang == "vi":
+                        full_prompt = f"Lịch sử hội thoại gần đây:\n{formatted_history}\nCâu hỏi mới: {user_prompt}"
+                    else:
+                        full_prompt = f"Recent conversation history:\n{formatted_history}\nNew question: {user_prompt}"
                 else:
                     full_prompt = user_prompt
 
@@ -708,28 +933,27 @@ if user_prompt := st.chat_input("Hỏi LTTP AI bất cứ điều gì..."):
             st.markdown(response_text)
             st.session_state.messages.append({"role": "assistant", "content": response_text})
         else:
-            error_msg = f"❌ Không thể tạo phản hồi từ AI. Lỗi: {last_error[:100] if last_error else 'Không xác định'}"
+            error_msg = f"{t('ai_error', lang)} Error: {last_error[:150] if last_error else 'Unknown'}"
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-    # 6. Tự động tạo tiêu đề nếu đây là lượt trao đổi đầu tiên
+    # 6. Tạo tiêu đề nếu là lượt đầu
     if len(chat_data.get("messages", [])) == 0:
         try:
-            new_title = generate_chat_title(user_prompt, active_api_keys[0], selected_model)
+            new_title = generate_chat_title(user_prompt, SECRET_API_KEYS[0], selected_model, lang)
             chat_data["title"] = new_title
         except Exception:
             chat_data["title"] = user_prompt[:30] + "..." if len(user_prompt) > 30 else user_prompt
 
-    # 7. Lưu và đồng bộ trạng thái cuộc trò chuyện lên GitHub Storage
+    # 7. Lưu lên GitHub
     chat_data["messages"] = st.session_state.messages
     chat_data["updated_at"] = datetime.now().isoformat()
     user_chats[st.session_state.current_chat_id] = chat_data
     user_data["chats"] = user_chats
     db_data[st.session_state.user] = user_data
 
-    # Lưu dữ liệu (có kiểm tra thời gian để tránh lưu quá nhiều)
     current_time = time.time()
-    if current_time - st.session_state.last_save_time > 1:  # Ít nhất 1 giây giữa các lần lưu
+    if current_time - st.session_state.last_save_time > 1:
         GitHubStorage.save_db(db_data)
         st.session_state.last_save_time = current_time
     
