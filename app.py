@@ -44,7 +44,7 @@ if not device_id:
     cookies.set("LTTP_device_id", device_id, max_age=COOKIE_MAX_AGE)
 
 # Model mặc định
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
 
 # ==========================================
 # 2. CUSTOM CSS - HIỆU ỨNG ĐỒ HỌA & UI
