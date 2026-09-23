@@ -1,9 +1,6 @@
 {
   "phát": {
     "password": "aed6d8fac62b43b59f48d7450ec1011358d198a2a9533211d46322c1ba6eafc1",
-    "api_keys": [
-      "gAAAAABqiZwSW30HBYiw4y58hShqqar1O57EgKE03yw5V4vJJD1pPuIJeEZGvMFi_KGqvRZmUG2jVIhPNQAQSpHoSFyktKst4RoS3c-8I58Rf16rcpes-I4omisAgfYUcwwm_Wj2fb5SjmDZRXBTn6MnG3WUxAXXQA=="
-    ],
     "custom_instructions": "",
     "chats": {},
     "remembered_devices": [
@@ -11,6 +8,13 @@
       "834f7f4e-019e-4d13-a032-32f235b425f0",
       "92c096b4-f304-4a33-a42d-4c7d541578ae",
       "d7cd6858-434b-4c57-b11f-8e6a1ef6fd63"
-    ]
+    ],
+    "language": "en",
+    "preferences": {
+      "model": "gemini-3.5-flash",
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40
+    }
   }
 }
