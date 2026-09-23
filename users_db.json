@@ -2,7 +2,24 @@
   "phát": {
     "password": "aed6d8fac62b43b59f48d7450ec1011358d198a2a9533211d46322c1ba6eafc1",
     "custom_instructions": "",
-    "chats": {},
+    "chats": {
+      "fbfaaf84-433b-4c3b-b69f-755cbeac786e": {
+        "title": "tóm tắt cái này",
+        "messages": [
+          {
+            "role": "user",
+            "content": "tóm tắt cái này"
+          },
+          {
+            "role": "assistant",
+            "content": "❌ Could not generate AI response. Error: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/ge"
+          }
+        ],
+        "summary": "",
+        "created_at": "2026-09-23T11:23:56.237243",
+        "updated_at": "2026-09-23T11:25:54.408746"
+      }
+    },
     "remembered_devices": [
       "871c408a-062c-46c7-ae9b-0b8410aafd06",
       "834f7f4e-019e-4d13-a032-32f235b425f0",
