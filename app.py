@@ -43,15 +43,25 @@ if not device_id:
     device_id = str(uuid.uuid4())
     cookies.set("LTTP_device_id", device_id, max_age=COOKIE_MAX_AGE)
 
-# Model mặc định - TÊN CHÍNH THỨC (Gemini 3.5 Flash)
+# Model mặc định
 DEFAULT_MODEL = "gemini-3.5-flash"
 
-# Danh sách model hợp lệ (fallback nếu API list_models fail)
+# Thứ tự ưu tiên model khi failover (dùng để tự động đổi model khi gặp 429)
+FAILOVER_MODEL_CHAIN = [
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+]
+
 FALLBACK_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash",       # Mặc định
+    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview",
@@ -61,7 +71,6 @@ FALLBACK_MODELS = [
     "gemini-1.5-pro",
 ]
 
-# Các model cũ cần migrate sang model mới
 LEGACY_MODEL_MAP = {
     "gemini-2.5-flash": "gemini-3.5-flash",
     "gemini-2.5-pro": "gemini-3.5-flash",
@@ -71,6 +80,9 @@ LEGACY_MODEL_MAP = {
     "gemini-1.0-pro": "gemini-3.5-flash",
     "gemini-pro": "gemini-3.5-flash",
 }
+
+# Cấu hình retry khi gặp 429
+RATE_LIMIT_RETRY_DELAY = 60  # giây
 
 # ==========================================
 # 2. CUSTOM CSS
@@ -130,6 +142,25 @@ st.markdown("""
         margin-right: 6px;
     }
 
+    .rate-limit-box {
+        padding: 14px 18px;
+        background: rgba(251, 191, 36, 0.1);
+        border: 1px solid rgba(251, 191, 36, 0.35);
+        border-radius: 12px;
+        margin-bottom: 15px;
+        animation: fadeIn 0.3s ease-in-out;
+    }
+    .rate-limit-text {
+        color: #fbbf24;
+        font-weight: 600;
+        font-size: 0.95rem;
+    }
+    .rate-limit-countdown {
+        color: #f59e0b;
+        font-weight: 800;
+        font-size: 1.1rem;
+    }
+
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     @keyframes shine { to { background-position: 200% center; } }
     @keyframes pulse {
@@ -147,9 +178,7 @@ st.markdown("""
         margin-bottom: 12px;
     }
     
-    .stButton button {
-        width: 100%;
-    }
+    .stButton button { width: 100%; }
     
     .status-badge {
         display: inline-block;
@@ -159,22 +188,8 @@ st.markdown("""
         font-weight: 600;
         margin-left: 6px;
     }
-    .badge-ready {
-        background: rgba(16, 185, 129, 0.15);
-        color: #10b981;
-    }
-    .badge-missing {
-        background: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
-    }
-    .migration-notice {
-        background: rgba(251, 191, 36, 0.1);
-        border: 1px solid rgba(251, 191, 36, 0.3);
-        border-radius: 8px;
-        padding: 8px 12px;
-        font-size: 0.85rem;
-        color: #fbbf24;
-    }
+    .badge-ready { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+    .badge-missing { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -201,39 +216,161 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 # ==========================================
-# 4. MIGRATION DỮ LIỆU CŨ (KHÔNG MẤT DỮ LIỆU)
+# 4. PHÁT HIỆN LỖI 429 / RATE LIMIT
 # ==========================================
-def migrate_user_data(db_data: dict) -> tuple[dict, bool]:
+def is_rate_limit_error(error: Exception) -> bool:
+    """Kiểm tra lỗi có phải 429 / quota / rate limit không."""
+    err_str = str(error).lower()
+    keywords = [
+        "429",
+        "quota",
+        "rate limit",
+        "rate_limit",
+        "resource_exhausted",
+        "too many requests",
+        "exceeded",
+        "resource exhausted",
+    ]
+    return any(k in err_str for k in keywords)
+
+# ==========================================
+# 5. HÀM GỌI GEMINI VỚI FAILOVER TỰ ĐỘNG
+# ==========================================
+def _build_model_chain(preferred_model: str) -> list:
     """
-    Migrate dữ liệu người dùng cũ sang format mới.
-    KHÔNG xóa bất kỳ dữ liệu nào - chỉ thêm trường mới và chuyển đổi model cũ.
-    Trả về (db_data, was_migrated)
+    Tạo danh sách model để thử, ưu tiên model người dùng chọn trước,
+    sau đó mở rộng theo FAILOVER_MODEL_CHAIN.
     """
+    chain = [preferred_model]
+    for m in FAILOVER_MODEL_CHAIN:
+        if m not in chain:
+            chain.append(m)
+    return chain
+
+
+def call_gemini_with_failover(
+    prompt_inputs: list,
+    api_keys: list,
+    preferred_model: str,
+    system_instruction: str = None,
+    generation_config: dict = None,
+    status_placeholder=None,
+    lang: str = "en",
+):
+    """
+    Gọi Gemini với cơ chế failover im lặng:
+      1. Thử model ưu tiên với từng API key.
+      2. Nếu gặp 429 → tự động chuyển sang model tiếp theo trong chain.
+      3. Nếu gặp lỗi khác (không phải 429) → cũng chuyển sang tổ hợp khác (im lặng).
+      4. Nếu TẤT CẢ tổ hợp đều thất bại vì 429 → trả về (None, "rate_limit").
+      5. Nếu tất cả thất bại vì lỗi khác → trả về (None, last_error).
+
+    Returns:
+        (response_text_or_None, error_type_or_message)
+        - success: ("...", None)
+        - rate limited: (None, "rate_limit")
+        - other error: (None, "<error message>")
+    """
+    if not api_keys:
+        return None, "no_api_keys"
+
+    model_chain = _build_model_chain(preferred_model)
+    last_error = None
+    saw_rate_limit = False
+    saw_other_error = False
+
+    for model_name in model_chain:
+        for api_k in api_keys:
+            try:
+                genai.configure(api_key=api_k)
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    system_instruction=system_instruction if system_instruction else None,
+                    generation_config=generation_config or {}
+                )
+                res = model.generate_content(prompt_inputs)
+                text = getattr(res, "text", None)
+                if text:
+                    return text, None
+                # Nếu không có text (bị block) → coi như lỗi khác, thử tiếp
+                saw_other_error = True
+                last_error = "Empty response"
+                continue
+            except Exception as ex:
+                last_error = str(ex)
+                if is_rate_limit_error(ex):
+                    saw_rate_limit = True
+                    # Im lặng chuyển sang tổ hợp tiếp theo
+                    continue
+                else:
+                    saw_other_error = True
+                    # Vẫn thử tổ hợp khác (im lặng)
+                    continue
+
+    # Tất cả tổ hợp đều fail
+    if saw_rate_limit and not saw_other_error:
+        return None, "rate_limit"
+    if saw_rate_limit and saw_other_error:
+        # Ưu tiên thông báo rate limit nếu có
+        return None, "rate_limit"
+    return None, last_error or "unknown_error"
+
+
+def render_rate_limit_and_retry(lang: str = "en"):
+    """
+    Hiển thị thông báo 'hệ thống đang nhận quá nhiều yêu cầu' với countdown 60s,
+    sau đó tự động retry (rerun).
+    """
+    if lang == "vi":
+        title = "⏳ Hệ thống đang nhận quá nhiều yêu cầu"
+        subtitle = "Vui lòng thử lại sau. Hệ thống sẽ tự động gửi lại câu hỏi của bạn."
+    else:
+        title = "⏳ System is receiving too many requests"
+        subtitle = "Please try again later. Your question will be automatically retried."
+
+    box = st.empty()
+    total = RATE_LIMIT_RETRY_DELAY
+
+    for remaining in range(total, 0, -1):
+        box.markdown(f"""
+        <div class="rate-limit-box">
+            <div class="rate-limit-text">{title}</div>
+            <div style="margin-top:6px; font-size:0.9rem; opacity:0.85;">{subtitle}</div>
+            <div style="margin-top:8px;">
+                <span class="rate-limit-countdown">{remaining}s</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        time.sleep(1)
+
+    box.empty()
+    # Tự động thử lại
+    st.rerun()
+
+
+# ==========================================
+# 6. MIGRATION DỮ LIỆU CŨ (KHÔNG MẤT DỮ LIỆU)
+# ==========================================
+def migrate_user_data(db_data: dict) -> tuple:
     migrated = False
     
     for username, uinfo in db_data.items():
         if not isinstance(uinfo, dict):
             continue
         
-        # 1. Đảm bảo các trường cơ bản tồn tại
         if "custom_instructions" not in uinfo:
             uinfo["custom_instructions"] = ""
             migrated = True
-        
         if "chats" not in uinfo:
             uinfo["chats"] = {}
             migrated = True
-        
         if "remembered_devices" not in uinfo:
             uinfo["remembered_devices"] = []
             migrated = True
-        
-        # 2. Thêm trường ngôn ngữ nếu chưa có (mặc định tiếng Anh)
         if "language" not in uinfo:
             uinfo["language"] = "en"
             migrated = True
         
-        # 3. Thêm preferences nếu chưa có
         if "preferences" not in uinfo:
             uinfo["preferences"] = {
                 "model": DEFAULT_MODEL,
@@ -248,8 +385,6 @@ def migrate_user_data(db_data: dict) -> tuple[dict, bool]:
                 prefs = {}
                 uinfo["preferences"] = prefs
                 migrated = True
-            
-            # Đảm bảo các trường preferences tồn tại
             if "model" not in prefs:
                 prefs["model"] = DEFAULT_MODEL
                 migrated = True
@@ -263,13 +398,11 @@ def migrate_user_data(db_data: dict) -> tuple[dict, bool]:
                 prefs["top_k"] = 40
                 migrated = True
             
-            # 4. Chuyển đổi model cũ sang model mới (Gemini 3.5 Flash)
             old_model = prefs.get("model", "")
             if old_model in LEGACY_MODEL_MAP:
                 prefs["model"] = LEGACY_MODEL_MAP[old_model]
                 migrated = True
         
-        # 5. Đảm bảo tất cả chats đều có đủ trường
         for cid, chat in uinfo.get("chats", {}).items():
             if not isinstance(chat, dict):
                 continue
@@ -289,8 +422,6 @@ def migrate_user_data(db_data: dict) -> tuple[dict, bool]:
                 chat["updated_at"] = chat.get("created_at", datetime.now().isoformat())
                 migrated = True
         
-        # 6. Xóa trường api_keys cũ (không còn dùng vì lấy từ Secrets)
-        #    Nhưng KHÔNG xóa dữ liệu khác
         if "api_keys" in uinfo:
             del uinfo["api_keys"]
             migrated = True
@@ -298,7 +429,7 @@ def migrate_user_data(db_data: dict) -> tuple[dict, bool]:
     return db_data, migrated
 
 # ==========================================
-# 5. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
+# 7. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
 # ==========================================
 class GitHubStorage:
     _cache = None
@@ -340,16 +471,13 @@ class GitHubStorage:
                 decoded = base64.b64decode(content_b64.encode('utf-8')).decode('utf-8')
                 data = json.loads(decoded)
                 
-                # Chạy migration tự động (chỉ 1 lần mỗi session)
                 if not GitHubStorage._migration_checked:
                     data, was_migrated = migrate_user_data(data)
                     GitHubStorage._migration_checked = True
                     if was_migrated:
-                        # Lưu lại dữ liệu đã migrate lên GitHub
                         GitHubStorage._cache = data
                         GitHubStorage._cache_time = time.time()
                         GitHubStorage.save_db(data)
-                        st.toast("🔄 Dữ liệu đã được tự động nâng cấp lên Gemini 3.5 Flash!", icon="✨")
                 
                 GitHubStorage._cache = data
                 GitHubStorage._cache_time = time.time()
@@ -362,14 +490,13 @@ class GitHubStorage:
                 st.error(f"GitHub read error (HTTP {res.status_code})")
                 return GitHubStorage._cache if GitHubStorage._cache is not None else {}
         except requests.exceptions.Timeout:
-            st.warning("⚠️ GitHub connection timeout, using cached data...")
             return GitHubStorage._cache if GitHubStorage._cache is not None else {}
         except Exception as e:
             st.error(f"GitHub API error: {e}")
             return GitHubStorage._cache if GitHubStorage._cache is not None else {}
 
     @staticmethod
-    def save_db(data: dict) -> tuple[bool, str]:
+    def save_db(data: dict) -> tuple:
         if not GITHUB_TOKEN or not GITHUB_REPO:
             return False, "Missing GitHub Token/Repo configuration."
 
@@ -408,12 +535,10 @@ class GitHubStorage:
             return False, f"Save error: {e}"
 
 # ==========================================
-# 6. HÀM XỬ LÝ AI
+# 8. HÀM XỬ LÝ AI PHỤ (ĐẶT TÊN & TÓM TẮT) - CÓ FAILOVER
 # ==========================================
-def generate_chat_title(user_prompt: str, api_key: str, model_name: str, lang: str = "en") -> str:
+def generate_chat_title(user_prompt: str, api_keys: list, model_name: str, lang: str = "en") -> str:
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         if lang == "vi":
             prompt = (
                 "Hãy tạo 1 tiêu đề cực kỳ ngắn gọn (từ 2 đến 5 từ, không đặt trong dấu ngoặc kép, không dùng markdown) "
@@ -424,17 +549,22 @@ def generate_chat_title(user_prompt: str, api_key: str, model_name: str, lang: s
                 "Generate an extremely short title (2-5 words, no quotes, no markdown) "
                 f"summarizing the topic of this question:\n\"{user_prompt}\""
             )
-        res = model.generate_content(prompt)
-        title = res.text.strip().replace('"', '').replace("'", "")
-        return title[:35] if title else user_prompt[:25]
+        text, err = call_gemini_with_failover(
+            prompt_inputs=[prompt],
+            api_keys=api_keys,
+            preferred_model=model_name,
+            lang=lang
+        )
+        if text:
+            title = text.strip().replace('"', '').replace("'", "")
+            return title[:35] if title else user_prompt[:25]
+        return user_prompt[:25] + "..." if len(user_prompt) > 25 else user_prompt
     except Exception:
         return user_prompt[:25] + "..." if len(user_prompt) > 25 else user_prompt
 
-def generate_summary(older_messages: list, existing_summary: str, api_key: str, model_name: str, lang: str = "en") -> str:
+
+def generate_summary(older_messages: list, existing_summary: str, api_keys: list, model_name: str, lang: str = "en") -> str:
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
-        
         text_to_summarize = ""
         if existing_summary:
             prefix = "Bối cảnh tóm tắt trước đó" if lang == "vi" else "Previous summary context"
@@ -463,8 +593,20 @@ def generate_summary(older_messages: list, existing_summary: str, api_key: str, 
                 f"{text_to_summarize}"
             )
         
-        res = model.generate_content(prompt)
-        return res.text.strip()
+        text, err = call_gemini_with_failover(
+            prompt_inputs=[prompt],
+            api_keys=api_keys,
+            preferred_model=model_name,
+            lang=lang
+        )
+        if text:
+            return text.strip()
+        # Fallback nếu tất cả fail
+        parts = [existing_summary] if existing_summary else []
+        for m in older_messages[-10:]:
+            r = "User" if m["role"] == "user" else "AI"
+            parts.append(f"{r}: {m['content'][:50]}...")
+        return " | ".join(parts)
     except Exception:
         parts = [existing_summary] if existing_summary else []
         for m in older_messages[-10:]:
@@ -473,7 +615,7 @@ def generate_summary(older_messages: list, existing_summary: str, api_key: str, 
         return " | ".join(parts)
 
 # ==========================================
-# 7. HỆ THỐNG ĐA NGÔN NGỮ (i18n)
+# 9. HỆ THỐNG ĐA NGÔN NGỮ (i18n)
 # ==========================================
 TRANSLATIONS = {
     "en": {
@@ -527,10 +669,11 @@ TRANSLATIONS = {
         "no_api_key": "⚠️ No Gemini API Keys found in Secrets! Please add GEMINI_API_KEY_1 and GEMINI_API_KEY_2 to Streamlit Secrets.",
         "ai_thinking": "LTTP AI is thinking and composing a response...",
         "ai_error": "❌ Could not generate AI response.",
+        "rate_limit_title": "⏳ System is receiving too many requests",
+        "rate_limit_subtitle": "Please try again later. Your question will be automatically retried.",
         "device_id": "Device ID",
         "online": "Online",
         "language": "🌐 Language",
-        "migration_success": "🔄 Data automatically upgraded to Gemini 3.5 Flash!",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -583,10 +726,11 @@ TRANSLATIONS = {
         "no_api_key": "⚠️ Không tìm thấy Gemini API Key trong Secrets! Vui lòng thêm GEMINI_API_KEY_1 và GEMINI_API_KEY_2 vào Streamlit Secrets.",
         "ai_thinking": "LTTP AI đang suy nghĩ và tổng hợp câu trả lời...",
         "ai_error": "❌ Không thể tạo phản hồi từ AI.",
+        "rate_limit_title": "⏳ Hệ thống đang nhận quá nhiều yêu cầu",
+        "rate_limit_subtitle": "Vui lòng thử lại sau. Hệ thống sẽ tự động gửi lại câu hỏi của bạn.",
         "device_id": "Device ID",
         "online": "Online",
         "language": "🌐 Ngôn ngữ",
-        "migration_success": "🔄 Dữ liệu đã được tự động nâng cấp lên Gemini 3.5 Flash!",
     }
 }
 
@@ -594,7 +738,7 @@ def t(key: str, lang: str = "en") -> str:
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
 
 # ==========================================
-# 8. KHỞI TẠO SESSION STATE & DỮ LIỆU
+# 10. KHỞI TẠO SESSION STATE & DỮ LIỆU
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -608,12 +752,14 @@ if "last_save_time" not in st.session_state:
     st.session_state.last_save_time = 0
 if "language" not in st.session_state:
     st.session_state.language = "en"
+if "pending_retry_prompt" not in st.session_state:
+    st.session_state.pending_retry_prompt = None
+if "pending_retry_image" not in st.session_state:
+    st.session_state.pending_retry_image = None
 
-# Tải dữ liệu từ GitHub (migration tự động chạy bên trong)
 db_data = GitHubStorage.load_db()
 st.session_state.db_data = db_data
 
-# Tự động đăng nhập bằng Device Cookie
 if not st.session_state.user and device_id and db_data:
     for username, uinfo in db_data.items():
         remembered_devices = uinfo.get("remembered_devices", [])
@@ -624,7 +770,7 @@ if not st.session_state.user and device_id and db_data:
             break
 
 # ==========================================
-# 9. UI ĐĂNG NHẬP / ĐĂNG KÝ
+# 11. UI ĐĂNG NHẬP / ĐĂNG KÝ
 # ==========================================
 def render_auth_ui():
     lang = st.session_state.language
@@ -719,7 +865,7 @@ if not st.session_state.user:
     st.stop()
 
 # ==========================================
-# 10. TẢI DỮ LIỆU TÀI KHOẢN
+# 12. TẢI DỮ LIỆU TÀI KHOẢN
 # ==========================================
 user_data = db_data.get(st.session_state.user, {})
 user_data.setdefault("custom_instructions", "")
@@ -742,7 +888,7 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.messages = []
 
 # ==========================================
-# 11. SIDEBAR CHÍNH
+# 13. SIDEBAR CHÍNH
 # ==========================================
 with st.sidebar:
     lang_choice = st.selectbox(
@@ -869,7 +1015,6 @@ with st.sidebar:
                 unsafe_allow_html=True
             )
 
-    # Danh sách model
     available_models = FALLBACK_MODELS.copy()
     
     if SECRET_API_KEYS:
@@ -881,16 +1026,13 @@ with st.sidebar:
                     name = m.name.replace("models/", "")
                     dynamic_models.append(name)
             if dynamic_models:
-                # Ưu tiên dynamic models nhưng đảm bảo 3.5-flash có trong list
                 merged = list(dict.fromkeys(dynamic_models + FALLBACK_MODELS))
                 available_models = merged
         except Exception:
             pass
 
-    # Model mặc định từ preferences
     saved_model = user_data["preferences"].get("model", DEFAULT_MODEL)
     
-    # Nếu model đã lưu không có trong danh sách, fallback về 3.5-flash
     if saved_model not in available_models:
         saved_model = DEFAULT_MODEL
         user_data["preferences"]["model"] = saved_model
@@ -934,7 +1076,7 @@ with st.sidebar:
                 st.rerun()
 
 # ==========================================
-# 12. GIAO DIỆN CHAT CHÍNH
+# 14. GIAO DIỆN CHAT CHÍNH
 # ==========================================
 st.markdown(f"<h1 class='main-header'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
 
@@ -962,9 +1104,13 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # ==========================================
-# 13. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
+# 15. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
 # ==========================================
-if user_prompt := st.chat_input(t("chat_placeholder", lang)):
+
+# --- Xử lý prompt đang chờ retry (từ lần trước bị 429) ---
+def _process_prompt(user_prompt, image_input_local):
+    """Logic xử lý prompt: gọi AI với failover, retry nếu 429."""
+    
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
@@ -986,7 +1132,7 @@ if user_prompt := st.chat_input(t("chat_placeholder", lang)):
         older_msgs = st.session_state.messages[:-6]
         try:
             chat_summary = generate_summary(
-                older_msgs, chat_summary, SECRET_API_KEYS[0], selected_model, lang
+                older_msgs, chat_summary, SECRET_API_KEYS, selected_model, lang
             )
             chat_data["summary"] = chat_summary
         except Exception:
@@ -997,8 +1143,29 @@ if user_prompt := st.chat_input(t("chat_placeholder", lang)):
         label = "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]" if lang == "vi" else "[SUMMARIZED HISTORY CONTEXT]"
         system_instruction += f"\n\n{label}: {chat_summary}"
 
-    response_text = ""
-    success = False
+    # Chuẩn bị input
+    content_inputs = []
+    if image_input_local:
+        content_inputs.append(image_input_local)
+    
+    recent_msgs = st.session_state.messages[-6:]
+    formatted_history = ""
+    for m in recent_msgs[:-1]:
+        r = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
+        formatted_history += f"{r}: {m['content']}\n"
+    
+    if formatted_history:
+        if lang == "vi":
+            full_prompt = f"Lịch sử hội thoại gần đây:\n{formatted_history}\nCâu hỏi mới: {user_prompt}"
+        else:
+            full_prompt = f"Recent conversation history:\n{formatted_history}\nNew question: {user_prompt}"
+    else:
+        full_prompt = user_prompt
+
+    content_inputs.append(full_prompt)
+
+    response_text = None
+    err_type = None
     
     with st.chat_message("assistant"):
         loading_placeholder = st.empty()
@@ -1009,74 +1176,73 @@ if user_prompt := st.chat_input(t("chat_placeholder", lang)):
         </div>
         """, unsafe_allow_html=True)
 
-        last_error = ""
-        for api_k in SECRET_API_KEYS:
-            try:
-                genai.configure(api_key=api_k)
-                model = genai.GenerativeModel(
-                    model_name=selected_model,
-                    system_instruction=system_instruction if system_instruction else None,
-                    generation_config={
-                        "temperature": temperature,
-                        "top_p": top_p,
-                        "top_k": top_k
-                    }
-                )
-
-                content_inputs = []
-                if image_input:
-                    content_inputs.append(image_input)
-                
-                recent_msgs = st.session_state.messages[-6:]
-                formatted_history = ""
-                for m in recent_msgs[:-1]:
-                    r = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
-                    formatted_history += f"{r}: {m['content']}\n"
-                
-                if formatted_history:
-                    if lang == "vi":
-                        full_prompt = f"Lịch sử hội thoại gần đây:\n{formatted_history}\nCâu hỏi mới: {user_prompt}"
-                    else:
-                        full_prompt = f"Recent conversation history:\n{formatted_history}\nNew question: {user_prompt}"
-                else:
-                    full_prompt = user_prompt
-
-                content_inputs.append(full_prompt)
-
-                res = model.generate_content(content_inputs)
-                response_text = res.text
-                success = True
-                break
-            except Exception as ex:
-                last_error = str(ex)
-                continue
+        # Gọi AI với failover im lặng
+        response_text, err_type = call_gemini_with_failover(
+            prompt_inputs=content_inputs,
+            api_keys=SECRET_API_KEYS,
+            preferred_model=selected_model,
+            system_instruction=system_instruction if system_instruction else None,
+            generation_config={
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k
+            },
+            lang=lang
+        )
 
         loading_placeholder.empty()
 
-        if success:
+        if response_text:
             st.markdown(response_text)
             st.session_state.messages.append({"role": "assistant", "content": response_text})
+        elif err_type == "rate_limit":
+            # Báo user và tự động retry sau 60s
+            st.session_state.pending_retry_prompt = user_prompt
+            st.session_state.pending_retry_image = image_input_local
+            
+            # Xóa tin nhắn user vừa thêm để khi retry không bị lặp
+            if (st.session_state.messages and 
+                st.session_state.messages[-1]["role"] == "user" and 
+                st.session_state.messages[-1]["content"] == user_prompt):
+                st.session_state.messages.pop()
+            
+            render_rate_limit_and_retry(lang)
         else:
-            error_msg = f"{t('ai_error', lang)} Error: {last_error[:150] if last_error else 'Unknown'}"
+            error_msg = f"{t('ai_error', lang)} Error: {str(err_type)[:150] if err_type else 'Unknown'}"
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-    if len(chat_data.get("messages", [])) == 0:
-        try:
-            new_title = generate_chat_title(user_prompt, SECRET_API_KEYS[0], selected_model, lang)
-            chat_data["title"] = new_title
-        except Exception:
-            chat_data["title"] = user_prompt[:30] + "..." if len(user_prompt) > 30 else user_prompt
+    # Chỉ lưu khi thành công
+    if response_text:
+        if len(chat_data.get("messages", [])) == 0:
+            try:
+                new_title = generate_chat_title(user_prompt, SECRET_API_KEYS, selected_model, lang)
+                chat_data["title"] = new_title
+            except Exception:
+                chat_data["title"] = user_prompt[:30] + "..." if len(user_prompt) > 30 else user_prompt
 
-    chat_data["messages"] = st.session_state.messages
-    chat_data["updated_at"] = datetime.now().isoformat()
-    user_chats[st.session_state.current_chat_id] = chat_data
-    user_data["chats"] = user_chats
-    db_data[st.session_state.user] = user_data
+        chat_data["messages"] = st.session_state.messages
+        chat_data["updated_at"] = datetime.now().isoformat()
+        user_chats[st.session_state.current_chat_id] = chat_data
+        user_data["chats"] = user_chats
+        db_data[st.session_state.user] = user_data
 
-    current_time = time.time()
-    if current_time - st.session_state.last_save_time > 1:
-        GitHubStorage.save_db(db_data)
-        st.session_state.last_save_time = current_time
-    
-    st.rerun()
+        current_time = time.time()
+        if current_time - st.session_state.last_save_time > 1:
+            GitHubStorage.save_db(db_data)
+            st.session_state.last_save_time = current_time
+        
+        st.rerun()
+
+
+# --- Xử lý retry prompt đang chờ (nếu có) ---
+if st.session_state.pending_retry_prompt:
+    pending = st.session_state.pending_retry_prompt
+    pending_img = st.session_state.pending_retry_image
+    st.session_state.pending_retry_prompt = None
+    st.session_state.pending_retry_image = None
+    _process_prompt(pending, pending_img)
+
+# --- Nhận prompt mới từ user ---
+elif user_prompt := st.chat_input(t("chat_placeholder", lang)):
+    _process_prompt(user_prompt, image_input)
