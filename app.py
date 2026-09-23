@@ -43,11 +43,37 @@ if not device_id:
     device_id = str(uuid.uuid4())
     cookies.set("LTTP_device_id", device_id, max_age=COOKIE_MAX_AGE)
 
-# Model mặc định
+# Model mặc định - TÊN CHÍNH THỨC (Gemini 3.5 Flash)
 DEFAULT_MODEL = "gemini-3.5-flash"
 
+# Danh sách model hợp lệ (fallback nếu API list_models fail)
+FALLBACK_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",       # Mặc định
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+]
+
+# Các model cũ cần migrate sang model mới
+LEGACY_MODEL_MAP = {
+    "gemini-2.5-flash": "gemini-3.5-flash",
+    "gemini-2.5-pro": "gemini-3.5-flash",
+    "gemini-2.0-flash": "gemini-3.5-flash",
+    "gemini-1.5-flash": "gemini-3.5-flash",
+    "gemini-1.5-pro": "gemini-3.5-flash",
+    "gemini-1.0-pro": "gemini-3.5-flash",
+    "gemini-pro": "gemini-3.5-flash",
+}
+
 # ==========================================
-# 2. CUSTOM CSS - HIỆU ỨNG ĐỒ HỌA & UI
+# 2. CUSTOM CSS
 # ==========================================
 st.markdown("""
 <style>
@@ -141,6 +167,14 @@ st.markdown("""
         background: rgba(239, 68, 68, 0.15);
         color: #ef4444;
     }
+    .migration-notice {
+        background: rgba(251, 191, 36, 0.1);
+        border: 1px solid rgba(251, 191, 36, 0.3);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 0.85rem;
+        color: #fbbf24;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -167,12 +201,110 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 # ==========================================
-# 4. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
+# 4. MIGRATION DỮ LIỆU CŨ (KHÔNG MẤT DỮ LIỆU)
+# ==========================================
+def migrate_user_data(db_data: dict) -> tuple[dict, bool]:
+    """
+    Migrate dữ liệu người dùng cũ sang format mới.
+    KHÔNG xóa bất kỳ dữ liệu nào - chỉ thêm trường mới và chuyển đổi model cũ.
+    Trả về (db_data, was_migrated)
+    """
+    migrated = False
+    
+    for username, uinfo in db_data.items():
+        if not isinstance(uinfo, dict):
+            continue
+        
+        # 1. Đảm bảo các trường cơ bản tồn tại
+        if "custom_instructions" not in uinfo:
+            uinfo["custom_instructions"] = ""
+            migrated = True
+        
+        if "chats" not in uinfo:
+            uinfo["chats"] = {}
+            migrated = True
+        
+        if "remembered_devices" not in uinfo:
+            uinfo["remembered_devices"] = []
+            migrated = True
+        
+        # 2. Thêm trường ngôn ngữ nếu chưa có (mặc định tiếng Anh)
+        if "language" not in uinfo:
+            uinfo["language"] = "en"
+            migrated = True
+        
+        # 3. Thêm preferences nếu chưa có
+        if "preferences" not in uinfo:
+            uinfo["preferences"] = {
+                "model": DEFAULT_MODEL,
+                "temperature": 0.7,
+                "top_p": 0.95,
+                "top_k": 40
+            }
+            migrated = True
+        else:
+            prefs = uinfo["preferences"]
+            if not isinstance(prefs, dict):
+                prefs = {}
+                uinfo["preferences"] = prefs
+                migrated = True
+            
+            # Đảm bảo các trường preferences tồn tại
+            if "model" not in prefs:
+                prefs["model"] = DEFAULT_MODEL
+                migrated = True
+            if "temperature" not in prefs:
+                prefs["temperature"] = 0.7
+                migrated = True
+            if "top_p" not in prefs:
+                prefs["top_p"] = 0.95
+                migrated = True
+            if "top_k" not in prefs:
+                prefs["top_k"] = 40
+                migrated = True
+            
+            # 4. Chuyển đổi model cũ sang model mới (Gemini 3.5 Flash)
+            old_model = prefs.get("model", "")
+            if old_model in LEGACY_MODEL_MAP:
+                prefs["model"] = LEGACY_MODEL_MAP[old_model]
+                migrated = True
+        
+        # 5. Đảm bảo tất cả chats đều có đủ trường
+        for cid, chat in uinfo.get("chats", {}).items():
+            if not isinstance(chat, dict):
+                continue
+            if "title" not in chat:
+                chat["title"] = "Conversation"
+                migrated = True
+            if "messages" not in chat:
+                chat["messages"] = []
+                migrated = True
+            if "summary" not in chat:
+                chat["summary"] = ""
+                migrated = True
+            if "created_at" not in chat:
+                chat["created_at"] = datetime.now().isoformat()
+                migrated = True
+            if "updated_at" not in chat:
+                chat["updated_at"] = chat.get("created_at", datetime.now().isoformat())
+                migrated = True
+        
+        # 6. Xóa trường api_keys cũ (không còn dùng vì lấy từ Secrets)
+        #    Nhưng KHÔNG xóa dữ liệu khác
+        if "api_keys" in uinfo:
+            del uinfo["api_keys"]
+            migrated = True
+    
+    return db_data, migrated
+
+# ==========================================
+# 5. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
 # ==========================================
 class GitHubStorage:
     _cache = None
     _cache_time = 0
     CACHE_DURATION = 5
+    _migration_checked = False
     
     @staticmethod
     def get_api_headers():
@@ -207,6 +339,18 @@ class GitHubStorage:
                 content_b64 = res.json().get("content", "")
                 decoded = base64.b64decode(content_b64.encode('utf-8')).decode('utf-8')
                 data = json.loads(decoded)
+                
+                # Chạy migration tự động (chỉ 1 lần mỗi session)
+                if not GitHubStorage._migration_checked:
+                    data, was_migrated = migrate_user_data(data)
+                    GitHubStorage._migration_checked = True
+                    if was_migrated:
+                        # Lưu lại dữ liệu đã migrate lên GitHub
+                        GitHubStorage._cache = data
+                        GitHubStorage._cache_time = time.time()
+                        GitHubStorage.save_db(data)
+                        st.toast("🔄 Dữ liệu đã được tự động nâng cấp lên Gemini 3.5 Flash!", icon="✨")
+                
                 GitHubStorage._cache = data
                 GitHubStorage._cache_time = time.time()
                 return data
@@ -264,7 +408,7 @@ class GitHubStorage:
             return False, f"Save error: {e}"
 
 # ==========================================
-# 5. HÀM XỬ LÝ AI (Đặt tên & Tóm tắt)
+# 6. HÀM XỬ LÝ AI
 # ==========================================
 def generate_chat_title(user_prompt: str, api_key: str, model_name: str, lang: str = "en") -> str:
     try:
@@ -329,7 +473,7 @@ def generate_summary(older_messages: list, existing_summary: str, api_key: str, 
         return " | ".join(parts)
 
 # ==========================================
-# 6. HỆ THỐNG ĐA NGÔN NGỮ (i18n)
+# 7. HỆ THỐNG ĐA NGÔN NGỮ (i18n)
 # ==========================================
 TRANSLATIONS = {
     "en": {
@@ -371,6 +515,8 @@ TRANSLATIONS = {
         "temperature": "Temperature (creativity):",
         "top_p": "Top P:",
         "top_k": "Top K:",
+        "save_params": "💾 Save Parameters",
+        "params_saved": "Parameters saved!",
         "chat_placeholder": "Ask LTTP AI anything...",
         "current_chat": "Currently in",
         "model_label": "Model",
@@ -384,7 +530,7 @@ TRANSLATIONS = {
         "device_id": "Device ID",
         "online": "Online",
         "language": "🌐 Language",
-        "settings": "Settings",
+        "migration_success": "🔄 Data automatically upgraded to Gemini 3.5 Flash!",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -425,6 +571,8 @@ TRANSLATIONS = {
         "temperature": "Temperature (Độ sáng tạo):",
         "top_p": "Top P:",
         "top_k": "Top K:",
+        "save_params": "💾 Lưu tham số",
+        "params_saved": "Đã lưu tham số!",
         "chat_placeholder": "Hỏi LTTP AI bất cứ điều gì...",
         "current_chat": "Đang trò chuyện trong",
         "model_label": "Mô hình",
@@ -438,16 +586,15 @@ TRANSLATIONS = {
         "device_id": "Device ID",
         "online": "Online",
         "language": "🌐 Ngôn ngữ",
-        "settings": "Cài đặt",
+        "migration_success": "🔄 Dữ liệu đã được tự động nâng cấp lên Gemini 3.5 Flash!",
     }
 }
 
 def t(key: str, lang: str = "en") -> str:
-    """Translation helper"""
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
 
 # ==========================================
-# 7. KHỞI TẠO SESSION STATE & DỮ LIỆU
+# 8. KHỞI TẠO SESSION STATE & DỮ LIỆU
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -460,9 +607,9 @@ if "db_data" not in st.session_state:
 if "last_save_time" not in st.session_state:
     st.session_state.last_save_time = 0
 if "language" not in st.session_state:
-    st.session_state.language = "en"  # Mặc định tiếng Anh
+    st.session_state.language = "en"
 
-# Tải dữ liệu từ GitHub
+# Tải dữ liệu từ GitHub (migration tự động chạy bên trong)
 db_data = GitHubStorage.load_db()
 st.session_state.db_data = db_data
 
@@ -472,18 +619,16 @@ if not st.session_state.user and device_id and db_data:
         remembered_devices = uinfo.get("remembered_devices", [])
         if device_id in remembered_devices:
             st.session_state.user = username
-            # Load ngôn ngữ đã lưu
             st.session_state.language = uinfo.get("language", "en")
             st.toast(f"{t('auto_login', st.session_state.language)} {username}", icon="⚡")
             break
 
 # ==========================================
-# 8. UI ĐĂNG NHẬP / ĐĂNG KÝ
+# 9. UI ĐĂNG NHẬP / ĐĂNG KÝ
 # ==========================================
 def render_auth_ui():
     lang = st.session_state.language
     
-    # Language selector trên cùng
     col_lang_left, col_lang_right = st.columns([5, 1])
     with col_lang_right:
         lang_choice = st.selectbox(
@@ -520,7 +665,6 @@ def render_auth_ui():
                         st.session_state.user = u_name
                         st.session_state.current_chat_id = None
                         st.session_state.messages = []
-                        # Load ngôn ngữ đã lưu của user
                         st.session_state.language = db[u_name].get("language", "en")
                         
                         if remember_me:
@@ -556,7 +700,7 @@ def render_auth_ui():
                                 "custom_instructions": "",
                                 "chats": {},
                                 "remembered_devices": [device_id],
-                                "language": "en",  # Mặc định tiếng Anh
+                                "language": "en",
                                 "preferences": {
                                     "model": DEFAULT_MODEL,
                                     "temperature": 0.7,
@@ -575,22 +719,19 @@ if not st.session_state.user:
     st.stop()
 
 # ==========================================
-# 9. TẢI DỮ LIỆU TÀI KHOẢN (CÁ NHÂN HÓA)
+# 10. TẢI DỮ LIỆU TÀI KHOẢN
 # ==========================================
 user_data = db_data.get(st.session_state.user, {})
 user_data.setdefault("custom_instructions", "")
 user_data.setdefault("chats", {})
 user_data.setdefault("remembered_devices", [])
 user_data.setdefault("language", "en")
-
-# Preferences (cá nhân hóa)
 user_data.setdefault("preferences", {})
 user_data["preferences"].setdefault("model", DEFAULT_MODEL)
 user_data["preferences"].setdefault("temperature", 0.7)
 user_data["preferences"].setdefault("top_p", 0.95)
 user_data["preferences"].setdefault("top_k", 40)
 
-# Load language từ user
 st.session_state.language = user_data.get("language", "en")
 lang = st.session_state.language
 
@@ -601,10 +742,9 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.messages = []
 
 # ==========================================
-# 10. SIDEBAR CHÍNH
+# 11. SIDEBAR CHÍNH
 # ==========================================
 with st.sidebar:
-    # Language selector
     lang_choice = st.selectbox(
         t("language", lang),
         ["en", "vi"],
@@ -641,13 +781,11 @@ with st.sidebar:
 
     st.divider()
 
-    # --- NÚT TẠO CHAT MỚI ---
     if st.button(t("new_chat_btn", lang), type="primary", use_container_width=True):
         st.session_state.current_chat_id = None
         st.session_state.messages = []
         st.rerun()
 
-    # --- DANH SÁCH CHAT ---
     st.subheader(t("chat_list", lang))
     if not user_chats:
         st.caption(t("no_chats", lang))
@@ -694,7 +832,6 @@ with st.sidebar:
 
     st.divider()
 
-    # --- QUẢN LÝ BỘ NHỚ CỐ ĐỊNH ---
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         memory_text = st.text_area(
@@ -714,11 +851,9 @@ with st.sidebar:
             else:
                 st.error(f"Error: {msg}")
 
-    # --- API KEYS INFO (từ Secrets) ---
     st.subheader(t("api_title", lang))
     st.caption(t("api_from_secrets", lang))
     
-    # Hiển thị trạng thái 2 API Keys
     for i, key in enumerate([API_KEY_1, API_KEY_2], start=1):
         if key:
             masked = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "••••••••"
@@ -734,17 +869,9 @@ with st.sidebar:
                 unsafe_allow_html=True
             )
 
-    # Danh sách model (hard-coded để tránh phụ thuộc API call, và mặc định 3.5 flash)
-    available_models = [
-        "gemini-2.5-flash",       # Mặc định
-        "gemini-2.5-pro",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-    ]
+    # Danh sách model
+    available_models = FALLBACK_MODELS.copy()
     
-    # Thử lấy danh sách động từ API nếu có key
     if SECRET_API_KEYS:
         try:
             genai.configure(api_key=SECRET_API_KEYS[0])
@@ -754,29 +881,33 @@ with st.sidebar:
                     name = m.name.replace("models/", "")
                     dynamic_models.append(name)
             if dynamic_models:
-                # Hợp nhất, ưu tiên dynamic
-                merged = list(dict.fromkeys(dynamic_models + available_models))
+                # Ưu tiên dynamic models nhưng đảm bảo 3.5-flash có trong list
+                merged = list(dict.fromkeys(dynamic_models + FALLBACK_MODELS))
                 available_models = merged
         except Exception:
             pass
 
     # Model mặc định từ preferences
     saved_model = user_data["preferences"].get("model", DEFAULT_MODEL)
+    
+    # Nếu model đã lưu không có trong danh sách, fallback về 3.5-flash
+    if saved_model not in available_models:
+        saved_model = DEFAULT_MODEL
+        user_data["preferences"]["model"] = saved_model
+        db_data[st.session_state.user] = user_data
+    
     try:
         model_index = available_models.index(saved_model)
     except ValueError:
         model_index = 0
-        user_data["preferences"]["model"] = available_models[0]
 
     selected_model = st.selectbox(t("model_select", lang), available_models, index=model_index)
     
-    # Lưu model nếu thay đổi
     if selected_model != user_data["preferences"].get("model"):
         user_data["preferences"]["model"] = selected_model
         db_data[st.session_state.user] = user_data
         GitHubStorage.save_db(db_data)
 
-    # --- THAM SỐ CẤU HÌNH SINH ---
     with st.expander(t("gen_config", lang), expanded=False):
         temperature = st.slider(
             t("temperature", lang), 0.0, 1.0, 
@@ -791,19 +922,19 @@ with st.sidebar:
             value=int(user_data["preferences"].get("top_k", 40))
         )
         
-        if st.button("💾 Save Parameters" if lang == "en" else "💾 Lưu tham số", use_container_width=True):
+        if st.button(t("save_params", lang), use_container_width=True):
             user_data["preferences"]["temperature"] = temperature
             user_data["preferences"]["top_p"] = top_p
             user_data["preferences"]["top_k"] = top_k
             db_data[st.session_state.user] = user_data
             ok, msg = GitHubStorage.save_db(db_data)
             if ok:
-                st.toast("Parameters saved!" if lang == "en" else "Đã lưu tham số!", icon="⚙️")
+                st.toast(t("params_saved", lang), icon="⚙️")
                 time.sleep(0.3)
                 st.rerun()
 
 # ==========================================
-# 11. GIAO DIỆN CHAT CHÍNH
+# 12. GIAO DIỆN CHAT CHÍNH
 # ==========================================
 st.markdown(f"<h1 class='main-header'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
 
@@ -817,7 +948,6 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id in user
 
 st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{selected_model}`")
 
-# Upload file
 uploaded_file = st.file_uploader(t("upload_image", lang), type=["png", "jpg", "jpeg", "webp"])
 image_input = None
 if uploaded_file:
@@ -827,21 +957,18 @@ if uploaded_file:
     except Exception:
         st.error(t("image_error", lang))
 
-# Hiển thị lịch sử tin nhắn
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ==========================================
-# 12. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
+# 13. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
 # ==========================================
 if user_prompt := st.chat_input(t("chat_placeholder", lang)):
-    # 1. Thêm tin nhắn người dùng
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
 
-    # 2. Khởi tạo Chat ID mới
     if not st.session_state.current_chat_id:
         st.session_state.current_chat_id = str(uuid.uuid4())
         user_chats[st.session_state.current_chat_id] = {
@@ -855,7 +982,6 @@ if user_prompt := st.chat_input(t("chat_placeholder", lang)):
     chat_data = user_chats[st.session_state.current_chat_id]
     chat_summary = chat_data.get("summary", "")
 
-    # 3. Tóm tắt nếu hội thoại dài
     if len(st.session_state.messages) > 10:
         older_msgs = st.session_state.messages[:-6]
         try:
@@ -866,13 +992,11 @@ if user_prompt := st.chat_input(t("chat_placeholder", lang)):
         except Exception:
             pass
 
-    # 4. System Instruction
     system_instruction = user_data.get("custom_instructions", "")
     if chat_summary:
         label = "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]" if lang == "vi" else "[SUMMARIZED HISTORY CONTEXT]"
         system_instruction += f"\n\n{label}: {chat_summary}"
 
-    # 5. Gọi AI (xoay vòng 2 key)
     response_text = ""
     success = False
     
@@ -937,7 +1061,6 @@ if user_prompt := st.chat_input(t("chat_placeholder", lang)):
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-    # 6. Tạo tiêu đề nếu là lượt đầu
     if len(chat_data.get("messages", [])) == 0:
         try:
             new_title = generate_chat_title(user_prompt, SECRET_API_KEYS[0], selected_model, lang)
@@ -945,7 +1068,6 @@ if user_prompt := st.chat_input(t("chat_placeholder", lang)):
         except Exception:
             chat_data["title"] = user_prompt[:30] + "..." if len(user_prompt) > 30 else user_prompt
 
-    # 7. Lưu lên GitHub
     chat_data["messages"] = st.session_state.messages
     chat_data["updated_at"] = datetime.now().isoformat()
     user_chats[st.session_state.current_chat_id] = chat_data
