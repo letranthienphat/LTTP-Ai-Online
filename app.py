@@ -7,7 +7,6 @@ import hashlib
 import requests
 import streamlit as st
 import google.generativeai as genai
-from PIL import Image
 from datetime import datetime
 from cryptography.fernet import Fernet
 from streamlit_cookies_controller import CookieController
@@ -46,7 +45,7 @@ if not device_id:
 # Model mặc định
 DEFAULT_MODEL = "gemini-3.5-flash"
 
-# Thứ tự ưu tiên model khi failover (dùng để tự động đổi model khi gặp 429)
+# Thứ tự ưu tiên model khi failover
 FAILOVER_MODEL_CHAIN = [
     "gemini-3.5-flash",
     "gemini-3.6-flash",
@@ -82,7 +81,7 @@ LEGACY_MODEL_MAP = {
 }
 
 # Cấu hình retry khi gặp 429
-RATE_LIMIT_RETRY_DELAY = 60  # giây
+RATE_LIMIT_RETRY_DELAY = 60
 
 # ==========================================
 # 2. CUSTOM CSS
@@ -190,6 +189,32 @@ st.markdown("""
     }
     .badge-ready { background: rgba(16, 185, 129, 0.15); color: #10b981; }
     .badge-missing { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+
+    /* =========================================================
+       Chú thích ngay PHÍA TRÊN thanh nhập chat_input
+       Dùng :has() để chèn ::before vào khối chứa chat_input
+       ========================================================= */
+    div[data-testid="stChatInput"]::before {
+        content: "⚠️ Lưu ý kiểm tra thông tin của A.I trước khi xác nhận thông tin";
+        display: block;
+        font-size: 0.82rem;
+        font-weight: 500;
+        color: #f59e0b;
+        text-align: center;
+        padding: 6px 10px 8px 10px;
+        background: rgba(251, 191, 36, 0.08);
+        border: 1px solid rgba(251, 191, 36, 0.25);
+        border-bottom: none;
+        border-radius: 10px 10px 0 0;
+        margin-bottom: -2px;
+        letter-spacing: 0.2px;
+        animation: fadeIn 0.4s ease-in-out;
+    }
+
+    /* Bản tiếng Anh — chỉ kích hoạt khi html có class lang-en */
+    html.lang-en div[data-testid="stChatInput"]::before {
+        content: "⚠️ Please verify A.I information before confirming any facts";
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -219,17 +244,11 @@ def hash_password(password: str) -> str:
 # 4. PHÁT HIỆN LỖI 429 / RATE LIMIT
 # ==========================================
 def is_rate_limit_error(error: Exception) -> bool:
-    """Kiểm tra lỗi có phải 429 / quota / rate limit không."""
     err_str = str(error).lower()
     keywords = [
-        "429",
-        "quota",
-        "rate limit",
-        "rate_limit",
-        "resource_exhausted",
-        "too many requests",
-        "exceeded",
-        "resource exhausted",
+        "429", "quota", "rate limit", "rate_limit",
+        "resource_exhausted", "too many requests",
+        "exceeded", "resource exhausted",
     ]
     return any(k in err_str for k in keywords)
 
@@ -237,10 +256,6 @@ def is_rate_limit_error(error: Exception) -> bool:
 # 5. HÀM GỌI GEMINI VỚI FAILOVER TỰ ĐỘNG
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
-    """
-    Tạo danh sách model để thử, ưu tiên model người dùng chọn trước,
-    sau đó mở rộng theo FAILOVER_MODEL_CHAIN.
-    """
     chain = [preferred_model]
     for m in FAILOVER_MODEL_CHAIN:
         if m not in chain:
@@ -254,23 +269,8 @@ def call_gemini_with_failover(
     preferred_model: str,
     system_instruction: str = None,
     generation_config: dict = None,
-    status_placeholder=None,
     lang: str = "en",
 ):
-    """
-    Gọi Gemini với cơ chế failover im lặng:
-      1. Thử model ưu tiên với từng API key.
-      2. Nếu gặp 429 → tự động chuyển sang model tiếp theo trong chain.
-      3. Nếu gặp lỗi khác (không phải 429) → cũng chuyển sang tổ hợp khác (im lặng).
-      4. Nếu TẤT CẢ tổ hợp đều thất bại vì 429 → trả về (None, "rate_limit").
-      5. Nếu tất cả thất bại vì lỗi khác → trả về (None, last_error).
-
-    Returns:
-        (response_text_or_None, error_type_or_message)
-        - success: ("...", None)
-        - rate limited: (None, "rate_limit")
-        - other error: (None, "<error message>")
-    """
     if not api_keys:
         return None, "no_api_keys"
 
@@ -292,7 +292,6 @@ def call_gemini_with_failover(
                 text = getattr(res, "text", None)
                 if text:
                     return text, None
-                # Nếu không có text (bị block) → coi như lỗi khác, thử tiếp
                 saw_other_error = True
                 last_error = "Empty response"
                 continue
@@ -300,27 +299,17 @@ def call_gemini_with_failover(
                 last_error = str(ex)
                 if is_rate_limit_error(ex):
                     saw_rate_limit = True
-                    # Im lặng chuyển sang tổ hợp tiếp theo
                     continue
                 else:
                     saw_other_error = True
-                    # Vẫn thử tổ hợp khác (im lặng)
                     continue
 
-    # Tất cả tổ hợp đều fail
-    if saw_rate_limit and not saw_other_error:
-        return None, "rate_limit"
-    if saw_rate_limit and saw_other_error:
-        # Ưu tiên thông báo rate limit nếu có
+    if saw_rate_limit:
         return None, "rate_limit"
     return None, last_error or "unknown_error"
 
 
 def render_rate_limit_and_retry(lang: str = "en"):
-    """
-    Hiển thị thông báo 'hệ thống đang nhận quá nhiều yêu cầu' với countdown 60s,
-    sau đó tự động retry (rerun).
-    """
     if lang == "vi":
         title = "⏳ Hệ thống đang nhận quá nhiều yêu cầu"
         subtitle = "Vui lòng thử lại sau. Hệ thống sẽ tự động gửi lại câu hỏi của bạn."
@@ -344,9 +333,7 @@ def render_rate_limit_and_retry(lang: str = "en"):
         time.sleep(1)
 
     box.empty()
-    # Tự động thử lại
     st.rerun()
-
 
 # ==========================================
 # 6. MIGRATION DỮ LIỆU CŨ (KHÔNG MẤT DỮ LIỆU)
@@ -535,7 +522,7 @@ class GitHubStorage:
             return False, f"Save error: {e}"
 
 # ==========================================
-# 8. HÀM XỬ LÝ AI PHỤ (ĐẶT TÊN & TÓM TẮT) - CÓ FAILOVER
+# 8. HÀM XỬ LÝ AI PHỤ (ĐẶT TÊN & TÓM TẮT)
 # ==========================================
 def generate_chat_title(user_prompt: str, api_keys: list, model_name: str, lang: str = "en") -> str:
     try:
@@ -601,7 +588,6 @@ def generate_summary(older_messages: list, existing_summary: str, api_keys: list
         )
         if text:
             return text.strip()
-        # Fallback nếu tất cả fail
         parts = [existing_summary] if existing_summary else []
         for m in older_messages[-10:]:
             r = "User" if m["role"] == "user" else "AI"
@@ -663,9 +649,6 @@ TRANSLATIONS = {
         "current_chat": "Currently in",
         "model_label": "Model",
         "new_chat": "New Conversation",
-        "upload_image": "📎 Attach image (optional):",
-        "image_caption": "Uploaded image",
-        "image_error": "❌ Could not read image file.",
         "no_api_key": "⚠️ No Gemini API Keys found in Secrets! Please add GEMINI_API_KEY_1 and GEMINI_API_KEY_2 to Streamlit Secrets.",
         "ai_thinking": "LTTP AI is thinking and composing a response...",
         "ai_error": "❌ Could not generate AI response.",
@@ -720,9 +703,6 @@ TRANSLATIONS = {
         "current_chat": "Đang trò chuyện trong",
         "model_label": "Mô hình",
         "new_chat": "Cuộc trò chuyện mới",
-        "upload_image": "📎 Đính kèm hình ảnh (tùy chọn):",
-        "image_caption": "Hình ảnh đã tải lên",
-        "image_error": "❌ Không thể đọc file hình ảnh.",
         "no_api_key": "⚠️ Không tìm thấy Gemini API Key trong Secrets! Vui lòng thêm GEMINI_API_KEY_1 và GEMINI_API_KEY_2 vào Streamlit Secrets.",
         "ai_thinking": "LTTP AI đang suy nghĩ và tổng hợp câu trả lời...",
         "ai_error": "❌ Không thể tạo phản hồi từ AI.",
@@ -754,8 +734,6 @@ if "language" not in st.session_state:
     st.session_state.language = "en"
 if "pending_retry_prompt" not in st.session_state:
     st.session_state.pending_retry_prompt = None
-if "pending_retry_image" not in st.session_state:
-    st.session_state.pending_retry_image = None
 
 db_data = GitHubStorage.load_db()
 st.session_state.db_data = db_data
@@ -1090,15 +1068,6 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id in user
 
 st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{selected_model}`")
 
-uploaded_file = st.file_uploader(t("upload_image", lang), type=["png", "jpg", "jpeg", "webp"])
-image_input = None
-if uploaded_file:
-    try:
-        image_input = Image.open(uploaded_file)
-        st.image(image_input, caption=t("image_caption", lang), width=250)
-    except Exception:
-        st.error(t("image_error", lang))
-
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -1106,9 +1075,7 @@ for msg in st.session_state.messages:
 # ==========================================
 # 15. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
 # ==========================================
-
-# --- Xử lý prompt đang chờ retry (từ lần trước bị 429) ---
-def _process_prompt(user_prompt, image_input_local):
+def _process_prompt(user_prompt):
     """Logic xử lý prompt: gọi AI với failover, retry nếu 429."""
     
     st.session_state.messages.append({"role": "user", "content": user_prompt})
@@ -1143,10 +1110,8 @@ def _process_prompt(user_prompt, image_input_local):
         label = "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]" if lang == "vi" else "[SUMMARIZED HISTORY CONTEXT]"
         system_instruction += f"\n\n{label}: {chat_summary}"
 
-    # Chuẩn bị input
+    # Chuẩn bị input (chỉ text, không có ảnh)
     content_inputs = []
-    if image_input_local:
-        content_inputs.append(image_input_local)
     
     recent_msgs = st.session_state.messages[-6:]
     formatted_history = ""
@@ -1176,7 +1141,6 @@ def _process_prompt(user_prompt, image_input_local):
         </div>
         """, unsafe_allow_html=True)
 
-        # Gọi AI với failover im lặng
         response_text, err_type = call_gemini_with_failover(
             prompt_inputs=content_inputs,
             api_keys=SECRET_API_KEYS,
@@ -1196,11 +1160,8 @@ def _process_prompt(user_prompt, image_input_local):
             st.markdown(response_text)
             st.session_state.messages.append({"role": "assistant", "content": response_text})
         elif err_type == "rate_limit":
-            # Báo user và tự động retry sau 60s
             st.session_state.pending_retry_prompt = user_prompt
-            st.session_state.pending_retry_image = image_input_local
             
-            # Xóa tin nhắn user vừa thêm để khi retry không bị lặp
             if (st.session_state.messages and 
                 st.session_state.messages[-1]["role"] == "user" and 
                 st.session_state.messages[-1]["content"] == user_prompt):
@@ -1212,7 +1173,6 @@ def _process_prompt(user_prompt, image_input_local):
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-    # Chỉ lưu khi thành công
     if response_text:
         if len(chat_data.get("messages", [])) == 0:
             try:
@@ -1238,11 +1198,9 @@ def _process_prompt(user_prompt, image_input_local):
 # --- Xử lý retry prompt đang chờ (nếu có) ---
 if st.session_state.pending_retry_prompt:
     pending = st.session_state.pending_retry_prompt
-    pending_img = st.session_state.pending_retry_image
     st.session_state.pending_retry_prompt = None
-    st.session_state.pending_retry_image = None
-    _process_prompt(pending, pending_img)
+    _process_prompt(pending)
 
 # --- Nhận prompt mới từ user ---
 elif user_prompt := st.chat_input(t("chat_placeholder", lang)):
-    _process_prompt(user_prompt, image_input)
+    _process_prompt(user_prompt)
