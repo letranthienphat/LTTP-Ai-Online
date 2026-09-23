@@ -29,7 +29,6 @@ MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "LTTPAI_Master_Secret_Key_20
 FERNET_KEY = base64.urlsafe_b64encode(hashlib.sha256(MASTER_SECRET.encode()).digest())
 cipher = Fernet(FERNET_KEY)
 
-# Lấy 2 API Key từ Secrets
 API_KEY_1 = st.secrets.get("GEMINI_API_KEY_1", "").strip()
 API_KEY_2 = st.secrets.get("GEMINI_API_KEY_2", "").strip()
 SECRET_API_KEYS = [k for k in [API_KEY_1, API_KEY_2] if k]
@@ -42,10 +41,8 @@ if not device_id:
     device_id = str(uuid.uuid4())
     cookies.set("LTTP_device_id", device_id, max_age=COOKIE_MAX_AGE)
 
-# Model mặc định
 DEFAULT_MODEL = "gemini-3.5-flash"
 
-# Thứ tự ưu tiên model khi failover
 FAILOVER_MODEL_CHAIN = [
     "gemini-3.5-flash",
     "gemini-3.6-flash",
@@ -80,8 +77,13 @@ LEGACY_MODEL_MAP = {
     "gemini-pro": "gemini-3.5-flash",
 }
 
-# Cấu hình retry khi gặp 429
 RATE_LIMIT_RETRY_DELAY = 60
+
+# Câu chú thích ở cuối mỗi phản hồi AI
+DISCLAIMER = {
+    "vi": "_Lưu ý kiểm tra thông tin của A.I trước khi xác nhận thông tin._",
+    "en": "_Please verify A.I information before confirming any facts._",
+}
 
 # ==========================================
 # 2. CUSTOM CSS
@@ -190,30 +192,15 @@ st.markdown("""
     .badge-ready { background: rgba(16, 185, 129, 0.15); color: #10b981; }
     .badge-missing { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
 
-    /* =========================================================
-       Chú thích ngay PHÍA TRÊN thanh nhập chat_input
-       Dùng :has() để chèn ::before vào khối chứa chat_input
-       ========================================================= */
-    div[data-testid="stChatInput"]::before {
-        content: "⚠️ Lưu ý kiểm tra thông tin của A.I trước khi xác nhận thông tin";
-        display: block;
-        font-size: 0.82rem;
-        font-weight: 500;
-        color: #f59e0b;
-        text-align: center;
-        padding: 6px 10px 8px 10px;
-        background: rgba(251, 191, 36, 0.08);
-        border: 1px solid rgba(251, 191, 36, 0.25);
-        border-bottom: none;
-        border-radius: 10px 10px 0 0;
-        margin-bottom: -2px;
-        letter-spacing: 0.2px;
-        animation: fadeIn 0.4s ease-in-out;
-    }
-
-    /* Bản tiếng Anh — chỉ kích hoạt khi html có class lang-en */
-    html.lang-en div[data-testid="stChatInput"]::before {
-        content: "⚠️ Please verify A.I information before confirming any facts";
+    /* Chú thích cuối phản hồi AI - chữ nhỏ, in nghiêng */
+    .ai-disclaimer {
+        font-size: 0.78rem;
+        font-style: italic;
+        color: rgba(148, 163, 184, 0.85);
+        margin-top: 6px;
+        padding-top: 6px;
+        border-top: 1px dashed rgba(148, 163, 184, 0.25);
+        letter-spacing: 0.1px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -336,7 +323,7 @@ def render_rate_limit_and_retry(lang: str = "en"):
     st.rerun()
 
 # ==========================================
-# 6. MIGRATION DỮ LIỆU CŨ (KHÔNG MẤT DỮ LIỆU)
+# 6. MIGRATION DỮ LIỆU CŨ
 # ==========================================
 def migrate_user_data(db_data: dict) -> tuple:
     migrated = False
@@ -416,7 +403,7 @@ def migrate_user_data(db_data: dict) -> tuple:
     return db_data, migrated
 
 # ==========================================
-# 7. QUẢN LÝ DỮ LIỆU ĐỒNG BỘ GITHUB API
+# 7. GITHUB STORAGE
 # ==========================================
 class GitHubStorage:
     _cache = None
@@ -522,7 +509,7 @@ class GitHubStorage:
             return False, f"Save error: {e}"
 
 # ==========================================
-# 8. HÀM XỬ LÝ AI PHỤ (ĐẶT TÊN & TÓM TẮT)
+# 8. HÀM AI PHỤ (ĐẶT TÊN & TÓM TẮT)
 # ==========================================
 def generate_chat_title(user_prompt: str, api_keys: list, model_name: str, lang: str = "en") -> str:
     try:
@@ -601,7 +588,7 @@ def generate_summary(older_messages: list, existing_summary: str, api_keys: list
         return " | ".join(parts)
 
 # ==========================================
-# 9. HỆ THỐNG ĐA NGÔN NGỮ (i18n)
+# 9. i18n
 # ==========================================
 TRANSLATIONS = {
     "en": {
@@ -652,8 +639,6 @@ TRANSLATIONS = {
         "no_api_key": "⚠️ No Gemini API Keys found in Secrets! Please add GEMINI_API_KEY_1 and GEMINI_API_KEY_2 to Streamlit Secrets.",
         "ai_thinking": "LTTP AI is thinking and composing a response...",
         "ai_error": "❌ Could not generate AI response.",
-        "rate_limit_title": "⏳ System is receiving too many requests",
-        "rate_limit_subtitle": "Please try again later. Your question will be automatically retried.",
         "device_id": "Device ID",
         "online": "Online",
         "language": "🌐 Language",
@@ -706,8 +691,6 @@ TRANSLATIONS = {
         "no_api_key": "⚠️ Không tìm thấy Gemini API Key trong Secrets! Vui lòng thêm GEMINI_API_KEY_1 và GEMINI_API_KEY_2 vào Streamlit Secrets.",
         "ai_thinking": "LTTP AI đang suy nghĩ và tổng hợp câu trả lời...",
         "ai_error": "❌ Không thể tạo phản hồi từ AI.",
-        "rate_limit_title": "⏳ Hệ thống đang nhận quá nhiều yêu cầu",
-        "rate_limit_subtitle": "Vui lòng thử lại sau. Hệ thống sẽ tự động gửi lại câu hỏi của bạn.",
         "device_id": "Device ID",
         "online": "Online",
         "language": "🌐 Ngôn ngữ",
@@ -718,7 +701,7 @@ def t(key: str, lang: str = "en") -> str:
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
 
 # ==========================================
-# 10. KHỞI TẠO SESSION STATE & DỮ LIỆU
+# 10. SESSION STATE
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -748,7 +731,7 @@ if not st.session_state.user and device_id and db_data:
             break
 
 # ==========================================
-# 11. UI ĐĂNG NHẬP / ĐĂNG KÝ
+# 11. AUTH UI
 # ==========================================
 def render_auth_ui():
     lang = st.session_state.language
@@ -866,7 +849,7 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.messages = []
 
 # ==========================================
-# 13. SIDEBAR CHÍNH
+# 13. SIDEBAR
 # ==========================================
 with st.sidebar:
     lang_choice = st.selectbox(
@@ -1054,7 +1037,7 @@ with st.sidebar:
                 st.rerun()
 
 # ==========================================
-# 14. GIAO DIỆN CHAT CHÍNH
+# 14. MAIN CHAT UI
 # ==========================================
 st.markdown(f"<h1 class='main-header'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
 
@@ -1068,16 +1051,21 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id in user
 
 st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{selected_model}`")
 
+# Hiển thị lịch sử tin nhắn
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        # Thêm disclaimer dưới mỗi tin nhắn assistant
+        if msg["role"] == "assistant":
+            st.markdown(
+                f'<div class="ai-disclaimer">{DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>',
+                unsafe_allow_html=True
+            )
 
 # ==========================================
-# 15. XỬ LÝ NHẬP LIỆU VÀ PHẢN HỒI AI
+# 15. XỬ LÝ PROMPT VÀ PHẢN HỒI AI
 # ==========================================
 def _process_prompt(user_prompt):
-    """Logic xử lý prompt: gọi AI với failover, retry nếu 429."""
-    
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
@@ -1110,7 +1098,6 @@ def _process_prompt(user_prompt):
         label = "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]" if lang == "vi" else "[SUMMARIZED HISTORY CONTEXT]"
         system_instruction += f"\n\n{label}: {chat_summary}"
 
-    # Chuẩn bị input (chỉ text, không có ảnh)
     content_inputs = []
     
     recent_msgs = st.session_state.messages[-6:]
@@ -1158,6 +1145,11 @@ def _process_prompt(user_prompt):
 
         if response_text:
             st.markdown(response_text)
+            # Chú thích cuối phản hồi AI - chữ nhỏ in nghiêng
+            st.markdown(
+                f'<div class="ai-disclaimer">{DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>',
+                unsafe_allow_html=True
+            )
             st.session_state.messages.append({"role": "assistant", "content": response_text})
         elif err_type == "rate_limit":
             st.session_state.pending_retry_prompt = user_prompt
@@ -1195,12 +1187,10 @@ def _process_prompt(user_prompt):
         st.rerun()
 
 
-# --- Xử lý retry prompt đang chờ (nếu có) ---
 if st.session_state.pending_retry_prompt:
     pending = st.session_state.pending_retry_prompt
     st.session_state.pending_retry_prompt = None
     _process_prompt(pending)
 
-# --- Nhận prompt mới từ user ---
 elif user_prompt := st.chat_input(t("chat_placeholder", lang)):
     _process_prompt(user_prompt)
