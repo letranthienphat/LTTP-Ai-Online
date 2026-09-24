@@ -20,20 +20,21 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
 
 SYSTEM_CONFIG_KEY = "__system_config__"
 TRAFFIC_LOG_KEY = "__traffic_log__"
-TRAFFIC_RETENTION_DAYS = 30  # Giữ log 30 ngày
+TRAFFIC_RETENTION_DAYS = 30
 
-# Múi giờ Việt Nam GMT+7
 VN_TZ_OFFSET = timedelta(hours=7)
 
+# Khoảng thời gian scan version (giây)
+VERSION_SCAN_INTERVAL = 60
+
 def vn_now() -> datetime:
-    """Trả về thời gian hiện tại theo giờ VN (GMT+7), không phụ thuộc server timezone."""
     return datetime.utcnow() + VN_TZ_OFFSET
 
 # ==========================================
@@ -98,6 +99,22 @@ DISCLAIMER = {
 UPDATE_NOTICE = {
     "vi": "🔄 Phần mềm vừa được cập nhật",
     "en": "🔄 Software just got updated",
+}
+
+# Banner yêu cầu reboot khi phát hiện version mới
+REBOOT_NOTICE = {
+    "vi": {
+        "title": "🚀 Đã có phiên bản mới!",
+        "desc": "Vui lòng tải lại trang (F5 hoặc Ctrl+R) để cập nhật lên phiên bản mới nhất.",
+        "button": "Tải lại ngay",
+        "later": "Để sau",
+    },
+    "en": {
+        "title": "🚀 New version available!",
+        "desc": "Please reload the page (F5 or Ctrl+R) to update to the latest version.",
+        "button": "Reload now",
+        "later": "Later",
+    },
 }
 
 # ==========================================
@@ -182,6 +199,34 @@ st.markdown("""
         font-weight: 600; color: #667eea;
         text-align: center; margin-bottom: 10px;
     }
+
+    /* Banner yêu cầu reboot */
+    .reboot-banner {
+        position: sticky;
+        top: 0;
+        z-index: 9999;
+        padding: 14px 20px;
+        background: linear-gradient(90deg, #f59e0b, #f97316);
+        color: #fff;
+        border-radius: 12px;
+        margin-bottom: 14px;
+        box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35);
+        animation: rebootPulse 2s ease-in-out infinite;
+    }
+    .reboot-banner-title {
+        font-size: 1.05rem; font-weight: 800;
+        margin-bottom: 4px;
+        display: flex; align-items: center; gap: 8px;
+    }
+    .reboot-banner-desc {
+        font-size: 0.9rem; opacity: 0.95;
+        margin-bottom: 10px;
+    }
+    @keyframes rebootPulse {
+        0%, 100% { box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35); }
+        50% { box-shadow: 0 4px 24px rgba(249, 115, 22, 0.65); }
+    }
+
     .maintenance-banner {
         padding: 18px 22px;
         background: linear-gradient(90deg, rgba(239, 68, 68, 0.15), rgba(220, 38, 38, 0.1));
@@ -203,10 +248,6 @@ st.markdown("""
         background: rgba(251, 191, 36, 0.05);
         border: 1px solid rgba(251, 191, 36, 0.25);
         border-radius: 12px; margin-bottom: 16px;
-    }
-    .admin-title {
-        font-size: 1.3rem; font-weight: 800;
-        color: #fbbf24; margin-bottom: 8px;
     }
     .stat-card {
         padding: 14px 18px;
@@ -285,7 +326,151 @@ def mask_device(did: str) -> str:
     return f"{did[:6]}...{did[-4:]}"
 
 # ==========================================
-# 4. LỖI 429
+# 4. VERSION CHECK (PHÁT HIỆN PHIÊN BẢN MỚI)
+# ==========================================
+def _init_version_cookie():
+    """
+    Khởi tạo cookie version nếu chưa có.
+    Đây là 'mã hiện tại' mà trình duyệt đang chạy.
+    """
+    try:
+        cached_ver = cookies.get("LTTP_app_version")
+        if not cached_ver:
+            # Lần đầu vào → ghi version hiện tại
+            cookies.set("LTTP_app_version", APP_VERSION, max_age=COOKIE_MAX_AGE)
+            st.session_state.version_mismatch = False
+        else:
+            # So sánh version
+            if cached_ver != APP_VERSION:
+                st.session_state.version_mismatch = True
+            else:
+                st.session_state.version_mismatch = False
+    except Exception:
+        st.session_state.version_mismatch = False
+
+
+def _background_version_scanner():
+    """
+    Chèn JS chạy ngầm mỗi 60s để tự động kiểm tra version.
+    - Không gọi API, không rerun app.
+    - Chỉ so sánh APP_VERSION (đã nhúng vào JS) với cookie LTTP_app_version.
+    - Nếu khác → tự động F5 trang? KHÔNG. Chỉ hiển thị banner.
+    - Trên thực tế: khi user F5 tay, cookie sẽ được cập nhật lại.
+    
+    Lưu ý: JS không đọc được cookie HttpOnly (Streamlit cookie controller 
+    thường không HttpOnly). Nếu đọc được, so sánh và gọi location.reload() 
+    nếu đã có sẵn banner (tức là user đã nhấn 1 lần).
+    """
+    scanner_html = f"""
+    <div id="lttp-version-scanner" style="display:none;"></div>
+    <script>
+    (function() {{
+        const CURRENT_VERSION = "{APP_VERSION}";
+        const SCAN_INTERVAL_MS = {VERSION_SCAN_INTERVAL * 1000};
+        const COOKIE_NAME = "LTTP_app_version";
+        
+        function getCookie(name) {{
+            const value = `; ${{document.cookie}}`;
+            const parts = value.split(`; ${{name}}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+            return null;
+        }}
+        
+        function checkVersion() {{
+            try {{
+                const cached = getCookie(COOKIE_NAME);
+                if (cached && cached !== CURRENT_VERSION) {{
+                    // Có version mới → báo cho Python bằng cách set 1 cookie phụ
+                    document.cookie = "LTTP_version_changed=1; path=/; max-age=3600";
+                    // Thêm banner nếu chưa có
+                    if (!document.getElementById('lttp-reboot-banner-injected')) {{
+                        const banner = document.createElement('div');
+                        banner.id = 'lttp-reboot-banner-injected';
+                        banner.style.cssText = `
+                            position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+                            z-index: 999999; padding: 14px 24px;
+                            background: linear-gradient(90deg, #f59e0b, #f97316);
+                            color: white; border-radius: 12px;
+                            box-shadow: 0 6px 24px rgba(249,115,22,0.55);
+                            font-family: sans-serif; max-width: 90vw;
+                            animation: lttpPulse 2s ease-in-out infinite;
+                        `;
+                        banner.innerHTML = `
+                            <div style="font-weight:800; font-size:1.05rem; margin-bottom:4px;">
+                                🚀 Đã có phiên bản mới!
+                            </div>
+                            <div style="font-size:0.9rem; margin-bottom:10px; opacity:0.95;">
+                                Vui lòng tải lại trang (F5 hoặc Ctrl+R) để cập nhật.
+                            </div>
+                            <button onclick="location.reload()" style="
+                                background: white; color: #f97316;
+                                border: none; padding: 8px 20px;
+                                border-radius: 8px; font-weight: 700;
+                                cursor: pointer; font-size: 0.9rem;
+                            ">Tải lại ngay</button>
+                        `;
+                        document.body.appendChild(banner);
+                        
+                        // Thêm keyframes
+                        if (!document.getElementById('lttp-keyframes')) {{
+                            const style = document.createElement('style');
+                            style.id = 'lttp-keyframes';
+                            style.textContent = `
+                                @keyframes lttpPulse {{
+                                    0%, 100% {{ box-shadow: 0 6px 24px rgba(249,115,22,0.55); }}
+                                    50% {{ box-shadow: 0 6px 32px rgba(249,115,22,0.85); }}
+                                }}
+                            `;
+                            document.head.appendChild(style);
+                        }}
+                    }}
+                }}
+            }} catch (e) {{
+                // Silent fail
+            }}
+        }}
+        
+        // Scan lần đầu sau 3s (để UI load xong)
+        setTimeout(checkVersion, 3000);
+        // Scan định kỳ
+        setInterval(checkVersion, SCAN_INTERVAL_MS);
+    }})();
+    </script>
+    """
+    st.markdown(scanner_html, unsafe_allow_html=True)
+
+
+def render_reboot_banner_if_needed():
+    """Hiện banner yêu cầu reboot nếu phát hiện version mismatch (fallback phía Python)."""
+    if not st.session_state.get("version_mismatch", False):
+        return
+    if st.session_state.get("reboot_banner_dismissed", False):
+        return
+
+    lang = st.session_state.get("language", "en")
+    notice = REBOOT_NOTICE.get(lang, REBOOT_NOTICE["en"])
+
+    st.markdown(f"""
+    <div class="reboot-banner">
+        <div class="reboot-banner-title">🚀 {notice['title']}</div>
+        <div class="reboot-banner-desc">{notice['desc']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        # Nút tải lại = reload trang qua JS
+        if st.button(f"🔄 {notice['button']}", use_container_width=True, key="reboot_now_btn"):
+            st.markdown("""
+            <script>location.reload();</script>
+            """, unsafe_allow_html=True)
+    with col2:
+        if st.button(f"⏸️ {notice['later']}", use_container_width=True, key="reboot_later_btn"):
+            st.session_state.reboot_banner_dismissed = True
+            st.rerun()
+
+# ==========================================
+# 5. LỖI 429
 # ==========================================
 def is_rate_limit_error(error: Exception) -> bool:
     if google_exceptions is not None:
@@ -314,7 +499,7 @@ def is_rate_limit_error(error: Exception) -> bool:
     return any(k in err_str for k in keywords)
 
 # ==========================================
-# 5. GỌI GEMINI VỚI FAILOVER
+# 6. GỌI GEMINI VỚI FAILOVER
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -391,12 +576,11 @@ def render_rate_limit_and_retry(lang="en"):
     st.rerun()
 
 # ==========================================
-# 6. MIGRATION DỮ LIỆU
+# 7. MIGRATION
 # ==========================================
 def migrate_user_data(db_data: dict) -> tuple:
     migrated = False
 
-    # System config
     if SYSTEM_CONFIG_KEY not in db_data:
         db_data[SYSTEM_CONFIG_KEY] = {
             "maintenance_mode": False,
@@ -414,39 +598,26 @@ def migrate_user_data(db_data: dict) -> tuple:
             }
             migrated = True
         else:
-            if "maintenance_mode" not in cfg:
-                cfg["maintenance_mode"] = False
-                migrated = True
-            if "whitelist_users" not in cfg:
-                cfg["whitelist_users"] = []
-                migrated = True
-            if "maintenance_note" not in cfg:
-                cfg["maintenance_note"] = ""
-                migrated = True
+            for k, dv in [("maintenance_mode", False), ("whitelist_users", []),
+                          ("maintenance_note", "")]:
+                if k not in cfg:
+                    cfg[k] = dv
+                    migrated = True
 
-    # Traffic log
     if TRAFFIC_LOG_KEY not in db_data:
         db_data[TRAFFIC_LOG_KEY] = {}
         migrated = True
 
-    # Users
     for username, uinfo in db_data.items():
         if username in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY):
             continue
         if not isinstance(uinfo, dict):
             continue
-        if "custom_instructions" not in uinfo:
-            uinfo["custom_instructions"] = ""
-            migrated = True
-        if "chats" not in uinfo:
-            uinfo["chats"] = {}
-            migrated = True
-        if "remembered_devices" not in uinfo:
-            uinfo["remembered_devices"] = []
-            migrated = True
-        if "language" not in uinfo:
-            uinfo["language"] = "en"
-            migrated = True
+        for k, dv in [("custom_instructions", ""), ("chats", {}),
+                      ("remembered_devices", []), ("language", "en")]:
+            if k not in uinfo:
+                uinfo[k] = dv
+                migrated = True
         if "preferences" not in uinfo:
             uinfo["preferences"] = {
                 "model": DEFAULT_MODEL, "temperature": 0.7,
@@ -491,7 +662,7 @@ def migrate_user_data(db_data: dict) -> tuple:
     return db_data, migrated
 
 # ==========================================
-# 7. TRAFFIC LOG HELPERS
+# 8. TRAFFIC HELPERS
 # ==========================================
 def _today_vn_str() -> str:
     return vn_now().strftime("%Y-%m-%d")
@@ -500,40 +671,27 @@ def _now_vn_iso() -> str:
     return vn_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def _prune_traffic_log(traffic: dict) -> dict:
-    """Chỉ giữ TRAFFIC_RETENTION_DAYS ngày gần nhất."""
     if not isinstance(traffic, dict):
         return {}
     cutoff = vn_now() - timedelta(days=TRAFFIC_RETENTION_DAYS)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
-    pruned = {k: v for k, v in traffic.items() if k >= cutoff_str}
-    return pruned
+    return {k: v for k, v in traffic.items() if k >= cutoff_str}
 
 def record_traffic(db_data: dict, user_label: str, role: str) -> bool:
-    """
-    Ghi 1 lượt truy cập.
-    - user_label: username / "guest" / "admin"
-    - role: "user" / "guest" / "admin"
-    Chống trùng: mỗi (device_id, ngày) chỉ ghi tối đa 1 lần cho user/guest.
-    Admin: luôn ghi (ít khi vào).
-    Trả về True nếu có ghi mới.
-    """
     traffic = db_data.get(TRAFFIC_LOG_KEY, {})
     if not isinstance(traffic, dict):
         traffic = {}
-
     today = _today_vn_str()
     if today not in traffic:
         traffic[today] = {"visits": []}
-
     day_data = traffic[today]
     if "visits" not in day_data:
         day_data["visits"] = []
 
-    # Chống trùng cho user/guest: 1 lần/ngày/device
     if role in ("user", "guest"):
         for v in day_data["visits"]:
             if v.get("device") == device_id and v.get("role") == role:
-                return False  # đã ghi hôm nay
+                return False
 
     day_data["visits"].append({
         "time": _now_vn_iso(),
@@ -542,13 +700,11 @@ def record_traffic(db_data: dict, user_label: str, role: str) -> bool:
         "device": device_id,
     })
     traffic[today] = day_data
-
-    # Prune
     db_data[TRAFFIC_LOG_KEY] = _prune_traffic_log(traffic)
     return True
 
 # ==========================================
-# 8. GITHUB STORAGE
+# 9. GITHUB STORAGE
 # ==========================================
 class GitHubStorage:
     _cache = None
@@ -656,7 +812,7 @@ class GitHubStorage:
             return False, f"Save error: {e}"
 
 # ==========================================
-# 9. HÀM AI PHỤ
+# 10. HÀM AI PHỤ
 # ==========================================
 def generate_chat_title(user_prompt, api_keys, model_name, lang="en"):
     try:
@@ -714,7 +870,7 @@ def generate_summary(older_messages, existing_summary, api_keys, model_name, lan
         return " | ".join(parts)
 
 # ==========================================
-# 10. i18n
+# 11. i18n
 # ==========================================
 TRANSLATIONS = {
     "en": {
@@ -877,14 +1033,16 @@ def t(key: str, lang: str = "en") -> str:
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
 
 # ==========================================
-# 11. SESSION STATE
+# 12. SESSION STATE
 # ==========================================
 for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
               ("current_chat_id", None), ("messages", []), ("db_data", {}),
               ("last_save_time", 0), ("language", "en"),
               ("pending_retry_prompt", None), ("seen_version", None),
               ("guest_chats", {}), ("guest_memory", ""),
-              ("traffic_recorded", False)]:
+              ("traffic_recorded", False),
+              ("version_mismatch", False),
+              ("reboot_banner_dismissed", False)]:
     if k not in st.session_state:
         st.session_state[k] = dv
 
@@ -893,6 +1051,13 @@ if "guest_prefs" not in st.session_state:
         "model": DEFAULT_MODEL, "temperature": 0.7,
         "top_p": 0.95, "top_k": 40
     }
+
+# === VERSION CHECK ===
+# Khởi tạo cookie + check mismatch
+_init_version_cookie()
+
+# Chèn background scanner (JS)
+_background_version_scanner()
 
 _seen_ver = cookies.get("LTTP_seen_version")
 if _seen_ver:
@@ -909,7 +1074,7 @@ maintenance_note = system_config.get("maintenance_note", "").strip()
 whitelist_users = [u.strip().lower() for u in system_config.get("whitelist_users", []) if u.strip()]
 
 # ==========================================
-# 12. AUTO-LOGIN (KHÔNG ÁP DỤNG ADMIN)
+# 13. AUTO-LOGIN
 # ==========================================
 if (not st.session_state.user
         and not st.session_state.is_admin
@@ -920,29 +1085,25 @@ if (not st.session_state.user
             continue
         if not isinstance(uinfo, dict):
             continue
-        remembered = uinfo.get("remembered_devices", [])
-        if device_id in remembered:
+        if device_id in uinfo.get("remembered_devices", []):
             st.session_state.user = username
             st.session_state.language = uinfo.get("language", "en")
             st.toast(f"{t('auto_login', st.session_state.language)} {username}", icon="⚡")
             break
 
 # ==========================================
-# 13. RECORD TRAFFIC (CHỈ 1 LẦN/PHIÊN)
+# 14. RECORD TRAFFIC
 # ==========================================
 def _try_record_traffic_once():
-    """Ghi traffic 1 lần cho user/guest đã xác định danh tính."""
     if st.session_state.traffic_recorded:
         return
-    role = None
-    label = None
+    role = label = None
     if st.session_state.is_admin:
         role, label = "admin", "Admin"
     elif st.session_state.user:
         role, label = "user", st.session_state.user
     elif st.session_state.is_guest:
         role, label = "guest", "guest"
-
     if role:
         db = GitHubStorage.load_db()
         if record_traffic(db, label, role):
@@ -952,7 +1113,7 @@ def _try_record_traffic_once():
 _try_record_traffic_once()
 
 # ==========================================
-# 14. UPDATE NOTICE
+# 15. UPDATE NOTICE
 # ==========================================
 def _show_update_notice_if_needed():
     current_lang = st.session_state.language
@@ -968,11 +1129,12 @@ def _show_update_notice_if_needed():
         )
 
 # ==========================================
-# 15. AUTH UI
+# 16. AUTH UI
 # ==========================================
 def render_auth_ui():
     lang = st.session_state.language
     _show_update_notice_if_needed()
+    render_reboot_banner_if_needed()
 
     col_lang_left, col_lang_right = st.columns([5, 1])
     with col_lang_right:
@@ -997,7 +1159,6 @@ def render_auth_ui():
                 u_name = st.text_input(t("username", lang)).strip()
                 u_pass = st.text_input(t("password", lang), type="password")
                 remember_me = st.checkbox(t("remember_device", lang), value=True)
-
                 if st.form_submit_button(t("login_btn", lang), use_container_width=True):
                     if u_name == ADMIN_USERNAME and u_pass == ADMIN_PASSWORD:
                         st.session_state.is_admin = True
@@ -1085,10 +1246,9 @@ def render_auth_ui():
             st.rerun()
 
 # ==========================================
-# 16. ADMIN PANEL
+# 17. TRAFFIC ANALYTICS
 # ==========================================
 def _render_traffic_analytics(lang: str, traffic: dict):
-    """Render bảng thống kê traffic."""
     st.markdown(f"### {t('traffic_title', lang)}")
     st.caption(f"{t('traffic_desc', lang)} • {t('traffic_current_time', lang)}: **{_now_vn_iso()}**")
 
@@ -1096,18 +1256,12 @@ def _render_traffic_analytics(lang: str, traffic: dict):
         st.info(t("traffic_no_data", lang))
         return
 
-    # === TÍNH TOÁN ===
     today = _today_vn_str()
     d7 = (vn_now() - timedelta(days=6)).strftime("%Y-%m-%d")
     d30 = (vn_now() - timedelta(days=29)).strftime("%Y-%m-%d")
 
-    # Tổng
-    total_all = 0
-    total_7d = 0
-    total_30d = 0
-    today_count = 0
-    unique_devices_all = set()
-    unique_devices_7d = set()
+    total_7d = total_30d = today_count = 0
+    unique_devices = set()
     role_counts = {"user": 0, "guest": 0, "admin": 0}
 
     for date_str, day in traffic.items():
@@ -1117,7 +1271,6 @@ def _render_traffic_analytics(lang: str, traffic: dict):
         if not isinstance(visits, list):
             continue
         n = len(visits)
-        total_all += n
         if date_str >= d30:
             total_30d += n
         if date_str >= d7:
@@ -1128,44 +1281,20 @@ def _render_traffic_analytics(lang: str, traffic: dict):
             dev = v.get("device")
             role = v.get("role", "user")
             if dev:
-                unique_devices_all.add(dev)
-                if date_str >= d7:
-                    unique_devices_7d.add(dev)
+                unique_devices.add(dev)
             if role in role_counts:
                 role_counts[role] += 1
 
-    # === STAT CARDS ===
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-value">{today_count}</div>
-            <div class="stat-label">{t('traffic_today', lang)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="stat-value">{today_count}</div><div class="stat-label">{t("traffic_today", lang)}</div></div>', unsafe_allow_html=True)
     with c2:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-value">{total_7d}</div>
-            <div class="stat-label">{t('traffic_7d', lang)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="stat-value">{total_7d}</div><div class="stat-label">{t("traffic_7d", lang)}</div></div>', unsafe_allow_html=True)
     with c3:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-value">{total_30d}</div>
-            <div class="stat-label">{t('traffic_30d', lang)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="stat-value">{total_30d}</div><div class="stat-label">{t("traffic_30d", lang)}</div></div>', unsafe_allow_html=True)
     with c4:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-value">{len(unique_devices_all)}</div>
-            <div class="stat-label">{t('traffic_unique', lang)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="stat-value">{len(unique_devices)}</div><div class="stat-label">{t("traffic_unique", lang)}</div></div>', unsafe_allow_html=True)
 
-    # === BIỂU ĐỒ 14 NGÀY ===
     st.markdown(f"#### {t('traffic_chart_title', lang)}")
     chart_data = {}
     for i in range(13, -1, -1):
@@ -1176,44 +1305,22 @@ def _render_traffic_analytics(lang: str, traffic: dict):
 
     try:
         import pandas as pd
-        df = pd.DataFrame(
-            {"visits": list(chart_data.values())},
-            index=list(chart_data.keys())
-        )
+        df = pd.DataFrame({"visits": list(chart_data.values())}, index=list(chart_data.keys()))
         st.bar_chart(df, use_container_width=True)
     except Exception:
-        # Fallback nếu pandas không có
         for d, n in chart_data.items():
             st.markdown(f"<div class='traffic-row'>{d}: {'█' * min(n, 50)} ({n})</div>", unsafe_allow_html=True)
 
-    # === PHÂN LOẠI VAI TRÒ ===
     st.markdown(f"#### {t('traffic_by_role', lang)}")
     rc1, rc2, rc3 = st.columns(3)
     with rc1:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-value">{role_counts['user']}</div>
-            <div class="stat-label">👤 {t('traffic_role_user', lang)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="stat-value">{role_counts["user"]}</div><div class="stat-label">👤 {t("traffic_role_user", lang)}</div></div>', unsafe_allow_html=True)
     with rc2:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-value">{role_counts['guest']}</div>
-            <div class="stat-label">👥 {t('traffic_role_guest', lang)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="stat-value">{role_counts["guest"]}</div><div class="stat-label">👥 {t("traffic_role_guest", lang)}</div></div>', unsafe_allow_html=True)
     with rc3:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-value">{role_counts['admin']}</div>
-            <div class="stat-label">🛡️ {t('traffic_role_admin', lang)}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="stat-value">{role_counts["admin"]}</div><div class="stat-label">🛡️ {t("traffic_role_admin", lang)}</div></div>', unsafe_allow_html=True)
 
-    # === LOG CHI TIẾT ===
     with st.expander(f"📋 {t('traffic_recent', lang)}", expanded=False):
-        # Lấy 100 lượt gần nhất
         all_visits = []
         for date_str, day in traffic.items():
             if not isinstance(day, dict):
@@ -1221,28 +1328,26 @@ def _render_traffic_analytics(lang: str, traffic: dict):
             for v in day.get("visits", []):
                 if isinstance(v, dict):
                     all_visits.append(v)
-
         all_visits.sort(key=lambda x: x.get("time", ""), reverse=True)
         recent = all_visits[:100]
-
         if not recent:
             st.caption(t("traffic_no_data", lang))
         else:
             for v in recent:
-                time_str = v.get("time", "?")
-                label = v.get("label", "?")
+                ts = v.get("time", "?")
+                lbl = v.get("label", "?")
                 role = v.get("role", "?")
                 dev = mask_device(v.get("device", ""))
-                role_icon = {"user": "👤", "guest": "👥", "admin": "🛡️"}.get(role, "❓")
-                st.markdown(
-                    f"<div class='traffic-row'>{role_icon} <b>{time_str}</b> — {label} <span style='opacity:0.5'>({dev})</span></div>",
-                    unsafe_allow_html=True
-                )
+                icon = {"user": "👤", "guest": "👥", "admin": "🛡️"}.get(role, "❓")
+                st.markdown(f"<div class='traffic-row'>{icon} <b>{ts}</b> — {lbl} <span style='opacity:0.5'>({dev})</span></div>", unsafe_allow_html=True)
 
-
+# ==========================================
+# 18. ADMIN PANEL
+# ==========================================
 def render_admin_panel():
     lang = st.session_state.language
     _show_update_notice_if_needed()
+    render_reboot_banner_if_needed()
 
     st.markdown(f"<h1 class='main-header'>{t('admin_panel', lang)}</h1>", unsafe_allow_html=True)
     st.caption(f"🛡️ {t('admin_logged_in', lang)} • VN: {_now_vn_iso()}")
@@ -1256,11 +1361,9 @@ def render_admin_panel():
     cur_wl = cfg.get("whitelist_users", [])
     cur_note = cfg.get("maintenance_note", "")
 
-    # === TRẠNG THÁI ===
     status_text = t("sys_paused", lang) if cur_maint else t("sys_running", lang)
     st.markdown(f"**{t('sys_status', lang)}:** {status_text}")
 
-    # === 1. MAINTENANCE TOGGLE ===
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("maintenance_toggle", lang))
     col_a, col_b = st.columns(2)
@@ -1287,16 +1390,10 @@ def render_admin_panel():
             else:
                 st.error(f"Error: {msg}")
 
-    # === LỜI CHÚ THÍCH BẢO TRÌ ===
     st.markdown(f"**{t('maintenance_note_label', lang)}**")
-    note_input = st.text_area(
-        "Note:",
-        value=cur_note,
-        height=100,
-        placeholder=t("maintenance_note_placeholder", lang),
-        key="admin_maint_note",
-        label_visibility="collapsed"
-    )
+    note_input = st.text_area("Note:", value=cur_note, height=100,
+                              placeholder=t("maintenance_note_placeholder", lang),
+                              key="admin_maint_note", label_visibility="collapsed")
     if st.button(t("save_maintenance_note", lang), use_container_width=True):
         cfg["maintenance_note"] = note_input.strip()
         db[SYSTEM_CONFIG_KEY] = cfg
@@ -1309,17 +1406,11 @@ def render_admin_panel():
             st.error(f"Error: {msg}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # === 2. WHITELIST ===
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("whitelist_title", lang))
     st.caption(t("whitelist_desc", lang))
-    wl_text = st.text_area(
-        "Whitelist:",
-        value="\n".join(cur_wl),
-        height=180,
-        placeholder="user1\nuser2\nuser3",
-        key="admin_wl_textarea"
-    )
+    wl_text = st.text_area("Whitelist:", value="\n".join(cur_wl), height=180,
+                           placeholder="user1\nuser2\nuser3", key="admin_wl_textarea")
     if st.button(t("save_whitelist", lang), use_container_width=True, type="primary"):
         new_wl = [line.strip().lower() for line in wl_text.splitlines() if line.strip()]
         seen = set()
@@ -1339,13 +1430,10 @@ def render_admin_panel():
             st.error(f"Error: {msg}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # === 3. TRAFFIC ANALYTICS ===
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
-    traffic = db.get(TRAFFIC_LOG_KEY, {})
-    _render_traffic_analytics(lang, traffic)
+    _render_traffic_analytics(lang, db.get(TRAFFIC_LOG_KEY, {}))
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # === EXISTING USERS ===
     with st.expander("📋 Existing users", expanded=False):
         user_list = [u for u in db.keys()
                      if u not in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY)
@@ -1365,22 +1453,19 @@ def render_admin_panel():
         st.rerun()
 
 # ==========================================
-# 17. MAINTENANCE SCREEN
+# 19. MAINTENANCE SCREEN
 # ==========================================
 def render_maintenance_screen():
     lang = st.session_state.language
+    render_reboot_banner_if_needed()
 
-    # Lấy note mới nhất
     db = GitHubStorage.load_db(force_refresh=True)
     cfg = db.get(SYSTEM_CONFIG_KEY, {})
     note = cfg.get("maintenance_note", "").strip()
 
     st.markdown(f"<h1 class='main-header' style='text-align: center;'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
 
-    # Banner bảo trì
-    note_html = ""
-    if note:
-        note_html = f'<div class="maintenance-note">💬 {note}</div>'
+    note_html = f'<div class="maintenance-note">💬 {note}</div>' if note else ""
 
     st.markdown(f"""
     <div class="maintenance-banner">
@@ -1407,7 +1492,7 @@ def render_maintenance_screen():
                     st.error("❌ Invalid admin credentials.")
 
 # ==========================================
-# 18. ROUTING
+# 20. ROUTING
 # ==========================================
 if st.session_state.is_admin:
     render_admin_panel()
@@ -1424,21 +1509,20 @@ if not st.session_state.user and not st.session_state.is_guest:
     st.stop()
 
 # ==========================================
-# 19. LOAD USER / GUEST DATA
+# 21. LOAD USER / GUEST DATA
 # ==========================================
 is_guest = st.session_state.is_guest
 lang = st.session_state.language
 
 if is_guest:
-    guest_prefs = st.session_state.guest_prefs
-    user_chats = st.session_state.guest_chats
     user_data = {
         "custom_instructions": st.session_state.guest_memory,
-        "chats": user_chats,
+        "chats": st.session_state.guest_chats,
         "remembered_devices": [],
         "language": lang,
-        "preferences": guest_prefs
+        "preferences": st.session_state.guest_prefs
     }
+    user_chats = st.session_state.guest_chats
 else:
     user_data = db_data.get(st.session_state.user, {})
     user_data.setdefault("custom_instructions", "")
@@ -1459,7 +1543,7 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.messages = []
 
 # ==========================================
-# 20. SIDEBAR
+# 22. SIDEBAR
 # ==========================================
 with st.sidebar:
     if not is_guest:
@@ -1514,7 +1598,6 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-
     if st.button(t("new_chat_btn", lang), type="primary", use_container_width=True):
         st.session_state.current_chat_id = None
         st.session_state.messages = []
@@ -1554,7 +1637,6 @@ with st.sidebar:
                     st.rerun()
 
     st.divider()
-
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         mem = st.text_area("Memory:", value=user_data.get("custom_instructions", ""),
@@ -1639,9 +1721,11 @@ with st.sidebar:
             st.rerun()
 
 # ==========================================
-# 21. MAIN CHAT
+# 23. MAIN CHAT
 # ==========================================
 _show_update_notice_if_needed()
+render_reboot_banner_if_needed()
+
 st.markdown(f"<h1 class='main-header'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
 
 if not SECRET_API_KEYS:
@@ -1664,7 +1748,7 @@ for msg in st.session_state.messages:
             st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 22. XỬ LÝ PROMPT
+# 24. XỬ LÝ PROMPT
 # ==========================================
 def _process_prompt(user_prompt):
     st.session_state.messages.append({"role": "user", "content": user_prompt})
