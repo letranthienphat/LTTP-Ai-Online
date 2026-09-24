@@ -1,0 +1,15 @@
+The following actions are illegal:
+1. Copying the code without permission.
+2. Impersonating the author.
+3. Unauthorized modification of the software.
+4. Transmitting information without permission.
+5. Intentionally launching unauthorized attacks against the software. Actions considered attacks include:
+5.1. Creating multiple unused accounts.
+5.2. Repeatedly sending inappropriate content to the AI ​​(e.g., typing random, meaningless characters).
+5.3. Performing actions that overload the server (even if the source code remains unaffected, such actions can still impact performance for other users).
+5.4. Exploiting security vulnerabilities without notifying the author, thereby negatively affecting the software, users, or relevant third parties (e.g., GitHub, Streamlit Cloud).
+5.5. Reverse-engineering the software to illicitly extract personal data.
+6. Violating the above terms in countries that are signatories to the Berne Convention may result in a fine ranging from 5,000,000 VND to 5,000,000,000 VND or imprisonment for up to three years. 7. Countries that are parties to the Berne Convention:
+Afghanistan, Albania, Algeria, Andorra, Angola, Antigua and Barbuda, Argentina, Armenia, Austria, Australia, Azerbaijan, Bahamas, Bahrain, Bangladesh, Barbados, Belarus, Belgium, Belize, Benin, Bhutan, Bolivia, Bosnia and Herzegovina, Botswana, Brazil, Brunei, Bulgaria, Burkina Faso, Burundi, Cabo Verde, Cambodia, Cameroon, Canada, Chile, China, Colombia, Comoros, Democratic Republic of the Congo, Republic of the Congo, Cook Islands, Costa Rica, Côte d'Ivoire, Croatia, Cuba, Cyprus, Czech Republic, Central African Republic, Chad, Denmark, Djibouti, Dominica, Dominican Republic, Ecuador, Egypt, El Salvador, Equatorial Guinea, Estonia, Eswatini, Fiji, Finland, France, Gabon, The Gambia, Georgia, Germany, Ghana, Greece, Grenada, Guatemala, Guinea, Guinea-Bissau, Guyana, Haiti, Holy See, Honduras, Hungary, Iceland, India, Indonesia, Ireland, Israel, Italy, Jamaica, Japan, Jordan, Kazakhstan, Kenya, Kiribati, Kuwait, Kyrgyzstan, Laos, Latvia, Lebanon, Lesotho, Liberia, Libya, Liechtenstein, Lithuania, Luxembourg, Madagascar, Malawi, Malaysia, Maldives, Mali, Malta, Mauritania, Mauritius, Mexico, Micronesia, Moldova, Monaco, Mongolia, Montenegro, Morocco, Mozambique, Myanmar, Namibia, Nauru, Nepal, Netherlands, New Zealand, Nicaragua, Niger, Nigeria, Niue, North Macedonia, Norway, Oman, Pakistan, Panama, Papua New Guinea, Paraguay, Peru, Philippines, Poland, Portugal, Qatar, Romania, Russia, Rwanda, Saint Kitts and Nevis, Saint Lucia, Saint Vincent and the Grenadines, Samoa, San Marino, Sao Tome and Principe, Saudi Arabia, Senegal, Serbia, Seychelles, Sierra Leone, Singapore, Slovakia, Slovenia, Solomon Islands, South Africa, Spain, Sri Lanka, Sudan, Suriname, Sweden, Switzerland, Syria, Tajikistan, Thailand, Togo, Tonga, Trinidad and Tobago, Tunisia, Turkey Turkmenistan, Tuvalu, Uganda, Ukraine, United Arab Emirates, United Kingdom, United States, Uruguay, Uzbekistan, Vanuatu, Venezuela, Vietnam, Yemen, Zambia, Zimbabwe.
+---------END----------
+Total: 2,934 words
