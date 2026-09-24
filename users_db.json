@@ -20,7 +20,7 @@
       "temperature": 0.7,
       "top_p": 0.95,
       "top_k": 40,
-      "smart_draft": true
+      "smart_draft": false
     }
   },
   "__system_config__": {
