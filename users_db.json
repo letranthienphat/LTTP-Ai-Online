@@ -23,6 +23,8 @@
   },
   "__system_config__": {
     "maintenance_mode": true,
-    "whitelist_users": []
-  }
+    "whitelist_users": [],
+    "maintenance_note": ""
+  },
+  "__traffic_log__": {}
 }
