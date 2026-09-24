@@ -20,5 +20,9 @@
       "top_p": 0.95,
       "top_k": 40
     }
+  },
+  "__system_config__": {
+    "maintenance_mode": false,
+    "whitelist_users": []
   }
 }
