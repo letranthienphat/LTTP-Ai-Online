@@ -11,6 +11,21 @@ from datetime import datetime
 from cryptography.fernet import Fernet
 from streamlit_cookies_controller import CookieController
 
+try:
+    from google.api_core import exceptions as google_exceptions
+except Exception:
+    google_exceptions = None
+
+# ==========================================
+# 0. VERSION & HẰNG SỐ ADMIN
+# ==========================================
+APP_VERSION = "1.5.0"
+
+ADMIN_USERNAME = "Admin"
+ADMIN_PASSWORD = "7428"
+
+SYSTEM_CONFIG_KEY = "__system_config__"
+
 # ==========================================
 # 1. CẤU HÌNH TRANG & SECRETS
 # ==========================================
@@ -45,44 +60,40 @@ DEFAULT_MODEL = "gemini-3.5-flash"
 
 FAILOVER_MODEL_CHAIN = [
     "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
     "gemini-3.7-flash",
     "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
 ]
 
 FALLBACK_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-3.1-pro-preview",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+    "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro",
 ]
 
 LEGACY_MODEL_MAP = {
-    "gemini-2.5-flash": "gemini-3.5-flash",
-    "gemini-2.5-pro": "gemini-3.5-flash",
-    "gemini-2.0-flash": "gemini-3.5-flash",
-    "gemini-1.5-flash": "gemini-3.5-flash",
-    "gemini-1.5-pro": "gemini-3.5-flash",
-    "gemini-1.0-pro": "gemini-3.5-flash",
+    "gemini-2.5-flash": "gemini-3.5-flash", "gemini-2.5-pro": "gemini-3.5-flash",
+    "gemini-2.0-flash": "gemini-3.5-flash", "gemini-1.5-flash": "gemini-3.5-flash",
+    "gemini-1.5-pro": "gemini-3.5-flash", "gemini-1.0-pro": "gemini-3.5-flash",
     "gemini-pro": "gemini-3.5-flash",
 }
 
 RATE_LIMIT_RETRY_DELAY = 60
 
-# Câu chú thích ở cuối mỗi phản hồi AI
 DISCLAIMER = {
-    "vi": "_Lưu ý kiểm tra thông tin của A.I trước khi xác nhận thông tin._",
-    "en": "_Please verify A.I information before confirming any facts._",
+    "vi": "Lưu ý kiểm tra thông tin của A.I trước khi xác nhận thông tin.",
+    "en": "Please verify A.I information before confirming any facts.",
+}
+
+UPDATE_NOTICE = {
+    "vi": "🔄 Phần mềm vừa được cập nhật",
+    "en": "🔄 Software just got updated",
 }
 
 # ==========================================
@@ -98,69 +109,43 @@ st.markdown("""
         font-size: 2.5rem;
         margin-bottom: 0.2rem;
     }
-    
     .ai-loading-box {
-        display: flex;
-        align-items: center;
-        gap: 12px;
+        display: flex; align-items: center; gap: 12px;
         padding: 12px 18px;
         background: rgba(102, 126, 234, 0.08);
         border: 1px solid rgba(102, 126, 234, 0.2);
-        border-radius: 12px;
-        margin-bottom: 15px;
-        animation: fadeIn 0.3s ease-in-out;
+        border-radius: 12px; margin-bottom: 15px;
     }
-
     .spinner {
-        width: 22px;
-        height: 22px;
+        width: 22px; height: 22px;
         border: 3px solid rgba(102, 126, 234, 0.2);
         border-top: 3px solid #667eea;
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
     }
-
     .ai-loading-text {
-        color: #667eea;
-        font-weight: 600;
-        font-size: 0.95rem;
-        letter-spacing: 0.3px;
+        color: #667eea; font-weight: 600; font-size: 0.95rem;
         background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #667eea 100%);
         background-size: 200% auto;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         animation: shine 2s linear infinite;
     }
-
     .pulse-dot {
-        width: 8px;
-        height: 8px;
-        background-color: #10b981;
-        border-radius: 50%;
+        width: 8px; height: 8px;
+        background-color: #10b981; border-radius: 50%;
         display: inline-block;
         box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
-        animation: pulse 1.6s infinite;
-        margin-right: 6px;
+        animation: pulse 1.6s infinite; margin-right: 6px;
     }
-
     .rate-limit-box {
         padding: 14px 18px;
         background: rgba(251, 191, 36, 0.1);
         border: 1px solid rgba(251, 191, 36, 0.35);
-        border-radius: 12px;
-        margin-bottom: 15px;
-        animation: fadeIn 0.3s ease-in-out;
+        border-radius: 12px; margin-bottom: 15px;
     }
-    .rate-limit-text {
-        color: #fbbf24;
-        font-weight: 600;
-        font-size: 0.95rem;
-    }
-    .rate-limit-countdown {
-        color: #f59e0b;
-        font-weight: 800;
-        font-size: 1.1rem;
-    }
+    .rate-limit-text { color: #fbbf24; font-weight: 600; font-size: 0.95rem; }
+    .rate-limit-countdown { color: #f59e0b; font-weight: 800; font-size: 1.1rem; }
 
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     @keyframes shine { to { background-position: 200% center; } }
@@ -169,38 +154,79 @@ st.markdown("""
         70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
         100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
     }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-
     .user-card {
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.1);
-        padding: 10px 14px;
-        border-radius: 10px;
-        margin-bottom: 12px;
+        padding: 10px 14px; border-radius: 10px; margin-bottom: 12px;
     }
-    
     .stButton button { width: 100%; }
-    
     .status-badge {
-        display: inline-block;
-        padding: 2px 8px;
-        border-radius: 6px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-left: 6px;
+        display: inline-block; padding: 2px 8px;
+        border-radius: 6px; font-size: 0.75rem;
+        font-weight: 600; margin-left: 6px;
     }
     .badge-ready { background: rgba(16, 185, 129, 0.15); color: #10b981; }
     .badge-missing { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+    .badge-admin { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+    .badge-guest { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
 
-    /* Chú thích cuối phản hồi AI - chữ nhỏ, in nghiêng */
     .ai-disclaimer {
-        font-size: 0.78rem;
-        font-style: italic;
+        font-size: 0.78rem; font-style: italic;
         color: rgba(148, 163, 184, 0.85);
-        margin-top: 6px;
-        padding-top: 6px;
+        margin-top: 6px; padding-top: 6px;
         border-top: 1px dashed rgba(148, 163, 184, 0.25);
-        letter-spacing: 0.1px;
+    }
+    .update-notice {
+        padding: 8px 14px;
+        background: linear-gradient(90deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15));
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        border-radius: 10px; font-size: 0.85rem;
+        font-weight: 600; color: #667eea;
+        text-align: center; margin-bottom: 10px;
+    }
+    .maintenance-banner {
+        padding: 14px 20px;
+        background: linear-gradient(90deg, rgba(239, 68, 68, 0.15), rgba(220, 38, 38, 0.1));
+        border: 1px solid rgba(239, 68, 68, 0.4);
+        border-radius: 12px; margin-bottom: 16px;
+        text-align: center; color: #ef4444;
+        font-weight: 600; font-size: 1rem;
+    }
+    .admin-panel {
+        padding: 16px;
+        background: rgba(251, 191, 36, 0.05);
+        border: 1px solid rgba(251, 191, 36, 0.25);
+        border-radius: 12px; margin-bottom: 16px;
+    }
+    .admin-title {
+        font-size: 1.3rem; font-weight: 800;
+        color: #fbbf24; margin-bottom: 8px;
+    }
+    .guest-banner {
+        padding: 10px 14px;
+        background: rgba(148, 163, 184, 0.1);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 10px; font-size: 0.85rem;
+        color: #94a3b8; text-align: center;
+        margin-bottom: 12px;
+    }
+
+    /* Ẩn nút attach trong chat_input */
+    section[data-testid="stChatInput"] button[aria-label*="upload" i],
+    section[data-testid="stChatInput"] button[aria-label*="Attach" i],
+    section[data-testid="stChatInput"] button[aria-label*="file" i],
+    div[data-testid="stChatInput"] button[aria-label*="upload" i],
+    div[data-testid="stChatInput"] button[aria-label*="Attach" i],
+    div[data-testid="stChatInput"] button[aria-label*="file" i],
+    [data-testid="stChatInputFileUpload"],
+    [data-testid="stChatInputFiles"],
+    [data-testid="stChatInputAttachment"],
+    [data-testid="stChatInput"] input[type="file"] {
+        display: none !important;
+        visibility: hidden !important;
+        width: 0 !important; height: 0 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -228,19 +254,36 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 # ==========================================
-# 4. PHÁT HIỆN LỖI 429 / RATE LIMIT
+# 4. LỖI 429
 # ==========================================
 def is_rate_limit_error(error: Exception) -> bool:
+    if google_exceptions is not None:
+        try:
+            if isinstance(error, google_exceptions.ResourceExhausted):
+                return True
+            if isinstance(error, google_exceptions.TooManyRequests):
+                return True
+            if hasattr(error, "code"):
+                try:
+                    code_str = str(error.code).upper()
+                    if "429" in code_str or "RESOURCE_EXHAUSTED" in code_str:
+                        return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    if getattr(error, "status_code", None) == 429:
+        return True
+    if getattr(error, "code", None) == 429:
+        return True
     err_str = str(error).lower()
-    keywords = [
-        "429", "quota", "rate limit", "rate_limit",
-        "resource_exhausted", "too many requests",
-        "exceeded", "resource exhausted",
-    ]
+    keywords = ["429", "quota", "rate limit", "rate_limit",
+                "resource_exhausted", "resource exhausted",
+                "too many requests", "exceeded your current quota"]
     return any(k in err_str for k in keywords)
 
 # ==========================================
-# 5. HÀM GỌI GEMINI VỚI FAILOVER TỰ ĐỘNG
+# 5. GỌI GEMINI VỚI FAILOVER
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -251,16 +294,11 @@ def _build_model_chain(preferred_model: str) -> list:
 
 
 def call_gemini_with_failover(
-    prompt_inputs: list,
-    api_keys: list,
-    preferred_model: str,
-    system_instruction: str = None,
-    generation_config: dict = None,
-    lang: str = "en",
+    prompt_inputs, api_keys, preferred_model,
+    system_instruction=None, generation_config=None, lang="en",
 ):
     if not api_keys:
         return None, "no_api_keys"
-
     model_chain = _build_model_chain(preferred_model)
     last_error = None
     saw_rate_limit = False
@@ -291,34 +329,33 @@ def call_gemini_with_failover(
                     saw_other_error = True
                     continue
 
-    if saw_rate_limit:
+    if saw_rate_limit and not saw_other_error:
         return None, "rate_limit"
+    if saw_rate_limit and saw_other_error:
+        if last_error and is_rate_limit_error(Exception(last_error)):
+            return None, "rate_limit"
+        return None, last_error or "unknown_error"
     return None, last_error or "unknown_error"
 
 
-def render_rate_limit_and_retry(lang: str = "en"):
+def render_rate_limit_and_retry(lang="en"):
     if lang == "vi":
         title = "⏳ Hệ thống đang nhận quá nhiều yêu cầu"
         subtitle = "Vui lòng thử lại sau. Hệ thống sẽ tự động gửi lại câu hỏi của bạn."
     else:
         title = "⏳ System is receiving too many requests"
         subtitle = "Please try again later. Your question will be automatically retried."
-
     box = st.empty()
     total = RATE_LIMIT_RETRY_DELAY
-
     for remaining in range(total, 0, -1):
         box.markdown(f"""
         <div class="rate-limit-box">
             <div class="rate-limit-text">{title}</div>
             <div style="margin-top:6px; font-size:0.9rem; opacity:0.85;">{subtitle}</div>
-            <div style="margin-top:8px;">
-                <span class="rate-limit-countdown">{remaining}s</span>
-            </div>
+            <div style="margin-top:8px;"><span class="rate-limit-countdown">{remaining}s</span></div>
         </div>
         """, unsafe_allow_html=True)
         time.sleep(1)
-
     box.empty()
     st.rerun()
 
@@ -327,11 +364,36 @@ def render_rate_limit_and_retry(lang: str = "en"):
 # ==========================================
 def migrate_user_data(db_data: dict) -> tuple:
     migrated = False
-    
+
+    # Đảm bảo system config tồn tại
+    if SYSTEM_CONFIG_KEY not in db_data:
+        db_data[SYSTEM_CONFIG_KEY] = {
+            "maintenance_mode": False,
+            "whitelist_users": []
+        }
+        migrated = True
+    else:
+        cfg = db_data[SYSTEM_CONFIG_KEY]
+        if not isinstance(cfg, dict):
+            db_data[SYSTEM_CONFIG_KEY] = {
+                "maintenance_mode": False,
+                "whitelist_users": []
+            }
+            migrated = True
+        else:
+            if "maintenance_mode" not in cfg:
+                cfg["maintenance_mode"] = False
+                migrated = True
+            if "whitelist_users" not in cfg:
+                cfg["whitelist_users"] = []
+                migrated = True
+
     for username, uinfo in db_data.items():
+        if username == SYSTEM_CONFIG_KEY:
+            continue
         if not isinstance(uinfo, dict):
             continue
-        
+
         if "custom_instructions" not in uinfo:
             uinfo["custom_instructions"] = ""
             migrated = True
@@ -344,13 +406,11 @@ def migrate_user_data(db_data: dict) -> tuple:
         if "language" not in uinfo:
             uinfo["language"] = "en"
             migrated = True
-        
+
         if "preferences" not in uinfo:
             uinfo["preferences"] = {
-                "model": DEFAULT_MODEL,
-                "temperature": 0.7,
-                "top_p": 0.95,
-                "top_k": 40
+                "model": DEFAULT_MODEL, "temperature": 0.7,
+                "top_p": 0.95, "top_k": 40
             }
             migrated = True
         else:
@@ -371,12 +431,11 @@ def migrate_user_data(db_data: dict) -> tuple:
             if "top_k" not in prefs:
                 prefs["top_k"] = 40
                 migrated = True
-            
             old_model = prefs.get("model", "")
             if old_model in LEGACY_MODEL_MAP:
                 prefs["model"] = LEGACY_MODEL_MAP[old_model]
                 migrated = True
-        
+
         for cid, chat in uinfo.get("chats", {}).items():
             if not isinstance(chat, dict):
                 continue
@@ -395,11 +454,11 @@ def migrate_user_data(db_data: dict) -> tuple:
             if "updated_at" not in chat:
                 chat["updated_at"] = chat.get("created_at", datetime.now().isoformat())
                 migrated = True
-        
+
         if "api_keys" in uinfo:
             del uinfo["api_keys"]
             migrated = True
-    
+
     return db_data, migrated
 
 # ==========================================
@@ -410,24 +469,23 @@ class GitHubStorage:
     _cache_time = 0
     CACHE_DURATION = 5
     _migration_checked = False
-    
+
     @staticmethod
     def get_api_headers():
         return {
             "Authorization": f"Bearer {GITHUB_TOKEN}",
             "Accept": "application/vnd.github.v3+json"
         }
-    
+
     @staticmethod
     def _is_cache_valid():
-        return (GitHubStorage._cache is not None and 
+        return (GitHubStorage._cache is not None and
                 (time.time() - GitHubStorage._cache_time) < GitHubStorage.CACHE_DURATION)
 
     @staticmethod
     def load_db(force_refresh=False) -> dict:
         if not force_refresh and GitHubStorage._is_cache_valid():
             return GitHubStorage._cache
-            
         if not GITHUB_TOKEN or not GITHUB_REPO:
             st.error("⚠️ Missing GITHUB_TOKEN or GITHUB_REPO in Secrets!")
             return {}
@@ -435,16 +493,14 @@ class GitHubStorage:
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
         try:
             res = requests.get(
-                url, 
-                headers=GitHubStorage.get_api_headers(), 
-                params={"nocache": int(time.time())}, 
-                timeout=8
+                url, headers=GitHubStorage.get_api_headers(),
+                params={"nocache": int(time.time())}, timeout=8
             )
             if res.status_code == 200:
                 content_b64 = res.json().get("content", "")
                 decoded = base64.b64decode(content_b64.encode('utf-8')).decode('utf-8')
                 data = json.loads(decoded)
-                
+
                 if not GitHubStorage._migration_checked:
                     data, was_migrated = migrate_user_data(data)
                     GitHubStorage._migration_checked = True
@@ -452,14 +508,16 @@ class GitHubStorage:
                         GitHubStorage._cache = data
                         GitHubStorage._cache_time = time.time()
                         GitHubStorage.save_db(data)
-                
+
                 GitHubStorage._cache = data
                 GitHubStorage._cache_time = time.time()
                 return data
             elif res.status_code == 404:
-                GitHubStorage._cache = {}
+                # File chưa tồn tại → tạo mới với system config
+                data = {SYSTEM_CONFIG_KEY: {"maintenance_mode": False, "whitelist_users": []}}
+                GitHubStorage._cache = data
                 GitHubStorage._cache_time = time.time()
-                return {}
+                return data
             else:
                 st.error(f"GitHub read error (HTTP {res.status_code})")
                 return GitHubStorage._cache if GitHubStorage._cache is not None else {}
@@ -473,10 +531,8 @@ class GitHubStorage:
     def save_db(data: dict) -> tuple:
         if not GITHUB_TOKEN or not GITHUB_REPO:
             return False, "Missing GitHub Token/Repo configuration."
-
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
         headers = GitHubStorage.get_api_headers()
-
         sha = None
         try:
             res_get = requests.get(url, headers=headers, timeout=5)
@@ -487,7 +543,6 @@ class GitHubStorage:
 
         json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
         content_b64 = base64.b64encode(json_bytes).decode('utf-8')
-        
         payload = {
             "message": f"Update users_db.json - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "content": content_b64
@@ -509,9 +564,9 @@ class GitHubStorage:
             return False, f"Save error: {e}"
 
 # ==========================================
-# 8. HÀM AI PHỤ (ĐẶT TÊN & TÓM TẮT)
+# 8. HÀM AI PHỤ
 # ==========================================
-def generate_chat_title(user_prompt: str, api_keys: list, model_name: str, lang: str = "en") -> str:
+def generate_chat_title(user_prompt, api_keys, model_name, lang="en"):
     try:
         if lang == "vi":
             prompt = (
@@ -524,10 +579,8 @@ def generate_chat_title(user_prompt: str, api_keys: list, model_name: str, lang:
                 f"summarizing the topic of this question:\n\"{user_prompt}\""
             )
         text, err = call_gemini_with_failover(
-            prompt_inputs=[prompt],
-            api_keys=api_keys,
-            preferred_model=model_name,
-            lang=lang
+            prompt_inputs=[prompt], api_keys=api_keys,
+            preferred_model=model_name, lang=lang
         )
         if text:
             title = text.strip().replace('"', '').replace("'", "")
@@ -537,41 +590,28 @@ def generate_chat_title(user_prompt: str, api_keys: list, model_name: str, lang:
         return user_prompt[:25] + "..." if len(user_prompt) > 25 else user_prompt
 
 
-def generate_summary(older_messages: list, existing_summary: str, api_keys: list, model_name: str, lang: str = "en") -> str:
+def generate_summary(older_messages, existing_summary, api_keys, model_name, lang="en"):
     try:
         text_to_summarize = ""
         if existing_summary:
             prefix = "Bối cảnh tóm tắt trước đó" if lang == "vi" else "Previous summary context"
             text_to_summarize += f"{prefix}:\n{existing_summary}\n\n"
-        
         limited_messages = older_messages[-15:] if len(older_messages) > 15 else older_messages
-        
         for m in limited_messages:
-            if lang == "vi":
-                role_label = "Người dùng" if m["role"] == "user" else "AI"
-            else:
-                role_label = "User" if m["role"] == "user" else "AI"
+            role_label = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
             content = m['content'][:500] + "..." if len(m['content']) > 500 else m['content']
             text_to_summarize += f"- {role_label}: {content}\n"
-        
+
         if lang == "vi":
-            prompt = (
-                "Hãy tóm tắt ngắn gọn và đúc kết các ý chính, thông tin quan trọng của đoạn hội thoại sau "
-                "thành 1 đoạn văn (dưới 150 từ) để làm bối cảnh cho các câu hỏi tiếp theo:\n\n"
-                f"{text_to_summarize}"
-            )
+            prompt = ("Hãy tóm tắt ngắn gọn và đúc kết các ý chính, thông tin quan trọng của đoạn hội thoại sau "
+                      "thành 1 đoạn văn (dưới 150 từ) để làm bối cảnh cho các câu hỏi tiếp theo:\n\n" + text_to_summarize)
         else:
-            prompt = (
-                "Briefly summarize the key points and important information from the following conversation "
-                "into one paragraph (under 150 words) to serve as context for follow-up questions:\n\n"
-                f"{text_to_summarize}"
-            )
-        
+            prompt = ("Briefly summarize the key points and important information from the following conversation "
+                      "into one paragraph (under 150 words) to serve as context for follow-up questions:\n\n" + text_to_summarize)
+
         text, err = call_gemini_with_failover(
-            prompt_inputs=[prompt],
-            api_keys=api_keys,
-            preferred_model=model_name,
-            lang=lang
+            prompt_inputs=[prompt], api_keys=api_keys,
+            preferred_model=model_name, lang=lang
         )
         if text:
             return text.strip()
@@ -636,12 +676,31 @@ TRANSLATIONS = {
         "current_chat": "Currently in",
         "model_label": "Model",
         "new_chat": "New Conversation",
-        "no_api_key": "⚠️ No Gemini API Keys found in Secrets! Please add GEMINI_API_KEY_1 and GEMINI_API_KEY_2 to Streamlit Secrets.",
+        "no_api_key": "⚠️ No Gemini API Keys found in Secrets!",
         "ai_thinking": "LTTP AI is thinking and composing a response...",
         "ai_error": "❌ Could not generate AI response.",
         "device_id": "Device ID",
         "online": "Online",
         "language": "🌐 Language",
+        "guest_btn": "👤 Continue as Guest",
+        "guest_mode": "Guest Mode",
+        "guest_banner": "You are using Guest Mode. Your chats are not saved — they disappear when you close the browser.",
+        "maintenance_title": "🚧 System under maintenance",
+        "maintenance_desc": "We are temporarily pausing the system. Please come back later.",
+        "admin_panel": "🛡️ Admin Panel",
+        "admin_logged_in": "Logged in as Administrator",
+        "maintenance_toggle": "System Maintenance Mode",
+        "maintenance_on": "🔴 Pause System",
+        "maintenance_off": "🟢 Resume System",
+        "whitelist_title": "Whitelist (allowed during maintenance)",
+        "whitelist_desc": "One username per line. These users can access the system even during maintenance.",
+        "save_whitelist": "💾 Save Whitelist",
+        "whitelist_saved": "Whitelist saved!",
+        "sys_status": "System Status",
+        "sys_running": "🟢 Running",
+        "sys_paused": "🔴 Paused",
+        "admin_logout": "🚪 Exit Admin Mode",
+        "back_to_login": "← Back to Login",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -688,12 +747,31 @@ TRANSLATIONS = {
         "current_chat": "Đang trò chuyện trong",
         "model_label": "Mô hình",
         "new_chat": "Cuộc trò chuyện mới",
-        "no_api_key": "⚠️ Không tìm thấy Gemini API Key trong Secrets! Vui lòng thêm GEMINI_API_KEY_1 và GEMINI_API_KEY_2 vào Streamlit Secrets.",
+        "no_api_key": "⚠️ Không tìm thấy Gemini API Key trong Secrets!",
         "ai_thinking": "LTTP AI đang suy nghĩ và tổng hợp câu trả lời...",
         "ai_error": "❌ Không thể tạo phản hồi từ AI.",
         "device_id": "Device ID",
         "online": "Online",
         "language": "🌐 Ngôn ngữ",
+        "guest_btn": "👤 Tiếp tục với tư cách Khách",
+        "guest_mode": "Chế độ Khách",
+        "guest_banner": "Bạn đang dùng chế độ Khách. Cuộc trò chuyện không được lưu — sẽ mất khi đóng trình duyệt.",
+        "maintenance_title": "🚧 Hệ thống đang bảo trì",
+        "maintenance_desc": "Chúng tôi tạm thời ngừng hệ thống. Vui lòng quay lại sau.",
+        "admin_panel": "🛡️ Bảng điều khiển Admin",
+        "admin_logged_in": "Đã đăng nhập với quyền Quản trị viên",
+        "maintenance_toggle": "Chế độ Bảo trì Hệ thống",
+        "maintenance_on": "🔴 Tạm ngừng hệ thống",
+        "maintenance_off": "🟢 Mở lại hệ thống",
+        "whitelist_title": "Danh sách được phép (truy cập khi bảo trì)",
+        "whitelist_desc": "Mỗi dòng 1 tên người dùng. Những người này có thể truy cập kể cả khi hệ thống đang bảo trì.",
+        "save_whitelist": "💾 Lưu danh sách",
+        "whitelist_saved": "Đã lưu danh sách!",
+        "sys_status": "Trạng thái hệ thống",
+        "sys_running": "🟢 Đang chạy",
+        "sys_paused": "🔴 Đang tạm ngừng",
+        "admin_logout": "🚪 Thoát chế độ Admin",
+        "back_to_login": "← Quay lại Đăng nhập",
     }
 }
 
@@ -705,6 +783,10 @@ def t(key: str, lang: str = "en") -> str:
 # ==========================================
 if "user" not in st.session_state:
     st.session_state.user = None
+if "is_admin" not in st.session_state:
+    st.session_state.is_admin = False
+if "is_guest" not in st.session_state:
+    st.session_state.is_guest = False
 if "current_chat_id" not in st.session_state:
     st.session_state.current_chat_id = None
 if "messages" not in st.session_state:
@@ -717,12 +799,43 @@ if "language" not in st.session_state:
     st.session_state.language = "en"
 if "pending_retry_prompt" not in st.session_state:
     st.session_state.pending_retry_prompt = None
+if "seen_version" not in st.session_state:
+    st.session_state.seen_version = None
+# Guest có session state riêng
+if "guest_chats" not in st.session_state:
+    st.session_state.guest_chats = {}
+if "guest_prefs" not in st.session_state:
+    st.session_state.guest_prefs = {
+        "model": DEFAULT_MODEL, "temperature": 0.7,
+        "top_p": 0.95, "top_k": 40
+    }
+if "guest_memory" not in st.session_state:
+    st.session_state.guest_memory = ""
+
+_seen_ver = cookies.get("LTTP_seen_version")
+if _seen_ver:
+    st.session_state.seen_version = _seen_ver
 
 db_data = GitHubStorage.load_db()
 st.session_state.db_data = db_data
 
-if not st.session_state.user and device_id and db_data:
+# Lấy system config
+system_config = db_data.get(SYSTEM_CONFIG_KEY, {"maintenance_mode": False, "whitelist_users": []})
+maintenance_mode = system_config.get("maintenance_mode", False)
+whitelist_users = [u.strip().lower() for u in system_config.get("whitelist_users", []) if u.strip()]
+
+# ==========================================
+# 11. AUTO-LOGIN BẰNG DEVICE COOKIE (KHÔNG ÁP DỤNG CHO ADMIN)
+# ==========================================
+if (not st.session_state.user
+        and not st.session_state.is_admin
+        and not st.session_state.is_guest
+        and device_id and db_data):
     for username, uinfo in db_data.items():
+        if username == SYSTEM_CONFIG_KEY:
+            continue
+        if not isinstance(uinfo, dict):
+            continue
         remembered_devices = uinfo.get("remembered_devices", [])
         if device_id in remembered_devices:
             st.session_state.user = username
@@ -731,59 +844,92 @@ if not st.session_state.user and device_id and db_data:
             break
 
 # ==========================================
-# 11. AUTH UI
+# 12. UPDATE NOTICE
+# ==========================================
+def _show_update_notice_if_needed():
+    current_lang = st.session_state.language
+    if st.session_state.seen_version != APP_VERSION:
+        try:
+            cookies.set("LTTP_seen_version", APP_VERSION, max_age=COOKIE_MAX_AGE)
+        except Exception:
+            pass
+        st.session_state.seen_version = APP_VERSION
+        st.markdown(
+            f'<div class="update-notice">{UPDATE_NOTICE.get(current_lang, UPDATE_NOTICE["en"])} • v{APP_VERSION}</div>',
+            unsafe_allow_html=True
+        )
+
+# ==========================================
+# 13. AUTH UI (LOGIN / REGISTER / GUEST)
 # ==========================================
 def render_auth_ui():
     lang = st.session_state.language
-    
+    _show_update_notice_if_needed()
+
     col_lang_left, col_lang_right = st.columns([5, 1])
     with col_lang_right:
         lang_choice = st.selectbox(
-            "🌐",
-            ["en", "vi"],
+            "🌐", ["en", "vi"],
             index=0 if lang == "en" else 1,
             format_func=lambda x: "🇬🇧 EN" if x == "en" else "🇻🇳 VI",
-            key="auth_lang_selector",
-            label_visibility="collapsed"
+            key="auth_lang_selector", label_visibility="collapsed"
         )
         if lang_choice != lang:
             st.session_state.language = lang_choice
             st.rerun()
-    
+
     st.markdown(f"<h1 class='main-header' style='text-align: center;'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
     st.caption(f"<p style='text-align: center;'>{t('app_subtitle', lang)}</p>", unsafe_allow_html=True)
     st.divider()
-    
+
     _, col, _ = st.columns([1, 1.8, 1])
 
     with col:
         st.caption(f"🆔 {t('device_id', lang)}: `{device_id[:8]}...{device_id[-4:]}`")
         tab_login, tab_register = st.tabs([t("login_tab", lang), t("register_tab", lang)])
-        
+
         with tab_login:
             with st.form("login_form"):
-                u_name = st.text_input(t("username", lang)).strip().lower()
+                u_name = st.text_input(t("username", lang)).strip()
                 u_pass = st.text_input(t("password", lang), type="password")
                 remember_me = st.checkbox(t("remember_device", lang), value=True)
-                
+
                 if st.form_submit_button(t("login_btn", lang), use_container_width=True):
-                    db = GitHubStorage.load_db(force_refresh=True)
-                    if u_name in db and db[u_name]["password"] == hash_password(u_pass):
-                        st.session_state.user = u_name
+                    # === ADMIN LOGIN ===
+                    if u_name == ADMIN_USERNAME and u_pass == ADMIN_PASSWORD:
+                        st.session_state.is_admin = True
+                        st.session_state.user = None
+                        st.session_state.is_guest = False
                         st.session_state.current_chat_id = None
                         st.session_state.messages = []
-                        st.session_state.language = db[u_name].get("language", "en")
-                        
-                        if remember_me:
-                            db[u_name].setdefault("remembered_devices", [])
-                            if device_id not in db[u_name]["remembered_devices"]:
-                                db[u_name]["remembered_devices"].append(device_id)
-                                GitHubStorage.save_db(db)
-                        
-                        st.toast(t("login_success", st.session_state.language), icon="✅")
+                        # KHÔNG lưu device → không tự động đăng nhập lần sau
+                        st.toast("🛡️ Admin mode activated", icon="🛡️")
                         st.rerun()
+                    # === USER LOGIN ===
                     else:
-                        st.error(t("login_fail", lang))
+                        u_name_lower = u_name.lower()
+                        db = GitHubStorage.load_db(force_refresh=True)
+                        if (u_name_lower in db
+                                and u_name_lower != SYSTEM_CONFIG_KEY
+                                and isinstance(db[u_name_lower], dict)
+                                and db[u_name_lower].get("password") == hash_password(u_pass)):
+                            st.session_state.user = u_name_lower
+                            st.session_state.is_admin = False
+                            st.session_state.is_guest = False
+                            st.session_state.current_chat_id = None
+                            st.session_state.messages = []
+                            st.session_state.language = db[u_name_lower].get("language", "en")
+
+                            if remember_me:
+                                db[u_name_lower].setdefault("remembered_devices", [])
+                                if device_id not in db[u_name_lower]["remembered_devices"]:
+                                    db[u_name_lower]["remembered_devices"].append(device_id)
+                                    GitHubStorage.save_db(db)
+
+                            st.toast(t("login_success", st.session_state.language), icon="✅")
+                            st.rerun()
+                        else:
+                            st.error(t("login_fail", lang))
 
         with tab_register:
             with st.form("register_form"):
@@ -793,6 +939,8 @@ def render_auth_ui():
                 if st.form_submit_button(t("register_btn", lang), use_container_width=True):
                     if not reg_u or not reg_p:
                         st.warning(t("fill_all", lang))
+                    elif reg_u == ADMIN_USERNAME.lower():
+                        st.error("❌ Reserved username.")
                     elif len(reg_p) < 6:
                         st.error(t("pass_min", lang))
                     elif reg_p != reg_p2:
@@ -809,10 +957,8 @@ def render_auth_ui():
                                 "remembered_devices": [device_id],
                                 "language": "en",
                                 "preferences": {
-                                    "model": DEFAULT_MODEL,
-                                    "temperature": 0.7,
-                                    "top_p": 0.95,
-                                    "top_k": 40
+                                    "model": DEFAULT_MODEL, "temperature": 0.7,
+                                    "top_p": 0.95, "top_k": 40
                                 }
                             }
                             ok, msg = GitHubStorage.save_db(db)
@@ -821,67 +967,270 @@ def render_auth_ui():
                             else:
                                 st.error(f"❌ {msg}")
 
-if not st.session_state.user:
+        st.markdown("---")
+        # === GUEST MODE ===
+        if st.button(t("guest_btn", lang), use_container_width=True, type="secondary"):
+            st.session_state.is_guest = True
+            st.session_state.user = None
+            st.session_state.is_admin = False
+            st.session_state.current_chat_id = None
+            st.session_state.messages = []
+            st.session_state.guest_chats = {}
+            st.session_state.guest_prefs = {
+                "model": DEFAULT_MODEL, "temperature": 0.7,
+                "top_p": 0.95, "top_k": 40
+            }
+            st.session_state.guest_memory = ""
+            st.rerun()
+
+
+# ==========================================
+# 14. ADMIN PANEL
+# ==========================================
+def render_admin_panel():
+    lang = st.session_state.language
+    _show_update_notice_if_needed()
+
+    st.markdown(f"<h1 class='main-header'>{t('admin_panel', lang)}</h1>", unsafe_allow_html=True)
+    st.caption(f"🛡️ {t('admin_logged_in', lang)}")
+    st.divider()
+
+    # Refresh db để có data mới nhất
+    db = GitHubStorage.load_db(force_refresh=True)
+    cfg = db.get(SYSTEM_CONFIG_KEY, {"maintenance_mode": False, "whitelist_users": []})
+    cur_maint = cfg.get("maintenance_mode", False)
+    cur_wl = cfg.get("whitelist_users", [])
+
+    # === TRẠNG THÁI HỆ THỐNG ===
+    status_text = t("sys_paused", lang) if cur_maint else t("sys_running", lang)
+    st.markdown(f"**{t('sys_status', lang)}:** {status_text}")
+
+    st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
+    st.subheader(t("maintenance_toggle", lang))
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button(t("maintenance_on", lang), use_container_width=True, disabled=cur_maint):
+            cfg["maintenance_mode"] = True
+            db[SYSTEM_CONFIG_KEY] = cfg
+            ok, msg = GitHubStorage.save_db(db)
+            if ok:
+                st.toast("🔴 System paused", icon="🔴")
+                time.sleep(0.3)
+                st.rerun()
+            else:
+                st.error(f"Error: {msg}")
+    with col_b:
+        if st.button(t("maintenance_off", lang), use_container_width=True, disabled=not cur_maint):
+            cfg["maintenance_mode"] = False
+            db[SYSTEM_CONFIG_KEY] = cfg
+            ok, msg = GitHubStorage.save_db(db)
+            if ok:
+                st.toast("🟢 System resumed", icon="🟢")
+                time.sleep(0.3)
+                st.rerun()
+            else:
+                st.error(f"Error: {msg}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # === WHITELIST ===
+    st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
+    st.subheader(t("whitelist_title", lang))
+    st.caption(t("whitelist_desc", lang))
+
+    wl_text = st.text_area(
+        "Whitelist:",
+        value="\n".join(cur_wl),
+        height=180,
+        placeholder="user1\nuser2\nuser3",
+        key="admin_wl_textarea"
+    )
+    if st.button(t("save_whitelist", lang), use_container_width=True, type="primary"):
+        new_wl = [line.strip().lower() for line in wl_text.splitlines() if line.strip()]
+        # Loại bỏ trùng lặp, giữ thứ tự
+        seen = set()
+        new_wl_unique = []
+        for u in new_wl:
+            if u not in seen:
+                seen.add(u)
+                new_wl_unique.append(u)
+
+        cfg["whitelist_users"] = new_wl_unique
+        db[SYSTEM_CONFIG_KEY] = cfg
+        ok, msg = GitHubStorage.save_db(db)
+        if ok:
+            st.toast(t("whitelist_saved", lang), icon="💾")
+            time.sleep(0.3)
+            st.rerun()
+        else:
+            st.error(f"Error: {msg}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Danh sách user hiện có (tham khảo)
+    with st.expander("📋 Existing users", expanded=False):
+        user_list = [u for u in db.keys() if u != SYSTEM_CONFIG_KEY and isinstance(db[u], dict)]
+        if user_list:
+            for u in sorted(user_list):
+                st.markdown(f"- `{u}`")
+        else:
+            st.caption("No users yet.")
+
+    st.divider()
+    if st.button(t("admin_logout", lang), use_container_width=True):
+        st.session_state.is_admin = False
+        st.session_state.user = None
+        st.session_state.is_guest = False
+        st.rerun()
+
+
+# ==========================================
+# 15. MAINTENANCE SCREEN
+# ==========================================
+def render_maintenance_screen():
+    lang = st.session_state.language
+    st.markdown(f"<h1 class='main-header' style='text-align: center;'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="maintenance-banner">
+        <div style="font-size: 1.6rem; margin-bottom: 8px;">🚧</div>
+        <div style="font-size: 1.15rem; font-weight: 800;">{t('maintenance_title', lang)}</div>
+        <div style="margin-top: 8px; font-size: 0.95rem; opacity: 0.85;">{t('maintenance_desc', lang)}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.divider()
+    # Vẫn cho phép admin login
+    with st.expander("🛡️ Admin login", expanded=False):
+        with st.form("admin_login_during_maint"):
+            a_user = st.text_input("Username:", key="maint_admin_u")
+            a_pass = st.text_input("Password:", type="password", key="maint_admin_p")
+            if st.form_submit_button("Login as Admin"):
+                if a_user == ADMIN_USERNAME and a_pass == ADMIN_PASSWORD:
+                    st.session_state.is_admin = True
+                    st.session_state.user = None
+                    st.session_state.is_guest = False
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid admin credentials.")
+
+
+# ==========================================
+# 16. ROUTING
+# ==========================================
+# 1. Admin mode → panel
+if st.session_state.is_admin:
+    render_admin_panel()
+    st.stop()
+
+# 2. Maintenance mode → chặn (trừ whitelist user đã login)
+if maintenance_mode:
+    current_user = st.session_state.user
+    if not (current_user and current_user.lower() in whitelist_users):
+        render_maintenance_screen()
+        st.stop()
+
+# 3. Chưa login và chưa guest → auth UI
+if not st.session_state.user and not st.session_state.is_guest:
     render_auth_ui()
     st.stop()
 
-# ==========================================
-# 12. TẢI DỮ LIỆU TÀI KHOẢN
-# ==========================================
-user_data = db_data.get(st.session_state.user, {})
-user_data.setdefault("custom_instructions", "")
-user_data.setdefault("chats", {})
-user_data.setdefault("remembered_devices", [])
-user_data.setdefault("language", "en")
-user_data.setdefault("preferences", {})
-user_data["preferences"].setdefault("model", DEFAULT_MODEL)
-user_data["preferences"].setdefault("temperature", 0.7)
-user_data["preferences"].setdefault("top_p", 0.95)
-user_data["preferences"].setdefault("top_k", 40)
 
-st.session_state.language = user_data.get("language", "en")
+# ==========================================
+# 17. LOAD USER/GUEST DATA
+# ==========================================
+is_guest = st.session_state.is_guest
 lang = st.session_state.language
 
-user_chats = user_data["chats"]
+if is_guest:
+    # Guest: dùng session state, không lưu
+    guest_prefs = st.session_state.guest_prefs
+    user_chats = st.session_state.guest_chats
+    custom_memory = st.session_state.guest_memory
+
+    user_data = {
+        "custom_instructions": custom_memory,
+        "chats": user_chats,
+        "remembered_devices": [],
+        "language": lang,
+        "preferences": guest_prefs
+    }
+else:
+    user_data = db_data.get(st.session_state.user, {})
+    user_data.setdefault("custom_instructions", "")
+    user_data.setdefault("chats", {})
+    user_data.setdefault("remembered_devices", [])
+    user_data.setdefault("language", "en")
+    user_data.setdefault("preferences", {})
+    user_data["preferences"].setdefault("model", DEFAULT_MODEL)
+    user_data["preferences"].setdefault("temperature", 0.7)
+    user_data["preferences"].setdefault("top_p", 0.95)
+    user_data["preferences"].setdefault("top_k", 40)
+
+    st.session_state.language = user_data.get("language", "en")
+    lang = st.session_state.language
+
+    user_chats = user_data["chats"]
 
 if st.session_state.current_chat_id and st.session_state.current_chat_id not in user_chats:
     st.session_state.current_chat_id = None
     st.session_state.messages = []
 
 # ==========================================
-# 13. SIDEBAR
+# 18. SIDEBAR
 # ==========================================
 with st.sidebar:
-    lang_choice = st.selectbox(
-        t("language", lang),
-        ["en", "vi"],
-        index=0 if lang == "en" else 1,
-        format_func=lambda x: "🇬🇧 English" if x == "en" else "🇻🇳 Tiếng Việt",
-        key="sidebar_lang"
-    )
-    if lang_choice != lang:
-        user_data["language"] = lang_choice
-        db_data[st.session_state.user] = user_data
-        GitHubStorage.save_db(db_data)
-        st.session_state.language = lang_choice
-        st.rerun()
-    
-    st.markdown(f"""
-    <div class="user-card">
-        <div style="font-weight: 700; font-size: 1.1rem; color: #667eea;">👤 {st.session_state.user}</div>
-        <div style="font-size: 0.8rem; opacity: 0.7;"><span class="pulse-dot"></span>{t('online', lang)} | {t('device_id', lang)}: {device_id[:6]}...</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Chỉ cho guest đổi ngôn ngữ session; user thật lưu vĩnh viễn
+    if not is_guest:
+        lang_choice = st.selectbox(
+            t("language", lang), ["en", "vi"],
+            index=0 if lang == "en" else 1,
+            format_func=lambda x: "🇬🇧 English" if x == "en" else "🇻🇳 Tiếng Việt",
+            key="sidebar_lang"
+        )
+        if lang_choice != lang:
+            user_data["language"] = lang_choice
+            db_data[st.session_state.user] = user_data
+            GitHubStorage.save_db(db_data)
+            st.session_state.language = lang_choice
+            st.rerun()
+    else:
+        lang_choice = st.selectbox(
+            t("language", lang), ["en", "vi"],
+            index=0 if lang == "en" else 1,
+            format_func=lambda x: "🇬🇧 English" if x == "en" else "🇻🇳 Tiếng Việt",
+            key="sidebar_lang_guest"
+        )
+        if lang_choice != lang:
+            st.session_state.language = lang_choice
+            st.rerun()
+
+    # User card
+    if is_guest:
+        st.markdown(f"""
+        <div class="user-card">
+            <div style="font-weight: 700; font-size: 1.1rem; color: #94a3b8;">👤 {t('guest_mode', lang)}</div>
+            <div style="font-size: 0.8rem; opacity: 0.7;"><span class="pulse-dot"></span>{t('online', lang)} | {t('device_id', lang)}: {device_id[:6]}...</div>
+            <span class="status-badge badge-guest">GUEST</span>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="user-card">
+            <div style="font-weight: 700; font-size: 1.1rem; color: #667eea;">👤 {st.session_state.user}</div>
+            <div style="font-size: 0.8rem; opacity: 0.7;"><span class="pulse-dot"></span>{t('online', lang)} | {t('device_id', lang)}: {device_id[:6]}...</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     if st.button(t("logout_btn", lang), use_container_width=True):
-        db = GitHubStorage.load_db(force_refresh=True)
-        user = db.get(st.session_state.user, {})
-        if device_id in user.get("remembered_devices", []):
-            user["remembered_devices"].remove(device_id)
-            db[st.session_state.user] = user
-            GitHubStorage.save_db(db)
+        if not is_guest:
+            db = GitHubStorage.load_db(force_refresh=True)
+            user = db.get(st.session_state.user, {})
+            if device_id in user.get("remembered_devices", []):
+                user["remembered_devices"].remove(device_id)
+                db[st.session_state.user] = user
+                GitHubStorage.save_db(db)
 
         st.session_state.user = None
+        st.session_state.is_guest = False
         st.session_state.current_chat_id = None
         st.session_state.messages = []
         st.rerun()
@@ -898,42 +1247,34 @@ with st.sidebar:
         st.caption(t("no_chats", lang))
     else:
         sorted_chat_ids = sorted(
-            user_chats.keys(), 
-            key=lambda cid: user_chats[cid].get("updated_at", ""), 
+            user_chats.keys(),
+            key=lambda cid: user_chats[cid].get("updated_at", ""),
             reverse=True
         )
         display_ids = sorted_chat_ids[:50]
-        
         for cid in display_ids:
             chat_item = user_chats.get(cid, {})
             title = chat_item.get("title", t("new_chat", lang))
-            
             is_active = (cid == st.session_state.current_chat_id)
             btn_label = f"📌 {title}" if is_active else f"💬 {title}"
-            
             col_select, col_del = st.columns([0.8, 0.2])
-            
             if col_select.button(btn_label, key=f"select_{cid}", use_container_width=True):
                 st.session_state.current_chat_id = cid
                 st.session_state.messages = user_chats[cid].get("messages", [])
                 st.rerun()
-
             if col_del.button("🗑️", key=f"del_{cid}", help=t("delete_chat_tooltip", lang)):
                 if cid in user_chats:
                     del user_chats[cid]
-                    user_data["chats"] = user_chats
-                    db_data[st.session_state.user] = user_data
-                    
-                    ok, msg = GitHubStorage.save_db(db_data)
-                    
+                    if is_guest:
+                        st.session_state.guest_chats = user_chats
+                    else:
+                        user_data["chats"] = user_chats
+                        db_data[st.session_state.user] = user_data
+                        GitHubStorage.save_db(db_data)
                     if st.session_state.current_chat_id == cid:
                         st.session_state.current_chat_id = None
                         st.session_state.messages = []
-                    
-                    if ok:
-                        st.toast(t("chat_deleted", lang), icon="🗑️")
-                    else:
-                        st.error(f"Error: {msg}")
+                    st.toast(t("chat_deleted", lang), icon="🗑️")
                     time.sleep(0.3)
                     st.rerun()
 
@@ -942,25 +1283,26 @@ with st.sidebar:
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         memory_text = st.text_area(
-            "Memory:" if lang == "en" else "Ghi nhớ:", 
-            value=user_data.get("custom_instructions", ""), 
+            "Memory:" if lang == "en" else "Ghi nhớ:",
+            value=user_data.get("custom_instructions", ""),
             height=120,
-            placeholder=t("memory_placeholder", lang)
+            placeholder=t("memory_placeholder", lang),
+            key="sidebar_memory_ta"
         )
         if st.button(t("save_memory_btn", lang), use_container_width=True):
-            user_data["custom_instructions"] = memory_text.strip()
-            db_data[st.session_state.user] = user_data
-            ok, msg = GitHubStorage.save_db(db_data)
-            if ok:
-                st.toast(t("memory_saved", lang), icon="🧠")
-                time.sleep(0.3)
-                st.rerun()
+            if is_guest:
+                st.session_state.guest_memory = memory_text.strip()
+                user_data["custom_instructions"] = memory_text.strip()
             else:
-                st.error(f"Error: {msg}")
+                user_data["custom_instructions"] = memory_text.strip()
+                db_data[st.session_state.user] = user_data
+                GitHubStorage.save_db(db_data)
+            st.toast(t("memory_saved", lang), icon="🧠")
+            time.sleep(0.3)
+            st.rerun()
 
     st.subheader(t("api_title", lang))
     st.caption(t("api_from_secrets", lang))
-    
     for i, key in enumerate([API_KEY_1, API_KEY_2], start=1):
         if key:
             masked = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "••••••••"
@@ -977,7 +1319,6 @@ with st.sidebar:
             )
 
     available_models = FALLBACK_MODELS.copy()
-    
     if SECRET_API_KEYS:
         try:
             genai.configure(api_key=SECRET_API_KEYS[0])
@@ -993,57 +1334,69 @@ with st.sidebar:
             pass
 
     saved_model = user_data["preferences"].get("model", DEFAULT_MODEL)
-    
     if saved_model not in available_models:
         saved_model = DEFAULT_MODEL
         user_data["preferences"]["model"] = saved_model
-        db_data[st.session_state.user] = user_data
-    
+        if not is_guest:
+            db_data[st.session_state.user] = user_data
+
     try:
         model_index = available_models.index(saved_model)
     except ValueError:
         model_index = 0
 
-    selected_model = st.selectbox(t("model_select", lang), available_models, index=model_index)
-    
+    selected_model = st.selectbox(t("model_select", lang), available_models, index=model_index,
+                                   key="sidebar_model_sel")
     if selected_model != user_data["preferences"].get("model"):
         user_data["preferences"]["model"] = selected_model
-        db_data[st.session_state.user] = user_data
-        GitHubStorage.save_db(db_data)
+        if is_guest:
+            st.session_state.guest_prefs["model"] = selected_model
+        else:
+            db_data[st.session_state.user] = user_data
+            GitHubStorage.save_db(db_data)
 
     with st.expander(t("gen_config", lang), expanded=False):
         temperature = st.slider(
-            t("temperature", lang), 0.0, 1.0, 
-            float(user_data["preferences"].get("temperature", 0.7)), 0.05
+            t("temperature", lang), 0.0, 1.0,
+            float(user_data["preferences"].get("temperature", 0.7)), 0.05,
+            key="sidebar_temp"
         )
         top_p = st.slider(
-            t("top_p", lang), 0.0, 1.0, 
-            float(user_data["preferences"].get("top_p", 0.95)), 0.05
+            t("top_p", lang), 0.0, 1.0,
+            float(user_data["preferences"].get("top_p", 0.95)), 0.05,
+            key="sidebar_topp"
         )
         top_k = st.number_input(
-            t("top_k", lang), min_value=1, max_value=100, 
-            value=int(user_data["preferences"].get("top_k", 40))
+            t("top_k", lang), min_value=1, max_value=100,
+            value=int(user_data["preferences"].get("top_k", 40)),
+            key="sidebar_topk"
         )
-        
-        if st.button(t("save_params", lang), use_container_width=True):
+        if st.button(t("save_params", lang), use_container_width=True, key="sidebar_save_params"):
             user_data["preferences"]["temperature"] = temperature
             user_data["preferences"]["top_p"] = top_p
             user_data["preferences"]["top_k"] = top_k
-            db_data[st.session_state.user] = user_data
-            ok, msg = GitHubStorage.save_db(db_data)
-            if ok:
-                st.toast(t("params_saved", lang), icon="⚙️")
-                time.sleep(0.3)
-                st.rerun()
+            if is_guest:
+                st.session_state.guest_prefs = user_data["preferences"]
+            else:
+                db_data[st.session_state.user] = user_data
+                GitHubStorage.save_db(db_data)
+            st.toast(t("params_saved", lang), icon="⚙️")
+            time.sleep(0.3)
+            st.rerun()
 
 # ==========================================
-# 14. MAIN CHAT UI
+# 19. MAIN CHAT UI
 # ==========================================
+_show_update_notice_if_needed()
+
 st.markdown(f"<h1 class='main-header'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
 
 if not SECRET_API_KEYS:
     st.warning(t("no_api_key", lang))
     st.stop()
+
+if is_guest:
+    st.markdown(f'<div class="guest-banner">👤 {t("guest_banner", lang)}</div>', unsafe_allow_html=True)
 
 current_title = t("new_chat", lang)
 if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
@@ -1051,19 +1404,17 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id in user
 
 st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{selected_model}`")
 
-# Hiển thị lịch sử tin nhắn
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        # Thêm disclaimer dưới mỗi tin nhắn assistant
         if msg["role"] == "assistant":
             st.markdown(
-                f'<div class="ai-disclaimer">{DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>',
+                f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>',
                 unsafe_allow_html=True
             )
 
 # ==========================================
-# 15. XỬ LÝ PROMPT VÀ PHẢN HỒI AI
+# 20. XỬ LÝ PROMPT
 # ==========================================
 def _process_prompt(user_prompt):
     st.session_state.messages.append({"role": "user", "content": user_prompt})
@@ -1079,6 +1430,8 @@ def _process_prompt(user_prompt):
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
         }
+        if is_guest:
+            st.session_state.guest_chats = user_chats
 
     chat_data = user_chats[st.session_state.current_chat_id]
     chat_summary = chat_data.get("summary", "")
@@ -1099,13 +1452,12 @@ def _process_prompt(user_prompt):
         system_instruction += f"\n\n{label}: {chat_summary}"
 
     content_inputs = []
-    
     recent_msgs = st.session_state.messages[-6:]
     formatted_history = ""
     for m in recent_msgs[:-1]:
         r = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
         formatted_history += f"{r}: {m['content']}\n"
-    
+
     if formatted_history:
         if lang == "vi":
             full_prompt = f"Lịch sử hội thoại gần đây:\n{formatted_history}\nCâu hỏi mới: {user_prompt}"
@@ -1113,12 +1465,11 @@ def _process_prompt(user_prompt):
             full_prompt = f"Recent conversation history:\n{formatted_history}\nNew question: {user_prompt}"
     else:
         full_prompt = user_prompt
-
     content_inputs.append(full_prompt)
 
     response_text = None
     err_type = None
-    
+
     with st.chat_message("assistant"):
         loading_placeholder = st.empty()
         loading_placeholder.markdown(f"""
@@ -1140,25 +1491,21 @@ def _process_prompt(user_prompt):
             },
             lang=lang
         )
-
         loading_placeholder.empty()
 
         if response_text:
             st.markdown(response_text)
-            # Chú thích cuối phản hồi AI - chữ nhỏ in nghiêng
             st.markdown(
-                f'<div class="ai-disclaimer">{DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>',
+                f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>',
                 unsafe_allow_html=True
             )
             st.session_state.messages.append({"role": "assistant", "content": response_text})
         elif err_type == "rate_limit":
             st.session_state.pending_retry_prompt = user_prompt
-            
-            if (st.session_state.messages and 
-                st.session_state.messages[-1]["role"] == "user" and 
-                st.session_state.messages[-1]["content"] == user_prompt):
+            if (st.session_state.messages and
+                    st.session_state.messages[-1]["role"] == "user" and
+                    st.session_state.messages[-1]["content"] == user_prompt):
                 st.session_state.messages.pop()
-            
             render_rate_limit_and_retry(lang)
         else:
             error_msg = f"{t('ai_error', lang)} Error: {str(err_type)[:150] if err_type else 'Unknown'}"
@@ -1176,14 +1523,18 @@ def _process_prompt(user_prompt):
         chat_data["messages"] = st.session_state.messages
         chat_data["updated_at"] = datetime.now().isoformat()
         user_chats[st.session_state.current_chat_id] = chat_data
-        user_data["chats"] = user_chats
-        db_data[st.session_state.user] = user_data
 
-        current_time = time.time()
-        if current_time - st.session_state.last_save_time > 1:
-            GitHubStorage.save_db(db_data)
-            st.session_state.last_save_time = current_time
-        
+        if is_guest:
+            # Guest: chỉ lưu vào session state, KHÔNG đồng bộ GitHub
+            st.session_state.guest_chats = user_chats
+        else:
+            user_data["chats"] = user_chats
+            db_data[st.session_state.user] = user_data
+            current_time = time.time()
+            if current_time - st.session_state.last_save_time > 1:
+                GitHubStorage.save_db(db_data)
+                st.session_state.last_save_time = current_time
+
         st.rerun()
 
 
