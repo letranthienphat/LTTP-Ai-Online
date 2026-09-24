@@ -21,7 +21,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -34,9 +34,9 @@ VN_TZ_OFFSET = timedelta(hours=7)
 VERSION_SCAN_INTERVAL = 60
 
 # Smart draft constants
-SMART_DRAFT_MIN_WORDS = 20          # Bắt đầu auto-save khi > 20 từ
-SMART_DRAFT_INTERVAL_SEC = 5        # Định kỳ 5s
-SMART_DRAFT_IDLE_SEC = 20           # Idle 20s → lưu 1 lần
+SMART_DRAFT_MIN_WORDS = 20
+SMART_DRAFT_INTERVAL_SEC = 5
+SMART_DRAFT_IDLE_SEC = 20
 COOKIE_DRAFT = "LTTP_chat_draft"
 COOKIE_DRAFT_TS = "LTTP_draft_ts"
 COOKIE_DRAFT_ENABLED = "LTTP_draft_enabled"
@@ -343,13 +343,10 @@ def count_words(text: str) -> int:
     return len(text.strip().split())
 
 # ==========================================
-# 4. JAVASCRIPT INJECTION (fix lỗi `});`)
+# 4. JAVASCRIPT INJECTION
 # ==========================================
 def inject_js(js_code: str, height: int = 0):
-    """
-    Chèn JavaScript an toàn KHÔNG bị Streamlit sanitize.
-    Dùng st.components.v1.html với iframe ẩn.
-    """
+    """Chèn JavaScript an toàn qua iframe của st.components.v1.html."""
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -373,7 +370,6 @@ def inject_js(js_code: str, height: int = 0):
 
 
 def inject_version_scanner():
-    """JS scan version mỗi 60s, chạy an toàn trong iframe."""
     js = f"""
     const CURRENT_VERSION = "{APP_VERSION}";
     const SCAN_INTERVAL_MS = {VERSION_SCAN_INTERVAL * 1000};
@@ -409,13 +405,7 @@ def inject_version_scanner():
 
 def inject_smart_draft_tracker(enabled: bool, min_words: int,
                                 interval_sec: int, idle_sec: int):
-    """
-    JS theo dõi textarea chat_input.
-    - Khi số từ > min_words: cứ mỗi interval_sec lưu draft vào cookie.
-    - Khi idle (không nhập) idle_sec giây và text có nội dung: lưu 1 lần.
-    """
     if not enabled:
-        # Vẫn xóa draft cũ nếu user tắt
         js = f"""
         d.cookie = "{COOKIE_DRAFT}=; max-age=0; path=/";
         d.cookie = "{COOKIE_DRAFT_TS}=; max-age=0; path=/";
@@ -444,7 +434,6 @@ def inject_smart_draft_tracker(enabled: bool, min_words: int,
     function saveDraft(text, reason) {{
         try {{
             const encoded = encodeURIComponent(text);
-            // Giới hạn 3500 ký tự để không vượt cookie limit
             const trimmed = encoded.length > 3500 ? encoded.slice(0, 3500) : encoded;
             d.cookie = `${{DRAFT_COOKIE}}=${{trimmed}}; path=/; max-age=86400`;
             d.cookie = `${{TS_COOKIE}}=${{Date.now()}}; path=/; max-age=86400`;
@@ -480,12 +469,10 @@ def inject_smart_draft_tracker(enabled: bool, min_words: int,
             const text = ta.value || "";
             const words = countWords(text);
             
-            // Reset idle timer
             if (typingTimer) clearTimeout(typingTimer);
             if (periodicTimer) {{ clearInterval(periodicTimer); periodicTimer = null; }}
             
             if (words > MIN_WORDS) {{
-                // Định kỳ interval_sec
                 periodicTimer = setInterval(function() {{
                     const cur = ta.value || "";
                     if (cur && cur !== lastSavedText) {{
@@ -494,7 +481,6 @@ def inject_smart_draft_tracker(enabled: bool, min_words: int,
                 }}, INTERVAL_MS);
             }}
             
-            // Idle: sau IDLE_MS không nhập → lưu 1 lần
             typingTimer = setTimeout(function() {{
                 const cur = ta.value || "";
                 if (cur && cur !== lastIdleSavedText) {{
@@ -516,17 +502,11 @@ def inject_smart_draft_tracker(enabled: bool, min_words: int,
 
 
 def clear_draft_cookie_via_js():
-    """Xóa draft cookie khi user đã gửi tin nhắn."""
     js = f"""
     d.cookie = "{COOKIE_DRAFT}=; max-age=0; path=/";
     d.cookie = "{COOKIE_DRAFT_TS}=; max-age=0; path=/";
     """
     inject_js(js)
-
-
-def inject_version_scanner_legacy_marker():
-    """Marker rỗng - tránh trùng lặp."""
-    pass
 
 # ==========================================
 # 5. LỖI 429
@@ -701,7 +681,6 @@ def migrate_user_data(db_data: dict) -> tuple:
                 prefs["model"] = LEGACY_MODEL_MAP[old_model]
                 migrated = True
 
-        # Không còn lưu "draft" trong DB user (chuyển sang cookie).
         if "draft" in uinfo:
             del uinfo["draft"]
             migrated = True
@@ -970,10 +949,43 @@ TRANSLATIONS = {
         "api_from_secrets": "API Keys are loaded from Streamlit Secrets",
         "api_status_ready": "Ready", "api_status_missing": "Missing",
         "model_select": "Select AI model:",
-        "gen_config": "⚙️ Generation Parameters",
-        "temperature": "Temperature:", "top_p": "Top P:", "top_k": "Top K:",
-        "save_params": "💾 Save Parameters",
-        "params_saved": "Parameters saved!",
+        "gen_config": "🎨 How A.I responds",
+        "temperature": "Creativity level",
+        "temperature_help": (
+            "**Creativity level** — how imaginative the A.I is.\n\n"
+            "- **Low (0.0–0.3):** A.I answers safely, sticks to facts. Good for math, coding, factual questions.\n"
+            "- **Medium (0.4–0.7):** Balanced — the default. Good for most everyday questions.\n"
+            "- **High (0.8–1.0):** A.I is creative, surprising, more varied wording. Good for stories, brainstorming, marketing copy.\n\n"
+            "👉 *Tip:* If the A.I keeps repeating itself, raise this value. If it invents facts, lower it."
+        ),
+        "top_p": "Diversity",
+        "top_p_help": (
+            "**Diversity** — how many different words the A.I may consider when writing.\n\n"
+            "- **Low (0.5–0.7):** A.I picks only the most obvious words → predictable, safe answers.\n"
+            "- **High (0.9–1.0):** A.I considers many word choices → richer, more surprising answers.\n\n"
+            "👉 *Tip:* Keep at **0.95** unless you have a specific reason to change."
+        ),
+        "top_k": "Focus level",
+        "top_k_help": (
+            "**Focus level** — how many candidate words the A.I considers at each step.\n\n"
+            "- **Low (10–20):** Very focused, tight answers. Good for short, direct replies.\n"
+            "- **Medium (40):** Balanced — the default.\n"
+            "- **High (80–100):** A.I considers many options → more varied but sometimes less coherent answers.\n\n"
+            "👉 *Tip:* Keep at **40** for everyday use."
+        ),
+        "save_params": "💾 Save settings",
+        "params_saved": "Settings saved!",
+        "reset_params": "↺ Defaults",
+        "reset_params_toast": "Reset to defaults!",
+        # Gợi ý mức
+        "t_level_safe": "Safe, sticks to facts",
+        "t_level_balanced": "Balanced — recommended",
+        "t_level_creative": "Creative, imaginative",
+        "p_level_predictable": "Predictable, safe",
+        "p_level_varied": "Rich, varied",
+        "k_level_focused": "Very focused, concise",
+        "k_level_balanced": "Balanced — recommended",
+        "k_level_varied": "Highly varied",
         "chat_placeholder": "Ask LTTP AI anything...",
         "current_chat": "Currently in", "model_label": "Model",
         "new_chat": "New Conversation",
@@ -1063,10 +1075,43 @@ TRANSLATIONS = {
         "api_from_secrets": "API Keys được nạp từ Streamlit Secrets",
         "api_status_ready": "Sẵn sàng", "api_status_missing": "Thiếu",
         "model_select": "Chọn mô hình AI:",
-        "gen_config": "⚙️ Cấu hình tham số sinh",
-        "temperature": "Temperature:", "top_p": "Top P:", "top_k": "Top K:",
-        "save_params": "💾 Lưu tham số",
-        "params_saved": "Đã lưu tham số!",
+        "gen_config": "🎨 Cách A.I trả lời",
+        "temperature": "Mức độ sáng tạo",
+        "temperature_help": (
+            "**Mức độ sáng tạo** — A.I trả lời bay bổng, tưởng tượng đến mức nào.\n\n"
+            "- **Thấp (0.0–0.3):** A.I trả lời an toàn, bám sát sự thật. Phù hợp cho toán, lập trình, câu hỏi kiến thức.\n"
+            "- **Trung bình (0.4–0.7):** Cân bằng — mức mặc định. Phù hợp cho hầu hết câu hỏi hằng ngày.\n"
+            "- **Cao (0.8–1.0):** A.I sáng tạo, bất ngờ, dùng nhiều từ ngữ đa dạng. Phù hợp viết truyện, brainstorm, viết quảng cáo.\n\n"
+            "👉 *Mẹo:* Nếu A.I cứ lặp đi lặp lại, hãy tăng giá trị này. Nếu A.I bịa đặt thông tin, hãy giảm xuống."
+        ),
+        "top_p": "Mức độ đa dạng",
+        "top_p_help": (
+            "**Mức độ đa dạng** — A.I cân nhắc bao nhiêu từ khác nhau khi viết.\n\n"
+            "- **Thấp (0.5–0.7):** A.I chỉ chọn những từ rõ ràng nhất → câu trả lời dễ đoán, an toàn.\n"
+            "- **Cao (0.9–1.0):** A.I cân nhắc nhiều lựa chọn từ ngữ → câu trả lời phong phú, bất ngờ hơn.\n\n"
+            "👉 *Mẹo:* Giữ ở **0.95** trừ khi bạn có lý do cụ thể để đổi."
+        ),
+        "top_k": "Mức độ tập trung",
+        "top_k_help": (
+            "**Mức độ tập trung** — A.I xem xét bao nhiêu từ tiềm năng ở mỗi bước.\n\n"
+            "- **Thấp (10–20):** Rất tập trung, câu trả lời gọn gàng. Phù hợp cho câu trả lời ngắn, trực tiếp.\n"
+            "- **Trung bình (40):** Cân bằng — mức mặc định.\n"
+            "- **Cao (80–100):** A.I xem xét nhiều lựa chọn → đa dạng hơn nhưng đôi khi kém mạch lạc.\n\n"
+            "👉 *Mẹo:* Giữ ở **40** cho sử dụng hằng ngày."
+        ),
+        "save_params": "💾 Lưu cài đặt",
+        "params_saved": "Đã lưu cài đặt!",
+        "reset_params": "↺ Mặc định",
+        "reset_params_toast": "Đã khôi phục mặc định!",
+        # Gợi ý mức
+        "t_level_safe": "An toàn, bám sát sự thật",
+        "t_level_balanced": "Cân bằng — khuyên dùng",
+        "t_level_creative": "Sáng tạo, bay bổng",
+        "p_level_predictable": "Dễ đoán, an toàn",
+        "p_level_varied": "Đa dạng, phong phú",
+        "k_level_focused": "Rất tập trung, gọn gàng",
+        "k_level_balanced": "Cân bằng — khuyên dùng",
+        "k_level_varied": "Đa dạng cao",
         "chat_placeholder": "Hỏi LTTP AI bất cứ điều gì...",
         "current_chat": "Đang trò chuyện trong", "model_label": "Mô hình",
         "new_chat": "Cuộc trò chuyện mới",
@@ -1153,7 +1198,7 @@ if "guest_prefs" not in st.session_state:
     }
 
 # ==========================================
-# 13. VERSION CHECK (dùng iframe an toàn, không lộ `});`)
+# 13. VERSION CHECK
 # ==========================================
 def _init_version_cookie():
     try:
@@ -1163,7 +1208,6 @@ def _init_version_cookie():
             st.session_state.version_mismatch = False
         elif cached_ver != APP_VERSION:
             st.session_state.version_mismatch = True
-            # Ghi đè để lần F5 tiếp theo không lặp
             cookies.set("LTTP_app_version", APP_VERSION, max_age=COOKIE_MAX_AGE)
         else:
             st.session_state.version_mismatch = False
@@ -1818,7 +1862,6 @@ with st.sidebar:
         status_txt = t("smart_draft_on", lang) if smart_draft_val else t("smart_draft_off", lang)
         st.caption(f"→ {status_txt}")
 
-        # Đảm bảo khi tắt, xóa draft cũ
         if not smart_draft_val:
             clear_draft_cookie_via_js()
 
@@ -1884,28 +1927,99 @@ with st.sidebar:
             db_data[st.session_state.user] = user_data
             GitHubStorage.save_db(db_data)
 
+    # ============================
+    # GENERATION SETTINGS - NGÔN NGỮ PHỔ THÔNG
+    # ============================
     with st.expander(t("gen_config", lang), expanded=False):
-        temperature = st.slider(t("temperature", lang), 0.0, 1.0,
-                                float(user_data["preferences"].get("temperature", 0.7)), 0.05,
-                                key="sidebar_temp")
-        top_p = st.slider(t("top_p", lang), 0.0, 1.0,
-                          float(user_data["preferences"].get("top_p", 0.95)), 0.05,
-                          key="sidebar_topp")
-        top_k = st.number_input(t("top_k", lang), 1, 100,
-                                int(user_data["preferences"].get("top_k", 40)),
-                                key="sidebar_topk")
-        if st.button(t("save_params", lang), use_container_width=True, key="sidebar_save_params"):
-            user_data["preferences"]["temperature"] = temperature
-            user_data["preferences"]["top_p"] = top_p
-            user_data["preferences"]["top_k"] = top_k
-            if is_guest:
-                st.session_state.guest_prefs = user_data["preferences"]
-            else:
-                db_data[st.session_state.user] = user_data
-                GitHubStorage.save_db(db_data)
-            st.toast(t("params_saved", lang), icon="⚙️")
-            time.sleep(0.3)
-            st.rerun()
+        # === Mức độ sáng tạo ===
+        tcol1, tcol2 = st.columns([0.85, 0.15])
+        with tcol1:
+            st.markdown(f"**🎨 {t('temperature', lang)}**")
+        with tcol2:
+            with st.popover("❓", use_container_width=True):
+                st.markdown(t("temperature_help", lang))
+        temperature = st.slider(
+            t("temperature", lang), 0.0, 1.0,
+            float(user_data["preferences"].get("temperature", 0.7)), 0.05,
+            key="sidebar_temp", label_visibility="collapsed"
+        )
+        if temperature <= 0.3:
+            st.caption("🟦 " + t("t_level_safe", lang))
+        elif temperature <= 0.7:
+            st.caption("🟩 " + t("t_level_balanced", lang))
+        else:
+            st.caption("🟧 " + t("t_level_creative", lang))
+
+        st.markdown("---")
+
+        # === Mức độ đa dạng ===
+        tcol1, tcol2 = st.columns([0.85, 0.15])
+        with tcol1:
+            st.markdown(f"**🌈 {t('top_p', lang)}**")
+        with tcol2:
+            with st.popover("❓", use_container_width=True):
+                st.markdown(t("top_p_help", lang))
+        top_p = st.slider(
+            t("top_p", lang), 0.0, 1.0,
+            float(user_data["preferences"].get("top_p", 0.95)), 0.05,
+            key="sidebar_topp", label_visibility="collapsed"
+        )
+        if top_p <= 0.7:
+            st.caption("🟦 " + t("p_level_predictable", lang))
+        else:
+            st.caption("🟩 " + t("p_level_varied", lang))
+
+        st.markdown("---")
+
+        # === Mức độ tập trung ===
+        tcol1, tcol2 = st.columns([0.85, 0.15])
+        with tcol1:
+            st.markdown(f"**🎯 {t('top_k', lang)}**")
+        with tcol2:
+            with st.popover("❓", use_container_width=True):
+                st.markdown(t("top_k_help", lang))
+        top_k = st.number_input(
+            t("top_k", lang), 1, 100,
+            int(user_data["preferences"].get("top_k", 40)),
+            key="sidebar_topk", label_visibility="collapsed"
+        )
+        if top_k <= 20:
+            st.caption("🟦 " + t("k_level_focused", lang))
+        elif top_k <= 60:
+            st.caption("🟩 " + t("k_level_balanced", lang))
+        else:
+            st.caption("🟧 " + t("k_level_varied", lang))
+
+        st.markdown("---")
+
+        # === Nút lưu + khôi phục mặc định ===
+        bcol1, bcol2 = st.columns(2)
+        with bcol1:
+            if st.button(t("save_params", lang), use_container_width=True, key="sidebar_save_params", type="primary"):
+                user_data["preferences"]["temperature"] = temperature
+                user_data["preferences"]["top_p"] = top_p
+                user_data["preferences"]["top_k"] = top_k
+                if is_guest:
+                    st.session_state.guest_prefs = user_data["preferences"]
+                else:
+                    db_data[st.session_state.user] = user_data
+                    GitHubStorage.save_db(db_data)
+                st.toast(t("params_saved", lang), icon="💾")
+                time.sleep(0.3)
+                st.rerun()
+        with bcol2:
+            if st.button(t("reset_params", lang), use_container_width=True, key="sidebar_reset_params"):
+                user_data["preferences"]["temperature"] = 0.7
+                user_data["preferences"]["top_p"] = 0.95
+                user_data["preferences"]["top_k"] = 40
+                if is_guest:
+                    st.session_state.guest_prefs = user_data["preferences"]
+                else:
+                    db_data[st.session_state.user] = user_data
+                    GitHubStorage.save_db(db_data)
+                st.toast(t("reset_params_toast", lang), icon="↺")
+                time.sleep(0.3)
+                st.rerun()
 
 # ==========================================
 # 25. SMART DRAFT: INJECT TRACKER
@@ -1918,7 +2032,7 @@ inject_smart_draft_tracker(
     idle_sec=SMART_DRAFT_IDLE_SEC
 )
 
-# Đọc draft từ cookie (JS đã ghi)
+
 def get_saved_draft():
     try:
         raw = cookies.get(COOKIE_DRAFT)
@@ -1967,7 +2081,6 @@ if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
     dc1, dc2, _ = st.columns([1, 1, 2])
     with dc1:
         if st.button(t("draft_restore_btn", lang), use_container_width=True, key="draft_restore_btn"):
-            # Copy vào clipboard qua JS
             safe_text = json.dumps(draft_text)
             inject_js(f"""
             (function() {{
@@ -2002,7 +2115,6 @@ for msg in st.session_state.messages:
 # 27. XỬ LÝ PROMPT
 # ==========================================
 def _process_prompt(user_prompt):
-    # Xóa draft khi gửi tin
     clear_draft_cookie_via_js()
 
     st.session_state.messages.append({"role": "user", "content": user_prompt})
