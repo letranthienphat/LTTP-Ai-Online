@@ -15,7 +15,7 @@
       "8d50106a-35b0-4672-9173-32d186735ff4",
       "b6cd81af-8fd5-4532-aa25-84e116fcd42d"
     ],
-    "language": "vi",
+    "language": "en",
     "preferences": {
       "model": "gemini-3.5-flash",
       "temperature": 0.7,
