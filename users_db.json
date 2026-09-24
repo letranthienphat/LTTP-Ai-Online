@@ -31,8 +31,8 @@
     "announcement": {
       "enabled": true,
       "title": "Privacy Policy Notice",
-      "body": "1. The software commits to not sharing personal data with any third party, and all data is processed with care.\n2. The software uses certain cookies (specifically, cookies that help remember login information).\n3. Important note: Please verify AI-generated information before sharing it.",
-      "updated_at": "2026-09-24 20:10:49"
+      "body": "1. The software commits to not sharing personal data with any third party, and all data is processed with care.\n2. The software utilizes certain cookies (specifically, cookies used to remember login sessions).\n3. Important note: Please verify AI-generated information before sharing it.\n4. Unauthorized copying of the software in any form is prohibited. Read more about legal copyright provisions at: https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.txt\nVersion: 1.9.0\nReleased 24/9/2026",
+      "updated_at": "2026-09-24 20:44:28"
     }
   },
   "__traffic_log__": {
