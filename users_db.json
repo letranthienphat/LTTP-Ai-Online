@@ -19,7 +19,8 @@
       "model": "gemini-3.5-flash",
       "temperature": 0.7,
       "top_p": 0.95,
-      "top_k": 40
+      "top_k": 40,
+      "smart_draft": true
     }
   },
   "__system_config__": {
