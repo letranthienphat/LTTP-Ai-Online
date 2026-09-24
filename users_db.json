@@ -27,7 +27,9 @@
   },
   "__system_config__": {
     "maintenance_mode": true,
-    "whitelist_users": [],
+    "whitelist_users": [
+      "phát"
+    ],
     "maintenance_note": "I'm test for new features, come back in 5 minutes.",
     "announcement": {
       "enabled": true,
