@@ -74,6 +74,12 @@
           "label": "phát",
           "role": "user",
           "device": "fb637a7f-66cd-42fb-b375-c5ec3f352607"
+        },
+        {
+          "time": "2026-09-24 20:53:38",
+          "label": "Admin",
+          "role": "admin",
+          "device": "1e30d854-239f-4b47-917d-6baa11cc2ef5"
         }
       ]
     }
