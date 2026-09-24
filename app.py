@@ -21,7 +21,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.9.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -40,6 +40,9 @@ SMART_DRAFT_IDLE_SEC = 20
 COOKIE_DRAFT = "LTTP_chat_draft"
 COOKIE_DRAFT_TS = "LTTP_draft_ts"
 COOKIE_DRAFT_ENABLED = "LTTP_draft_enabled"
+
+# Streaming update interval (giây) - cập nhật UI mỗi 0.05s để không lag
+STREAM_UPDATE_INTERVAL = 0.05
 
 def vn_now() -> datetime:
     return datetime.utcnow() + VN_TZ_OFFSET
@@ -153,6 +156,19 @@ st.markdown("""
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         animation: shine 2s linear infinite;
     }
+    /* Con trỏ nhấp nháy khi AI đang gõ */
+    .typing-cursor {
+        display: inline-block;
+        width: 8px; height: 1.1em;
+        background: #667eea;
+        margin-left: 2px;
+        vertical-align: text-bottom;
+        animation: blink 1s step-end infinite;
+    }
+    @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
+    }
     .pulse-dot {
         width: 8px; height: 8px; background-color: #10b981;
         border-radius: 50%; display: inline-block;
@@ -221,6 +237,44 @@ st.markdown("""
     @keyframes rebootPulse {
         0%, 100% { box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35); }
         50% { box-shadow: 0 4px 24px rgba(249, 115, 22, 0.65); }
+    }
+
+    /* =========================================
+       BẢNG THÔNG TIN ADMIN - HIỂN THỊ TRÊN USER
+       ========================================= */
+    .announcement-banner {
+        padding: 16px 20px;
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.12));
+        border: 1px solid rgba(102, 126, 234, 0.4);
+        border-left: 5px solid #667eea;
+        border-radius: 12px;
+        margin-bottom: 16px;
+        position: relative;
+        animation: announcementIn 0.5s ease-out;
+    }
+    .announcement-header {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 1.05rem; font-weight: 800;
+        color: #667eea; margin-bottom: 8px;
+    }
+    .announcement-body {
+        font-size: 0.95rem;
+        color: #e2e8f0;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .announcement-meta {
+        margin-top: 10px;
+        font-size: 0.75rem;
+        color: #94a3b8;
+        font-style: italic;
+        border-top: 1px dashed rgba(148, 163, 184, 0.25);
+        padding-top: 8px;
+    }
+    @keyframes announcementIn {
+        from { opacity: 0; transform: translateY(-8px); }
+        to { opacity: 1; transform: translateY(0); }
     }
 
     .maintenance-banner {
@@ -346,7 +400,6 @@ def count_words(text: str) -> int:
 # 4. JAVASCRIPT INJECTION
 # ==========================================
 def inject_js(js_code: str, height: int = 0):
-    """Chèn JavaScript an toàn qua iframe của st.components.v1.html."""
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -441,15 +494,6 @@ def inject_smart_draft_tracker(enabled: bool, min_words: int,
         }} catch (e) {{}}
     }}
     
-    function clearDraft() {{
-        try {{
-            d.cookie = `${{DRAFT_COOKIE}}=; path=/; max-age=0`;
-            d.cookie = `${{TS_COOKIE}}=; path=/; max-age=0`;
-            lastSavedText = "";
-            lastIdleSavedText = "";
-        }} catch (e) {{}}
-    }}
-    
     function attachToTextarea() {{
         const candidates = d.querySelectorAll(
             'textarea[data-testid="stChatInputTextArea"], ' +
@@ -538,7 +582,7 @@ def is_rate_limit_error(error: Exception) -> bool:
     return any(k in err_str for k in keywords)
 
 # ==========================================
-# 6. GỌI GEMINI VỚI FAILOVER
+# 6. GỌI GEMINI VỚI FAILOVER (STREAMING)
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -548,10 +592,113 @@ def _build_model_chain(preferred_model: str) -> list:
     return chain
 
 
+def stream_gemini_with_failover(
+    prompt_inputs, api_keys, preferred_model,
+    system_instruction=None, generation_config=None, lang="en",
+    ui_placeholder=None, stream_update_interval=STREAM_UPDATE_INTERVAL,
+):
+    """
+    Generator streaming với failover:
+    - Thử từng model × key, gọi stream=True.
+    - Chỉ chuyển sang tổ hợp tiếp theo nếu lỗi xảy ra TRƯỚC KHI có chunk đầu tiên.
+    - Sau khi đã có chunk đầu tiên, nếu lỗi xảy ra giữa chừng → dừng và giữ text đã có.
+    - Cập nhật UI liên tục qua ui_placeholder (st.empty()).
+    
+    Yield: (text_so_far, done_flag, error_type)
+      - done_flag=False: đang stream
+      - done_flag=True: kết thúc (thành công hoặc lỗi)
+      - error_type: None nếu thành công, "rate_limit" nếu 429, hoặc chuỗi lỗi khác
+    """
+    if not api_keys:
+        yield "", True, "no_api_keys"
+        return
+
+    model_chain = _build_model_chain(preferred_model)
+    last_error = None
+    saw_rate_limit = False
+    saw_other_error = False
+    last_update_time = 0.0
+
+    for model_name in model_chain:
+        for api_k in api_keys:
+            accumulated = ""
+            got_first_chunk = False
+            try:
+                genai.configure(api_key=api_k)
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    system_instruction=system_instruction if system_instruction else None,
+                    generation_config=generation_config or {}
+                )
+                response = model.generate_content(prompt_inputs, stream=True)
+
+                for chunk in response:
+                    try:
+                        chunk_text = getattr(chunk, "text", None)
+                    except Exception:
+                        chunk_text = None
+                    if not chunk_text:
+                        continue
+
+                    got_first_chunk = True
+                    accumulated += chunk_text
+
+                    now = time.time()
+                    if ui_placeholder is not None and (now - last_update_time) >= stream_update_interval:
+                        # Cập nhật UI với con trỏ nhấp nháy
+                        display = accumulated + '<span class="typing-cursor"></span>'
+                        ui_placeholder.markdown(display, unsafe_allow_html=True)
+                        last_update_time = now
+
+                    yield accumulated, False, None
+
+                # Stream xong
+                if accumulated:
+                    if ui_placeholder is not None:
+                        ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
+                    yield accumulated, True, None
+                    return
+                else:
+                    # Không có chunk nào
+                    saw_other_error = True
+                    last_error = "Empty response"
+                    continue
+
+            except Exception as ex:
+                last_error = str(ex)
+                # Nếu đã có chunk → giữ nguyên, kết thúc ở đây (không thử tổ hợp khác)
+                if got_first_chunk and accumulated:
+                    if is_rate_limit_error(ex):
+                        yield accumulated, True, "rate_limit_partial"
+                    else:
+                        yield accumulated, True, last_error
+                    return
+
+                # Chưa có chunk → thử tổ hợp tiếp theo
+                if is_rate_limit_error(ex):
+                    saw_rate_limit = True
+                    continue
+                else:
+                    saw_other_error = True
+                    continue
+
+    # Hết tổ hợp mà vẫn không có kết quả
+    if saw_rate_limit and not saw_other_error:
+        yield "", True, "rate_limit"
+    elif saw_rate_limit and saw_other_error:
+        if last_error and is_rate_limit_error(Exception(last_error)):
+            yield "", True, "rate_limit"
+        else:
+            yield "", True, last_error or "unknown_error"
+    else:
+        yield "", True, last_error or "unknown_error"
+
+
 def call_gemini_with_failover(
     prompt_inputs, api_keys, preferred_model,
     system_instruction=None, generation_config=None, lang="en",
 ):
+    """Phiên bản non-streaming dùng cho các tác vụ phụ (đặt tên, tóm tắt)."""
     if not api_keys:
         return None, "no_api_keys"
     model_chain = _build_model_chain(preferred_model)
@@ -624,7 +771,13 @@ def migrate_user_data(db_data: dict) -> tuple:
         db_data[SYSTEM_CONFIG_KEY] = {
             "maintenance_mode": False,
             "whitelist_users": [],
-            "maintenance_note": ""
+            "maintenance_note": "",
+            "announcement": {
+                "enabled": False,
+                "title": "",
+                "body": "",
+                "updated_at": ""
+            }
         }
         migrated = True
     else:
@@ -633,7 +786,13 @@ def migrate_user_data(db_data: dict) -> tuple:
             db_data[SYSTEM_CONFIG_KEY] = {
                 "maintenance_mode": False,
                 "whitelist_users": [],
-                "maintenance_note": ""
+                "maintenance_note": "",
+                "announcement": {
+                    "enabled": False,
+                    "title": "",
+                    "body": "",
+                    "updated_at": ""
+                }
             }
             migrated = True
         else:
@@ -642,6 +801,30 @@ def migrate_user_data(db_data: dict) -> tuple:
                 if k not in cfg:
                     cfg[k] = dv
                     migrated = True
+            if "announcement" not in cfg:
+                cfg["announcement"] = {
+                    "enabled": False,
+                    "title": "",
+                    "body": "",
+                    "updated_at": ""
+                }
+                migrated = True
+            else:
+                ann = cfg["announcement"]
+                if not isinstance(ann, dict):
+                    cfg["announcement"] = {
+                        "enabled": False,
+                        "title": "",
+                        "body": "",
+                        "updated_at": ""
+                    }
+                    migrated = True
+                else:
+                    for k, dv in [("enabled", False), ("title", ""),
+                                  ("body", ""), ("updated_at", "")]:
+                        if k not in ann:
+                            ann[k] = dv
+                            migrated = True
 
     if TRAFFIC_LOG_KEY not in db_data:
         db_data[TRAFFIC_LOG_KEY] = {}
@@ -804,7 +987,13 @@ class GitHubStorage:
                     SYSTEM_CONFIG_KEY: {
                         "maintenance_mode": False,
                         "whitelist_users": [],
-                        "maintenance_note": ""
+                        "maintenance_note": "",
+                        "announcement": {
+                            "enabled": False,
+                            "title": "",
+                            "body": "",
+                            "updated_at": ""
+                        }
                     },
                     TRAFFIC_LOG_KEY: {}
                 }
@@ -977,7 +1166,6 @@ TRANSLATIONS = {
         "params_saved": "Settings saved!",
         "reset_params": "↺ Defaults",
         "reset_params_toast": "Reset to defaults!",
-        # Gợi ý mức
         "t_level_safe": "Safe, sticks to facts",
         "t_level_balanced": "Balanced — recommended",
         "t_level_creative": "Creative, imaginative",
@@ -991,6 +1179,7 @@ TRANSLATIONS = {
         "new_chat": "New Conversation",
         "no_api_key": "⚠️ No Gemini API Keys found in Secrets!",
         "ai_thinking": "LTTP AI is thinking...",
+        "ai_typing": "LTTP AI is typing...",
         "ai_error": "❌ Could not generate AI response.",
         "device_id": "Device ID", "online": "Online", "language": "🌐 Language",
         "guest_btn": "👤 Continue as Guest",
@@ -1014,6 +1203,25 @@ TRANSLATIONS = {
         "sys_status": "System Status",
         "sys_running": "🟢 Running", "sys_paused": "🔴 Paused",
         "admin_logout": "🚪 Exit Admin Mode",
+        # Announcement
+        "announcement_panel_title": "📢 Announcement Board",
+        "announcement_panel_desc": "This message will be shown to ALL users (including guests and new logins).",
+        "announcement_title_label": "Title (optional)",
+        "announcement_title_placeholder": "e.g. Scheduled maintenance tonight",
+        "announcement_body_label": "Message content",
+        "announcement_body_placeholder": "Write something to display to all users. Markdown supported.",
+        "announcement_send_btn": "📤 Send to all users",
+        "announcement_update_btn": "💾 Update announcement",
+        "announcement_clear_btn": "🗑️ Clear announcement",
+        "announcement_sent_toast": "Announcement updated!",
+        "announcement_cleared_toast": "Announcement cleared!",
+        "announcement_preview": "Preview (what users will see):",
+        "announcement_current_status": "Current status",
+        "announcement_status_on": "🟢 Live — showing to all users",
+        "announcement_status_off": "⚪ Off — not showing",
+        "announcement_default_title": "📢 Announcement",
+        "announcement_updated_at": "Last updated",
+        # Traffic
         "traffic_title": "📊 Traffic Analytics",
         "traffic_desc": "Visitor log (Vietnam time, GMT+7)",
         "traffic_today": "Today", "traffic_7d": "Last 7 days",
@@ -1026,6 +1234,7 @@ TRANSLATIONS = {
         "traffic_role_user": "Users", "traffic_role_guest": "Guests",
         "traffic_role_admin": "Admin",
         "traffic_current_time": "Current VN time",
+        # Settings
         "settings_title": "⚙️ Settings",
         "smart_draft_label": "Smart Message Saving",
         "smart_draft_help": (
@@ -1036,7 +1245,6 @@ TRANSLATIONS = {
         ),
         "smart_draft_on": "✅ Enabled",
         "smart_draft_off": "❌ Disabled",
-        "smart_draft_saved_toast": "Draft saved",
         "draft_restored_title": "📝 Unsent draft found",
         "draft_restored_desc": "You have a saved draft from a previous session. Click to restore:",
         "draft_restore_btn": "📋 Copy to clipboard",
@@ -1103,7 +1311,6 @@ TRANSLATIONS = {
         "params_saved": "Đã lưu cài đặt!",
         "reset_params": "↺ Mặc định",
         "reset_params_toast": "Đã khôi phục mặc định!",
-        # Gợi ý mức
         "t_level_safe": "An toàn, bám sát sự thật",
         "t_level_balanced": "Cân bằng — khuyên dùng",
         "t_level_creative": "Sáng tạo, bay bổng",
@@ -1117,6 +1324,7 @@ TRANSLATIONS = {
         "new_chat": "Cuộc trò chuyện mới",
         "no_api_key": "⚠️ Không tìm thấy Gemini API Key trong Secrets!",
         "ai_thinking": "LTTP AI đang suy nghĩ...",
+        "ai_typing": "LTTP AI đang gõ...",
         "ai_error": "❌ Không thể tạo phản hồi từ AI.",
         "device_id": "Device ID", "online": "Online", "language": "🌐 Ngôn ngữ",
         "guest_btn": "👤 Tiếp tục với tư cách Khách",
@@ -1140,6 +1348,25 @@ TRANSLATIONS = {
         "sys_status": "Trạng thái hệ thống",
         "sys_running": "🟢 Đang chạy", "sys_paused": "🔴 Đang tạm ngừng",
         "admin_logout": "🚪 Thoát chế độ Admin",
+        # Announcement
+        "announcement_panel_title": "📢 Bảng thông tin",
+        "announcement_panel_desc": "Thông báo này sẽ hiển thị cho TẤT CẢ người dùng (kể cả Khách và người mới đăng nhập).",
+        "announcement_title_label": "Tiêu đề (không bắt buộc)",
+        "announcement_title_placeholder": "Ví dụ: Bảo trì hệ thống tối nay",
+        "announcement_body_label": "Nội dung thông báo",
+        "announcement_body_placeholder": "Nhập nội dung muốn gửi đến mọi người dùng. Hỗ trợ Markdown.",
+        "announcement_send_btn": "📤 Gửi đến toàn bộ người dùng",
+        "announcement_update_btn": "💾 Cập nhật thông báo",
+        "announcement_clear_btn": "🗑️ Xóa thông báo",
+        "announcement_sent_toast": "Đã cập nhật bảng thông tin!",
+        "announcement_cleared_toast": "Đã xóa bảng thông tin!",
+        "announcement_preview": "Xem trước (người dùng sẽ thấy):",
+        "announcement_current_status": "Trạng thái hiện tại",
+        "announcement_status_on": "🟢 Đang hiển thị — toàn bộ người dùng",
+        "announcement_status_off": "⚪ Đang tắt — không hiển thị",
+        "announcement_default_title": "📢 Thông báo",
+        "announcement_updated_at": "Cập nhật lần cuối",
+        # Traffic
         "traffic_title": "📊 Lưu lượng truy cập",
         "traffic_desc": "Nhật ký truy cập (giờ Việt Nam, GMT+7)",
         "traffic_today": "Hôm nay", "traffic_7d": "7 ngày qua",
@@ -1152,6 +1379,7 @@ TRANSLATIONS = {
         "traffic_role_user": "Người dùng", "traffic_role_guest": "Khách",
         "traffic_role_admin": "Admin",
         "traffic_current_time": "Giờ VN hiện tại",
+        # Settings
         "settings_title": "⚙️ Cài đặt",
         "smart_draft_label": "Lưu tin nhắn thông minh",
         "smart_draft_help": (
@@ -1162,7 +1390,6 @@ TRANSLATIONS = {
         ),
         "smart_draft_on": "✅ Đang bật",
         "smart_draft_off": "❌ Đang tắt",
-        "smart_draft_saved_toast": "Đã lưu nháp",
         "draft_restored_title": "📝 Có tin nhắn nháp chưa gửi",
         "draft_restored_desc": "Bạn có tin nhắn nháp từ phiên trước. Bấm để khôi phục:",
         "draft_restore_btn": "📋 Sao chép vào clipboard",
@@ -1226,11 +1453,21 @@ db_data = GitHubStorage.load_db()
 st.session_state.db_data = db_data
 
 system_config = db_data.get(SYSTEM_CONFIG_KEY, {
-    "maintenance_mode": False, "whitelist_users": [], "maintenance_note": ""
+    "maintenance_mode": False, "whitelist_users": [], "maintenance_note": "",
+    "announcement": {"enabled": False, "title": "", "body": "", "updated_at": ""}
 })
 maintenance_mode = system_config.get("maintenance_mode", False)
 maintenance_note = system_config.get("maintenance_note", "").strip()
 whitelist_users = [u.strip().lower() for u in system_config.get("whitelist_users", []) if u.strip()]
+
+# Lấy announcement
+_ann_cfg = system_config.get("announcement", {}) or {}
+announcement = {
+    "enabled": bool(_ann_cfg.get("enabled", False)),
+    "title": str(_ann_cfg.get("title", "")),
+    "body": str(_ann_cfg.get("body", "")),
+    "updated_at": str(_ann_cfg.get("updated_at", "")),
+}
 
 # ==========================================
 # 14. AUTO-LOGIN
@@ -1316,12 +1553,52 @@ def render_reboot_banner_if_needed():
             st.rerun()
 
 # ==========================================
-# 18. AUTH UI
+# 18. ANNOUNCEMENT RENDERER
+# ==========================================
+def render_announcement_banner():
+    """Hiển thị bảng thông tin admin ở đầu trang cho mọi user/guest."""
+    if not announcement.get("enabled"):
+        return
+    body = announcement.get("body", "").strip()
+    title = announcement.get("title", "").strip()
+    updated = announcement.get("updated_at", "").strip()
+    lang = st.session_state.get("language", "en")
+
+    if not body and not title:
+        return
+
+    display_title = title if title else t("announcement_default_title", lang)
+
+    meta_html = ""
+    if updated:
+        meta_html = f'<div class="announcement-meta">🕐 {t("announcement_updated_at", lang)}: {updated}</div>'
+
+    # Escape nhẹ để an toàn nhưng vẫn cho phép xuống dòng
+    safe_title = (display_title
+                  .replace("&", "&amp;")
+                  .replace("<", "&lt;")
+                  .replace(">", "&gt;"))
+    safe_body = (body
+                 .replace("&", "&amp;")
+                 .replace("<", "&lt;")
+                 .replace(">", "&gt;"))
+
+    st.markdown(f"""
+    <div class="announcement-banner">
+        <div class="announcement-header">📢 {safe_title}</div>
+        <div class="announcement-body">{safe_body}</div>
+        {meta_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+# ==========================================
+# 19. AUTH UI
 # ==========================================
 def render_auth_ui():
     lang = st.session_state.language
     _show_update_notice_if_needed()
     render_reboot_banner_if_needed()
+    render_announcement_banner()
 
     col_lang_left, col_lang_right = st.columns([5, 1])
     with col_lang_right:
@@ -1435,7 +1712,7 @@ def render_auth_ui():
             st.rerun()
 
 # ==========================================
-# 19. TRAFFIC ANALYTICS
+# 20. TRAFFIC ANALYTICS
 # ==========================================
 def _render_traffic_analytics(lang: str, traffic: dict):
     st.markdown(f"### {t('traffic_title', lang)}")
@@ -1531,7 +1808,7 @@ def _render_traffic_analytics(lang: str, traffic: dict):
                 st.markdown(f"<div class='traffic-row'>{icon} <b>{ts}</b> — {lbl} <span style='opacity:0.5'>({dev})</span></div>", unsafe_allow_html=True)
 
 # ==========================================
-# 20. ADMIN PANEL
+# 21. ADMIN PANEL
 # ==========================================
 def render_admin_panel():
     lang = st.session_state.language
@@ -1544,12 +1821,104 @@ def render_admin_panel():
 
     db = GitHubStorage.load_db(force_refresh=True)
     cfg = db.get(SYSTEM_CONFIG_KEY, {
-        "maintenance_mode": False, "whitelist_users": [], "maintenance_note": ""
+        "maintenance_mode": False, "whitelist_users": [], "maintenance_note": "",
+        "announcement": {"enabled": False, "title": "", "body": "", "updated_at": ""}
     })
     cur_maint = cfg.get("maintenance_mode", False)
     cur_wl = cfg.get("whitelist_users", [])
     cur_note = cfg.get("maintenance_note", "")
 
+    cur_ann = cfg.get("announcement", {}) or {}
+    ann_enabled = bool(cur_ann.get("enabled", False))
+    ann_title = str(cur_ann.get("title", ""))
+    ann_body = str(cur_ann.get("body", ""))
+    ann_updated = str(cur_ann.get("updated_at", ""))
+
+    # ============================
+    # 1. ANNOUNCEMENT BOARD
+    # ============================
+    st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
+    st.subheader(t("announcement_panel_title", lang))
+    st.caption(t("announcement_panel_desc", lang))
+
+    # Trạng thái
+    if ann_enabled:
+        st.markdown(f"**{t('announcement_current_status', lang)}:** {t('announcement_status_on', lang)}")
+    else:
+        st.markdown(f"**{t('announcement_current_status', lang)}:** {t('announcement_status_off', lang)}")
+    if ann_updated:
+        st.caption(f"🕐 {t('announcement_updated_at', lang)}: {ann_updated}")
+
+    # Tiêu đề
+    ann_title_input = st.text_input(
+        t("announcement_title_label", lang),
+        value=ann_title,
+        placeholder=t("announcement_title_placeholder", lang),
+        key="admin_ann_title"
+    )
+    # Nội dung
+    ann_body_input = st.text_area(
+        t("announcement_body_label", lang),
+        value=ann_body,
+        height=140,
+        placeholder=t("announcement_body_placeholder", lang),
+        key="admin_ann_body"
+    )
+
+    # Preview
+    if ann_body_input.strip():
+        st.markdown(f"**{t('announcement_preview', lang)}**")
+        preview_title = ann_title_input.strip() or t("announcement_default_title", lang)
+        st.markdown(f"""
+        <div class="announcement-banner" style="margin-top:6px;">
+            <div class="announcement-header">📢 {preview_title}</div>
+            <div class="announcement-body">{ann_body_input}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Nút hành động
+    acol1, acol2 = st.columns(2)
+    with acol1:
+        send_label = t("announcement_update_btn", lang) if ann_enabled else t("announcement_send_btn", lang)
+        if st.button(send_label, use_container_width=True, type="primary", key="admin_ann_send"):
+            if not ann_body_input.strip() and not ann_title_input.strip():
+                st.warning("⚠️ Please enter a title or content." if lang == "en" else "⚠️ Vui lòng nhập tiêu đề hoặc nội dung.")
+            else:
+                cfg["announcement"] = {
+                    "enabled": True,
+                    "title": ann_title_input.strip(),
+                    "body": ann_body_input.strip(),
+                    "updated_at": _now_vn_iso()
+                }
+                db[SYSTEM_CONFIG_KEY] = cfg
+                ok, msg = GitHubStorage.save_db(db)
+                if ok:
+                    st.toast(t("announcement_sent_toast", lang), icon="📢")
+                    time.sleep(0.4)
+                    st.rerun()
+                else:
+                    st.error(f"Error: {msg}")
+    with acol2:
+        if st.button(t("announcement_clear_btn", lang), use_container_width=True, key="admin_ann_clear"):
+            cfg["announcement"] = {
+                "enabled": False,
+                "title": "",
+                "body": "",
+                "updated_at": _now_vn_iso()
+            }
+            db[SYSTEM_CONFIG_KEY] = cfg
+            ok, msg = GitHubStorage.save_db(db)
+            if ok:
+                st.toast(t("announcement_cleared_toast", lang), icon="🗑️")
+                time.sleep(0.4)
+                st.rerun()
+            else:
+                st.error(f"Error: {msg}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ============================
+    # 2. MAINTENANCE
+    # ============================
     status_text = t("sys_paused", lang) if cur_maint else t("sys_running", lang)
     st.markdown(f"**{t('sys_status', lang)}:** {status_text}")
 
@@ -1557,7 +1926,7 @@ def render_admin_panel():
     st.subheader(t("maintenance_toggle", lang))
     col_a, col_b = st.columns(2)
     with col_a:
-        if st.button(t("maintenance_on", lang), use_container_width=True, disabled=cur_maint):
+        if st.button(t("maintenance_on", lang), use_container_width=True, disabled=cur_maint, key="admin_maint_on"):
             cfg["maintenance_mode"] = True
             db[SYSTEM_CONFIG_KEY] = cfg
             ok, msg = GitHubStorage.save_db(db)
@@ -1568,7 +1937,7 @@ def render_admin_panel():
             else:
                 st.error(f"Error: {msg}")
     with col_b:
-        if st.button(t("maintenance_off", lang), use_container_width=True, disabled=not cur_maint):
+        if st.button(t("maintenance_off", lang), use_container_width=True, disabled=not cur_maint, key="admin_maint_off"):
             cfg["maintenance_mode"] = False
             db[SYSTEM_CONFIG_KEY] = cfg
             ok, msg = GitHubStorage.save_db(db)
@@ -1583,7 +1952,7 @@ def render_admin_panel():
     note_input = st.text_area("Note:", value=cur_note, height=100,
                               placeholder=t("maintenance_note_placeholder", lang),
                               key="admin_maint_note", label_visibility="collapsed")
-    if st.button(t("save_maintenance_note", lang), use_container_width=True):
+    if st.button(t("save_maintenance_note", lang), use_container_width=True, key="admin_save_note"):
         cfg["maintenance_note"] = note_input.strip()
         db[SYSTEM_CONFIG_KEY] = cfg
         ok, msg = GitHubStorage.save_db(db)
@@ -1595,12 +1964,15 @@ def render_admin_panel():
             st.error(f"Error: {msg}")
     st.markdown('</div>', unsafe_allow_html=True)
 
+    # ============================
+    # 3. WHITELIST
+    # ============================
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("whitelist_title", lang))
     st.caption(t("whitelist_desc", lang))
     wl_text = st.text_area("Whitelist:", value="\n".join(cur_wl), height=180,
                            placeholder="user1\nuser2\nuser3", key="admin_wl_textarea")
-    if st.button(t("save_whitelist", lang), use_container_width=True, type="primary"):
+    if st.button(t("save_whitelist", lang), use_container_width=True, type="primary", key="admin_save_wl"):
         new_wl = [line.strip().lower() for line in wl_text.splitlines() if line.strip()]
         seen = set()
         new_wl_unique = []
@@ -1619,6 +1991,9 @@ def render_admin_panel():
             st.error(f"Error: {msg}")
     st.markdown('</div>', unsafe_allow_html=True)
 
+    # ============================
+    # 4. TRAFFIC
+    # ============================
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     _render_traffic_analytics(lang, db.get(TRAFFIC_LOG_KEY, {}))
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1634,7 +2009,7 @@ def render_admin_panel():
             st.caption("No users yet.")
 
     st.divider()
-    if st.button(t("admin_logout", lang), use_container_width=True):
+    if st.button(t("admin_logout", lang), use_container_width=True, key="admin_logout"):
         st.session_state.is_admin = False
         st.session_state.user = None
         st.session_state.is_guest = False
@@ -1642,7 +2017,7 @@ def render_admin_panel():
         st.rerun()
 
 # ==========================================
-# 21. MAINTENANCE SCREEN
+# 22. MAINTENANCE SCREEN
 # ==========================================
 def render_maintenance_screen():
     lang = st.session_state.language
@@ -1681,7 +2056,7 @@ def render_maintenance_screen():
                     st.error("❌ Invalid admin credentials.")
 
 # ==========================================
-# 22. ROUTING
+# 23. ROUTING
 # ==========================================
 if st.session_state.is_admin:
     render_admin_panel()
@@ -1698,7 +2073,7 @@ if not st.session_state.user and not st.session_state.is_guest:
     st.stop()
 
 # ==========================================
-# 23. LOAD USER / GUEST DATA
+# 24. LOAD USER / GUEST DATA
 # ==========================================
 is_guest = st.session_state.is_guest
 lang = st.session_state.language
@@ -1733,7 +2108,7 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.messages = []
 
 # ==========================================
-# 24. SIDEBAR
+# 25. SIDEBAR
 # ==========================================
 with st.sidebar:
     if not is_guest:
@@ -1832,7 +2207,6 @@ with st.sidebar:
     # SETTINGS EXPANDER
     # ============================
     with st.expander(t("settings_title", lang), expanded=False):
-        # === SMART DRAFT ===
         col_lbl, col_help = st.columns([0.85, 0.15])
         with col_lbl:
             st.markdown(f"**{t('smart_draft_label', lang)}**")
@@ -1928,10 +2302,9 @@ with st.sidebar:
             GitHubStorage.save_db(db_data)
 
     # ============================
-    # GENERATION SETTINGS - NGÔN NGỮ PHỔ THÔNG
+    # GENERATION SETTINGS
     # ============================
     with st.expander(t("gen_config", lang), expanded=False):
-        # === Mức độ sáng tạo ===
         tcol1, tcol2 = st.columns([0.85, 0.15])
         with tcol1:
             st.markdown(f"**🎨 {t('temperature', lang)}**")
@@ -1952,7 +2325,6 @@ with st.sidebar:
 
         st.markdown("---")
 
-        # === Mức độ đa dạng ===
         tcol1, tcol2 = st.columns([0.85, 0.15])
         with tcol1:
             st.markdown(f"**🌈 {t('top_p', lang)}**")
@@ -1971,7 +2343,6 @@ with st.sidebar:
 
         st.markdown("---")
 
-        # === Mức độ tập trung ===
         tcol1, tcol2 = st.columns([0.85, 0.15])
         with tcol1:
             st.markdown(f"**🎯 {t('top_k', lang)}**")
@@ -1992,7 +2363,6 @@ with st.sidebar:
 
         st.markdown("---")
 
-        # === Nút lưu + khôi phục mặc định ===
         bcol1, bcol2 = st.columns(2)
         with bcol1:
             if st.button(t("save_params", lang), use_container_width=True, key="sidebar_save_params", type="primary"):
@@ -2022,7 +2392,7 @@ with st.sidebar:
                 st.rerun()
 
 # ==========================================
-# 25. SMART DRAFT: INJECT TRACKER
+# 26. SMART DRAFT: INJECT TRACKER
 # ==========================================
 smart_draft_enabled = bool(user_data["preferences"].get("smart_draft", True))
 inject_smart_draft_tracker(
@@ -2048,10 +2418,11 @@ def get_saved_draft():
 draft_text, draft_ts = get_saved_draft()
 
 # ==========================================
-# 26. MAIN CHAT
+# 27. MAIN CHAT
 # ==========================================
 _show_update_notice_if_needed()
 render_reboot_banner_if_needed()
+render_announcement_banner()
 
 st.markdown(f"<h1 class='main-header'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
 
@@ -2112,7 +2483,7 @@ for msg in st.session_state.messages:
             st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 27. XỬ LÝ PROMPT
+# 28. XỬ LÝ PROMPT (STREAMING)
 # ==========================================
 def _process_prompt(user_prompt):
     clear_draft_cookie_via_js()
@@ -2165,45 +2536,73 @@ def _process_prompt(user_prompt):
         full_prompt = user_prompt
     content_inputs.append(full_prompt)
 
-    response_text = None
-    err_type = None
+    final_text = ""
+    final_err = None
 
     with st.chat_message("assistant"):
-        ph = st.empty()
-        ph.markdown(f"""
+        # Placeholder vừa hiển thị trạng thái "đang gõ", vừa cập nhật nội dung
+        ai_placeholder = st.empty()
+
+        # Trạng thái ban đầu - AI đang suy nghĩ
+        ai_placeholder.markdown(f"""
         <div class="ai-loading-box">
             <div class="spinner"></div>
-            <div class="ai-loading-text">{t('ai_thinking', lang)}</div>
+            <div class="ai-loading-text">{t('ai_typing', lang)}</div>
         </div>
         """, unsafe_allow_html=True)
 
-        response_text, err_type = call_gemini_with_failover(
-            prompt_inputs=content_inputs, api_keys=SECRET_API_KEYS,
+        streamed_any = False
+        for text_so_far, done, err in stream_gemini_with_failover(
+            prompt_inputs=content_inputs,
+            api_keys=SECRET_API_KEYS,
             preferred_model=sel_model,
             system_instruction=system_instruction if system_instruction else None,
             generation_config={
                 "temperature": temperature, "top_p": top_p, "top_k": top_k
-            }, lang=lang
-        )
-        ph.empty()
+            },
+            lang=lang,
+            ui_placeholder=ai_placeholder,
+        ):
+            if text_so_far:
+                streamed_any = True
+                final_text = text_so_far
 
-        if response_text:
-            st.markdown(response_text)
-            st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>', unsafe_allow_html=True)
-            st.session_state.messages.append({"role": "assistant", "content": response_text})
-        elif err_type == "rate_limit":
+            if done:
+                final_err = err
+                break
+
+        # Xử lý kết quả
+        if final_text:
+            # Cập nhật lần cuối (không có con trỏ)
+            ai_placeholder.markdown(final_text)
+            st.markdown(
+                f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>',
+                unsafe_allow_html=True
+            )
+            st.session_state.messages.append({"role": "assistant", "content": final_text})
+
+            if final_err == "rate_limit_partial":
+                st.warning(
+                    "⚠️ Phản hồi có thể chưa đầy đủ (bị giới hạn giữa chừng)."
+                    if lang == "vi" else
+                    "⚠️ Response may be incomplete (rate-limited mid-stream)."
+                )
+
+        elif final_err == "rate_limit":
             st.session_state.pending_retry_prompt = user_prompt
             if (st.session_state.messages and
                     st.session_state.messages[-1]["role"] == "user" and
                     st.session_state.messages[-1]["content"] == user_prompt):
                 st.session_state.messages.pop()
             render_rate_limit_and_retry(lang)
+            return
+
         else:
-            error_msg = f"{t('ai_error', lang)} Error: {str(err_type)[:150] if err_type else 'Unknown'}"
+            error_msg = f"{t('ai_error', lang)} Error: {str(final_err)[:150] if final_err else 'Unknown'}"
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-    if response_text:
+    if final_text:
         if len(chat_data.get("messages", [])) == 0:
             try:
                 chat_data["title"] = generate_chat_title(user_prompt, SECRET_API_KEYS, sel_model, lang)
