@@ -26,9 +26,9 @@
     }
   },
   "__system_config__": {
-    "maintenance_mode": false,
+    "maintenance_mode": true,
     "whitelist_users": [],
-    "maintenance_note": "I'm fixing a bug on this software, come back in 5 minutes!",
+    "maintenance_note": "I'm test for new features, come back in 5 minutes.",
     "announcement": {
       "enabled": true,
       "title": "Privacy Policy Notice",
