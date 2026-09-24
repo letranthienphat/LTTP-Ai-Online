@@ -6,6 +6,7 @@ import base64
 import hashlib
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import google.generativeai as genai
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -20,7 +21,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -30,9 +31,15 @@ TRAFFIC_LOG_KEY = "__traffic_log__"
 TRAFFIC_RETENTION_DAYS = 30
 
 VN_TZ_OFFSET = timedelta(hours=7)
-
-# Khoảng thời gian scan version (giây)
 VERSION_SCAN_INTERVAL = 60
+
+# Smart draft constants
+SMART_DRAFT_MIN_WORDS = 20          # Bắt đầu auto-save khi > 20 từ
+SMART_DRAFT_INTERVAL_SEC = 5        # Định kỳ 5s
+SMART_DRAFT_IDLE_SEC = 20           # Idle 20s → lưu 1 lần
+COOKIE_DRAFT = "LTTP_chat_draft"
+COOKIE_DRAFT_TS = "LTTP_draft_ts"
+COOKIE_DRAFT_ENABLED = "LTTP_draft_enabled"
 
 def vn_now() -> datetime:
     return datetime.utcnow() + VN_TZ_OFFSET
@@ -101,16 +108,15 @@ UPDATE_NOTICE = {
     "en": "🔄 Software just got updated",
 }
 
-# Banner yêu cầu reboot khi phát hiện version mới
 REBOOT_NOTICE = {
     "vi": {
-        "title": "🚀 Đã có phiên bản mới!",
+        "title": "Đã có phiên bản mới!",
         "desc": "Vui lòng tải lại trang (F5 hoặc Ctrl+R) để cập nhật lên phiên bản mới nhất.",
         "button": "Tải lại ngay",
         "later": "Để sau",
     },
     "en": {
-        "title": "🚀 New version available!",
+        "title": "New version available!",
         "desc": "Please reload the page (F5 or Ctrl+R) to update to the latest version.",
         "button": "Reload now",
         "later": "Later",
@@ -199,16 +205,10 @@ st.markdown("""
         font-weight: 600; color: #667eea;
         text-align: center; margin-bottom: 10px;
     }
-
-    /* Banner yêu cầu reboot */
     .reboot-banner {
-        position: sticky;
-        top: 0;
-        z-index: 9999;
         padding: 14px 20px;
         background: linear-gradient(90deg, #f59e0b, #f97316);
-        color: #fff;
-        border-radius: 12px;
+        color: #fff; border-radius: 12px;
         margin-bottom: 14px;
         box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35);
         animation: rebootPulse 2s ease-in-out infinite;
@@ -216,12 +216,8 @@ st.markdown("""
     .reboot-banner-title {
         font-size: 1.05rem; font-weight: 800;
         margin-bottom: 4px;
-        display: flex; align-items: center; gap: 8px;
     }
-    .reboot-banner-desc {
-        font-size: 0.9rem; opacity: 0.95;
-        margin-bottom: 10px;
-    }
+    .reboot-banner-desc { font-size: 0.9rem; opacity: 0.95; }
     @keyframes rebootPulse {
         0%, 100% { box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35); }
         50% { box-shadow: 0 4px 24px rgba(249, 115, 22, 0.65); }
@@ -277,6 +273,22 @@ st.markdown("""
         border-radius: 6px; font-size: 0.88rem;
         font-family: monospace;
     }
+    .draft-banner {
+        padding: 10px 14px; margin-bottom: 12px;
+        background: rgba(251, 191, 36, 0.08);
+        border: 1px solid rgba(251, 191, 36, 0.3);
+        border-radius: 10px;
+        font-size: 0.85rem; color: #fbbf24;
+    }
+    .draft-preview {
+        padding: 8px 12px; margin-top: 6px;
+        background: rgba(0,0,0,0.15);
+        border-radius: 6px;
+        font-family: monospace; font-size: 0.82rem;
+        color: #e2e8f0;
+        max-height: 80px; overflow-y: auto;
+        white-space: pre-wrap; word-break: break-word;
+    }
 
     /* Ẩn nút attach trong chat_input */
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
@@ -325,149 +337,196 @@ def mask_device(did: str) -> str:
         return "unknown"
     return f"{did[:6]}...{did[-4:]}"
 
-# ==========================================
-# 4. VERSION CHECK (PHÁT HIỆN PHIÊN BẢN MỚI)
-# ==========================================
-def _init_version_cookie():
-    """
-    Khởi tạo cookie version nếu chưa có.
-    Đây là 'mã hiện tại' mà trình duyệt đang chạy.
-    """
-    try:
-        cached_ver = cookies.get("LTTP_app_version")
-        if not cached_ver:
-            # Lần đầu vào → ghi version hiện tại
-            cookies.set("LTTP_app_version", APP_VERSION, max_age=COOKIE_MAX_AGE)
-            st.session_state.version_mismatch = False
-        else:
-            # So sánh version
-            if cached_ver != APP_VERSION:
-                st.session_state.version_mismatch = True
-            else:
-                st.session_state.version_mismatch = False
-    except Exception:
-        st.session_state.version_mismatch = False
+def count_words(text: str) -> int:
+    if not text:
+        return 0
+    return len(text.strip().split())
 
-
-def _background_version_scanner():
+# ==========================================
+# 4. JAVASCRIPT INJECTION (fix lỗi `});`)
+# ==========================================
+def inject_js(js_code: str, height: int = 0):
     """
-    Chèn JS chạy ngầm mỗi 60s để tự động kiểm tra version.
-    - Không gọi API, không rerun app.
-    - Chỉ so sánh APP_VERSION (đã nhúng vào JS) với cookie LTTP_app_version.
-    - Nếu khác → tự động F5 trang? KHÔNG. Chỉ hiển thị banner.
-    - Trên thực tế: khi user F5 tay, cookie sẽ được cập nhật lại.
-    
-    Lưu ý: JS không đọc được cookie HttpOnly (Streamlit cookie controller 
-    thường không HttpOnly). Nếu đọc được, so sánh và gọi location.reload() 
-    nếu đã có sẵn banner (tức là user đã nhấn 1 lần).
+    Chèn JavaScript an toàn KHÔNG bị Streamlit sanitize.
+    Dùng st.components.v1.html với iframe ẩn.
     """
-    scanner_html = f"""
-    <div id="lttp-version-scanner" style="display:none;"></div>
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;">
     <script>
     (function() {{
-        const CURRENT_VERSION = "{APP_VERSION}";
-        const SCAN_INTERVAL_MS = {VERSION_SCAN_INTERVAL * 1000};
-        const COOKIE_NAME = "LTTP_app_version";
-        
-        function getCookie(name) {{
-            const value = `; ${{document.cookie}}`;
-            const parts = value.split(`; ${{name}}=`);
-            if (parts.length === 2) return parts.pop().split(';').shift();
-            return null;
+        try {{
+            const w = window.parent || window;
+            const d = w.document;
+            {js_code}
+        }} catch (e) {{
+            console.warn("LTTP JS error:", e);
         }}
-        
-        function checkVersion() {{
-            try {{
-                const cached = getCookie(COOKIE_NAME);
-                if (cached && cached !== CURRENT_VERSION) {{
-                    // Có version mới → báo cho Python bằng cách set 1 cookie phụ
-                    document.cookie = "LTTP_version_changed=1; path=/; max-age=3600";
-                    // Thêm banner nếu chưa có
-                    if (!document.getElementById('lttp-reboot-banner-injected')) {{
-                        const banner = document.createElement('div');
-                        banner.id = 'lttp-reboot-banner-injected';
-                        banner.style.cssText = `
-                            position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
-                            z-index: 999999; padding: 14px 24px;
-                            background: linear-gradient(90deg, #f59e0b, #f97316);
-                            color: white; border-radius: 12px;
-                            box-shadow: 0 6px 24px rgba(249,115,22,0.55);
-                            font-family: sans-serif; max-width: 90vw;
-                            animation: lttpPulse 2s ease-in-out infinite;
-                        `;
-                        banner.innerHTML = `
-                            <div style="font-weight:800; font-size:1.05rem; margin-bottom:4px;">
-                                🚀 Đã có phiên bản mới!
-                            </div>
-                            <div style="font-size:0.9rem; margin-bottom:10px; opacity:0.95;">
-                                Vui lòng tải lại trang (F5 hoặc Ctrl+R) để cập nhật.
-                            </div>
-                            <button onclick="location.reload()" style="
-                                background: white; color: #f97316;
-                                border: none; padding: 8px 20px;
-                                border-radius: 8px; font-weight: 700;
-                                cursor: pointer; font-size: 0.9rem;
-                            ">Tải lại ngay</button>
-                        `;
-                        document.body.appendChild(banner);
-                        
-                        // Thêm keyframes
-                        if (!document.getElementById('lttp-keyframes')) {{
-                            const style = document.createElement('style');
-                            style.id = 'lttp-keyframes';
-                            style.textContent = `
-                                @keyframes lttpPulse {{
-                                    0%, 100% {{ box-shadow: 0 6px 24px rgba(249,115,22,0.55); }}
-                                    50% {{ box-shadow: 0 6px 32px rgba(249,115,22,0.85); }}
-                                }}
-                            `;
-                            document.head.appendChild(style);
-                        }}
-                    }}
-                }}
-            }} catch (e) {{
-                // Silent fail
-            }}
-        }}
-        
-        // Scan lần đầu sau 3s (để UI load xong)
-        setTimeout(checkVersion, 3000);
-        // Scan định kỳ
-        setInterval(checkVersion, SCAN_INTERVAL_MS);
     }})();
     </script>
+    </body>
+    </html>
     """
-    st.markdown(scanner_html, unsafe_allow_html=True)
+    components.html(html, height=height, scrolling=False)
 
 
-def render_reboot_banner_if_needed():
-    """Hiện banner yêu cầu reboot nếu phát hiện version mismatch (fallback phía Python)."""
-    if not st.session_state.get("version_mismatch", False):
+def inject_version_scanner():
+    """JS scan version mỗi 60s, chạy an toàn trong iframe."""
+    js = f"""
+    const CURRENT_VERSION = "{APP_VERSION}";
+    const SCAN_INTERVAL_MS = {VERSION_SCAN_INTERVAL * 1000};
+    const COOKIE_NAME = "LTTP_app_version";
+    
+    function getCookie(name) {{
+        const value = `; ${{d.cookie}}`;
+        const parts = value.split(`; ${{name}}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+        return null;
+    }}
+    
+    function checkVersion() {{
+        try {{
+            const cached = getCookie(COOKIE_NAME);
+            if (cached && cached !== CURRENT_VERSION) {{
+                if (!d.getElementById('lttp-reboot-banner-injected')) {{
+                    const banner = d.createElement('div');
+                    banner.id = 'lttp-reboot-banner-injected';
+                    banner.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:999999;padding:14px 24px;background:linear-gradient(90deg,#f59e0b,#f97316);color:white;border-radius:12px;box-shadow:0 6px 24px rgba(249,115,22,0.55);font-family:sans-serif;max-width:90vw;';
+                    banner.innerHTML = '<div style="font-weight:800;font-size:1.05rem;margin-bottom:4px;">🚀 Đã có phiên bản mới!</div><div style="font-size:0.9rem;margin-bottom:10px;opacity:0.95;">Vui lòng tải lại trang để cập nhật.</div><button onclick="location.reload()" style="background:white;color:#f97316;border:none;padding:8px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.9rem;">Tải lại ngay</button>';
+                    d.body.appendChild(banner);
+                }}
+            }}
+        }} catch (e) {{}}
+    }}
+    
+    setTimeout(checkVersion, 3000);
+    setInterval(checkVersion, SCAN_INTERVAL_MS);
+    """
+    inject_js(js)
+
+
+def inject_smart_draft_tracker(enabled: bool, min_words: int,
+                                interval_sec: int, idle_sec: int):
+    """
+    JS theo dõi textarea chat_input.
+    - Khi số từ > min_words: cứ mỗi interval_sec lưu draft vào cookie.
+    - Khi idle (không nhập) idle_sec giây và text có nội dung: lưu 1 lần.
+    """
+    if not enabled:
+        # Vẫn xóa draft cũ nếu user tắt
+        js = f"""
+        d.cookie = "{COOKIE_DRAFT}=; max-age=0; path=/";
+        d.cookie = "{COOKIE_DRAFT_TS}=; max-age=0; path=/";
+        """
+        inject_js(js)
         return
-    if st.session_state.get("reboot_banner_dismissed", False):
-        return
 
-    lang = st.session_state.get("language", "en")
-    notice = REBOOT_NOTICE.get(lang, REBOOT_NOTICE["en"])
+    js = f"""
+    const MIN_WORDS = {min_words};
+    const INTERVAL_MS = {interval_sec * 1000};
+    const IDLE_MS = {idle_sec * 1000};
+    const DRAFT_COOKIE = "{COOKIE_DRAFT}";
+    const TS_COOKIE = "{COOKIE_DRAFT_TS}";
+    
+    let lastSavedText = "";
+    let lastIdleSavedText = "";
+    let typingTimer = null;
+    let periodicTimer = null;
+    let currentTextarea = null;
+    
+    function countWords(s) {{
+        if (!s) return 0;
+        return s.trim().split(/\\s+/).filter(Boolean).length;
+    }}
+    
+    function saveDraft(text, reason) {{
+        try {{
+            const encoded = encodeURIComponent(text);
+            // Giới hạn 3500 ký tự để không vượt cookie limit
+            const trimmed = encoded.length > 3500 ? encoded.slice(0, 3500) : encoded;
+            d.cookie = `${{DRAFT_COOKIE}}=${{trimmed}}; path=/; max-age=86400`;
+            d.cookie = `${{TS_COOKIE}}=${{Date.now()}}; path=/; max-age=86400`;
+            lastSavedText = text;
+        }} catch (e) {{}}
+    }}
+    
+    function clearDraft() {{
+        try {{
+            d.cookie = `${{DRAFT_COOKIE}}=; path=/; max-age=0`;
+            d.cookie = `${{TS_COOKIE}}=; path=/; max-age=0`;
+            lastSavedText = "";
+            lastIdleSavedText = "";
+        }} catch (e) {{}}
+    }}
+    
+    function attachToTextarea() {{
+        const candidates = d.querySelectorAll(
+            'textarea[data-testid="stChatInputTextArea"], ' +
+            'section[data-testid="stChatInput"] textarea, ' +
+            'div[data-testid="stChatInput"] textarea, ' +
+            'textarea[aria-label*="chat" i], ' +
+            'textarea[placeholder]'
+        );
+        let ta = null;
+        for (const c of candidates) {{
+            if (c.offsetParent !== null) {{ ta = c; break; }}
+        }}
+        if (!ta || ta === currentTextarea) return;
+        
+        currentTextarea = ta;
+        const handler = function() {{
+            const text = ta.value || "";
+            const words = countWords(text);
+            
+            // Reset idle timer
+            if (typingTimer) clearTimeout(typingTimer);
+            if (periodicTimer) {{ clearInterval(periodicTimer); periodicTimer = null; }}
+            
+            if (words > MIN_WORDS) {{
+                // Định kỳ interval_sec
+                periodicTimer = setInterval(function() {{
+                    const cur = ta.value || "";
+                    if (cur && cur !== lastSavedText) {{
+                        saveDraft(cur, "periodic");
+                    }}
+                }}, INTERVAL_MS);
+            }}
+            
+            // Idle: sau IDLE_MS không nhập → lưu 1 lần
+            typingTimer = setTimeout(function() {{
+                const cur = ta.value || "";
+                if (cur && cur !== lastIdleSavedText) {{
+                    saveDraft(cur, "idle");
+                    lastIdleSavedText = cur;
+                }}
+            }}, IDLE_MS);
+        }};
+        
+        ta.removeEventListener("input", ta._lttpHandler);
+        ta._lttpHandler = handler;
+        ta.addEventListener("input", handler);
+    }}
+    
+    attachToTextarea();
+    setInterval(attachToTextarea, 2000);
+    """
+    inject_js(js)
 
-    st.markdown(f"""
-    <div class="reboot-banner">
-        <div class="reboot-banner-title">🚀 {notice['title']}</div>
-        <div class="reboot-banner-desc">{notice['desc']}</div>
-    </div>
-    """, unsafe_allow_html=True)
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        # Nút tải lại = reload trang qua JS
-        if st.button(f"🔄 {notice['button']}", use_container_width=True, key="reboot_now_btn"):
-            st.markdown("""
-            <script>location.reload();</script>
-            """, unsafe_allow_html=True)
-    with col2:
-        if st.button(f"⏸️ {notice['later']}", use_container_width=True, key="reboot_later_btn"):
-            st.session_state.reboot_banner_dismissed = True
-            st.rerun()
+def clear_draft_cookie_via_js():
+    """Xóa draft cookie khi user đã gửi tin nhắn."""
+    js = f"""
+    d.cookie = "{COOKIE_DRAFT}=; max-age=0; path=/";
+    d.cookie = "{COOKIE_DRAFT_TS}=; max-age=0; path=/";
+    """
+    inject_js(js)
+
+
+def inject_version_scanner_legacy_marker():
+    """Marker rỗng - tránh trùng lặp."""
+    pass
 
 # ==========================================
 # 5. LỖI 429
@@ -621,7 +680,8 @@ def migrate_user_data(db_data: dict) -> tuple:
         if "preferences" not in uinfo:
             uinfo["preferences"] = {
                 "model": DEFAULT_MODEL, "temperature": 0.7,
-                "top_p": 0.95, "top_k": 40
+                "top_p": 0.95, "top_k": 40,
+                "smart_draft": True
             }
             migrated = True
         else:
@@ -631,7 +691,8 @@ def migrate_user_data(db_data: dict) -> tuple:
                 uinfo["preferences"] = prefs
                 migrated = True
             for k, dv in [("model", DEFAULT_MODEL), ("temperature", 0.7),
-                          ("top_p", 0.95), ("top_k", 40)]:
+                          ("top_p", 0.95), ("top_k", 40),
+                          ("smart_draft", True)]:
                 if k not in prefs:
                     prefs[k] = dv
                     migrated = True
@@ -639,6 +700,11 @@ def migrate_user_data(db_data: dict) -> tuple:
             if old_model in LEGACY_MODEL_MAP:
                 prefs["model"] = LEGACY_MODEL_MAP[old_model]
                 migrated = True
+
+        # Không còn lưu "draft" trong DB user (chuyển sang cookie).
+        if "draft" in uinfo:
+            del uinfo["draft"]
+            migrated = True
 
         for cid, chat in uinfo.get("chats", {}).items():
             if not isinstance(chat, dict):
@@ -940,7 +1006,6 @@ TRANSLATIONS = {
         "traffic_desc": "Visitor log (Vietnam time, GMT+7)",
         "traffic_today": "Today", "traffic_7d": "Last 7 days",
         "traffic_30d": "Last 30 days",
-        "traffic_total_visits": "Total visits",
         "traffic_unique": "Unique visitors",
         "traffic_by_role": "By role",
         "traffic_chart_title": "Visits per day (last 14 days)",
@@ -949,6 +1014,23 @@ TRANSLATIONS = {
         "traffic_role_user": "Users", "traffic_role_guest": "Guests",
         "traffic_role_admin": "Admin",
         "traffic_current_time": "Current VN time",
+        "settings_title": "⚙️ Settings",
+        "smart_draft_label": "Smart Message Saving",
+        "smart_draft_help": (
+            "Automatically saves what you are typing so you never lose it:\n\n"
+            "• **Periodic save:** If your draft exceeds 20 words, it will be auto-saved every 5 seconds.\n"
+            "• **Idle save:** If you stop typing for 20 seconds, the current text will be saved once.\n\n"
+            "Saved drafts are restored when you return to the app. Disable if you don't want this behavior."
+        ),
+        "smart_draft_on": "✅ Enabled",
+        "smart_draft_off": "❌ Disabled",
+        "smart_draft_saved_toast": "Draft saved",
+        "draft_restored_title": "📝 Unsent draft found",
+        "draft_restored_desc": "You have a saved draft from a previous session. Click to restore:",
+        "draft_restore_btn": "📋 Copy to clipboard",
+        "draft_discard_btn": "🗑️ Discard draft",
+        "draft_discarded_toast": "Draft discarded",
+        "draft_copied_toast": "Draft copied to clipboard!",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -1017,7 +1099,6 @@ TRANSLATIONS = {
         "traffic_desc": "Nhật ký truy cập (giờ Việt Nam, GMT+7)",
         "traffic_today": "Hôm nay", "traffic_7d": "7 ngày qua",
         "traffic_30d": "30 ngày qua",
-        "traffic_total_visits": "Tổng lượt truy cập",
         "traffic_unique": "Người truy cập riêng biệt",
         "traffic_by_role": "Theo vai trò",
         "traffic_chart_title": "Lượt truy cập mỗi ngày (14 ngày qua)",
@@ -1026,6 +1107,23 @@ TRANSLATIONS = {
         "traffic_role_user": "Người dùng", "traffic_role_guest": "Khách",
         "traffic_role_admin": "Admin",
         "traffic_current_time": "Giờ VN hiện tại",
+        "settings_title": "⚙️ Cài đặt",
+        "smart_draft_label": "Lưu tin nhắn thông minh",
+        "smart_draft_help": (
+            "Tự động lưu những gì bạn đang nhập để không bao giờ mất:\n\n"
+            "• **Lưu định kỳ:** Nếu bạn nhập trên 20 từ, tin nhắn sẽ được tự động lưu mỗi 5 giây.\n"
+            "• **Lưu khi ngừng nhập:** Nếu bạn không nhập gì trong 20 giây, nội dung hiện tại sẽ được lưu một lần.\n\n"
+            "Tin nhắn nháp sẽ được khôi phục khi bạn quay lại. Tắt nếu bạn không muốn dùng."
+        ),
+        "smart_draft_on": "✅ Đang bật",
+        "smart_draft_off": "❌ Đang tắt",
+        "smart_draft_saved_toast": "Đã lưu nháp",
+        "draft_restored_title": "📝 Có tin nhắn nháp chưa gửi",
+        "draft_restored_desc": "Bạn có tin nhắn nháp từ phiên trước. Bấm để khôi phục:",
+        "draft_restore_btn": "📋 Sao chép vào clipboard",
+        "draft_discard_btn": "🗑️ Xóa nháp",
+        "draft_discarded_toast": "Đã xóa nháp",
+        "draft_copied_toast": "Đã sao chép vào clipboard!",
     }
 }
 
@@ -1042,22 +1140,39 @@ for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
               ("guest_chats", {}), ("guest_memory", ""),
               ("traffic_recorded", False),
               ("version_mismatch", False),
-              ("reboot_banner_dismissed", False)]:
+              ("reboot_banner_dismissed", False),
+              ("draft_last_saved_hash", "")]:
     if k not in st.session_state:
         st.session_state[k] = dv
 
 if "guest_prefs" not in st.session_state:
     st.session_state.guest_prefs = {
         "model": DEFAULT_MODEL, "temperature": 0.7,
-        "top_p": 0.95, "top_k": 40
+        "top_p": 0.95, "top_k": 40,
+        "smart_draft": True
     }
 
-# === VERSION CHECK ===
-# Khởi tạo cookie + check mismatch
-_init_version_cookie()
+# ==========================================
+# 13. VERSION CHECK (dùng iframe an toàn, không lộ `});`)
+# ==========================================
+def _init_version_cookie():
+    try:
+        cached_ver = cookies.get("LTTP_app_version")
+        if not cached_ver:
+            cookies.set("LTTP_app_version", APP_VERSION, max_age=COOKIE_MAX_AGE)
+            st.session_state.version_mismatch = False
+        elif cached_ver != APP_VERSION:
+            st.session_state.version_mismatch = True
+            # Ghi đè để lần F5 tiếp theo không lặp
+            cookies.set("LTTP_app_version", APP_VERSION, max_age=COOKIE_MAX_AGE)
+        else:
+            st.session_state.version_mismatch = False
+    except Exception:
+        st.session_state.version_mismatch = False
 
-# Chèn background scanner (JS)
-_background_version_scanner()
+
+_init_version_cookie()
+inject_version_scanner()
 
 _seen_ver = cookies.get("LTTP_seen_version")
 if _seen_ver:
@@ -1074,7 +1189,7 @@ maintenance_note = system_config.get("maintenance_note", "").strip()
 whitelist_users = [u.strip().lower() for u in system_config.get("whitelist_users", []) if u.strip()]
 
 # ==========================================
-# 13. AUTO-LOGIN
+# 14. AUTO-LOGIN
 # ==========================================
 if (not st.session_state.user
         and not st.session_state.is_admin
@@ -1092,7 +1207,7 @@ if (not st.session_state.user
             break
 
 # ==========================================
-# 14. RECORD TRAFFIC
+# 15. RECORD TRAFFIC
 # ==========================================
 def _try_record_traffic_once():
     if st.session_state.traffic_recorded:
@@ -1113,7 +1228,7 @@ def _try_record_traffic_once():
 _try_record_traffic_once()
 
 # ==========================================
-# 15. UPDATE NOTICE
+# 16. UPDATE NOTICE
 # ==========================================
 def _show_update_notice_if_needed():
     current_lang = st.session_state.language
@@ -1129,7 +1244,35 @@ def _show_update_notice_if_needed():
         )
 
 # ==========================================
-# 16. AUTH UI
+# 17. REBOOT BANNER
+# ==========================================
+def render_reboot_banner_if_needed():
+    if not st.session_state.get("version_mismatch", False):
+        return
+    if st.session_state.get("reboot_banner_dismissed", False):
+        return
+
+    lang = st.session_state.get("language", "en")
+    notice = REBOOT_NOTICE.get(lang, REBOOT_NOTICE["en"])
+
+    st.markdown(f"""
+    <div class="reboot-banner">
+        <div class="reboot-banner-title">🚀 {notice['title']}</div>
+        <div class="reboot-banner-desc">{notice['desc']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button(f"🔄 {notice['button']}", use_container_width=True, key="reboot_now_btn"):
+            inject_js("location.reload();")
+    with col2:
+        if st.button(f"⏸️ {notice['later']}", use_container_width=True, key="reboot_later_btn"):
+            st.session_state.reboot_banner_dismissed = True
+            st.rerun()
+
+# ==========================================
+# 18. AUTH UI
 # ==========================================
 def render_auth_ui():
     lang = st.session_state.language
@@ -1220,7 +1363,8 @@ def render_auth_ui():
                                 "language": "en",
                                 "preferences": {
                                     "model": DEFAULT_MODEL, "temperature": 0.7,
-                                    "top_p": 0.95, "top_k": 40
+                                    "top_p": 0.95, "top_k": 40,
+                                    "smart_draft": True
                                 }
                             }
                             ok, msg = GitHubStorage.save_db(db)
@@ -1239,14 +1383,15 @@ def render_auth_ui():
             st.session_state.guest_chats = {}
             st.session_state.guest_prefs = {
                 "model": DEFAULT_MODEL, "temperature": 0.7,
-                "top_p": 0.95, "top_k": 40
+                "top_p": 0.95, "top_k": 40,
+                "smart_draft": True
             }
             st.session_state.guest_memory = ""
             st.session_state.traffic_recorded = False
             st.rerun()
 
 # ==========================================
-# 17. TRAFFIC ANALYTICS
+# 19. TRAFFIC ANALYTICS
 # ==========================================
 def _render_traffic_analytics(lang: str, traffic: dict):
     st.markdown(f"### {t('traffic_title', lang)}")
@@ -1342,7 +1487,7 @@ def _render_traffic_analytics(lang: str, traffic: dict):
                 st.markdown(f"<div class='traffic-row'>{icon} <b>{ts}</b> — {lbl} <span style='opacity:0.5'>({dev})</span></div>", unsafe_allow_html=True)
 
 # ==========================================
-# 18. ADMIN PANEL
+# 20. ADMIN PANEL
 # ==========================================
 def render_admin_panel():
     lang = st.session_state.language
@@ -1453,7 +1598,7 @@ def render_admin_panel():
         st.rerun()
 
 # ==========================================
-# 19. MAINTENANCE SCREEN
+# 21. MAINTENANCE SCREEN
 # ==========================================
 def render_maintenance_screen():
     lang = st.session_state.language
@@ -1492,7 +1637,7 @@ def render_maintenance_screen():
                     st.error("❌ Invalid admin credentials.")
 
 # ==========================================
-# 20. ROUTING
+# 22. ROUTING
 # ==========================================
 if st.session_state.is_admin:
     render_admin_panel()
@@ -1509,7 +1654,7 @@ if not st.session_state.user and not st.session_state.is_guest:
     st.stop()
 
 # ==========================================
-# 21. LOAD USER / GUEST DATA
+# 23. LOAD USER / GUEST DATA
 # ==========================================
 is_guest = st.session_state.is_guest
 lang = st.session_state.language
@@ -1534,6 +1679,7 @@ else:
     user_data["preferences"].setdefault("temperature", 0.7)
     user_data["preferences"].setdefault("top_p", 0.95)
     user_data["preferences"].setdefault("top_k", 40)
+    user_data["preferences"].setdefault("smart_draft", True)
     st.session_state.language = user_data.get("language", "en")
     lang = st.session_state.language
     user_chats = user_data["chats"]
@@ -1543,7 +1689,7 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.messages = []
 
 # ==========================================
-# 22. SIDEBAR
+# 24. SIDEBAR
 # ==========================================
 with st.sidebar:
     if not is_guest:
@@ -1637,12 +1783,53 @@ with st.sidebar:
                     st.rerun()
 
     st.divider()
+
+    # ============================
+    # SETTINGS EXPANDER
+    # ============================
+    with st.expander(t("settings_title", lang), expanded=False):
+        # === SMART DRAFT ===
+        col_lbl, col_help = st.columns([0.85, 0.15])
+        with col_lbl:
+            st.markdown(f"**{t('smart_draft_label', lang)}**")
+        with col_help:
+            with st.popover("❓"):
+                st.markdown(t("smart_draft_help", lang))
+
+        smart_draft_val = st.toggle(
+            t("smart_draft_label", lang),
+            value=bool(user_data["preferences"].get("smart_draft", True)),
+            key="smart_draft_toggle",
+            label_visibility="collapsed"
+        )
+
+        if smart_draft_val != user_data["preferences"].get("smart_draft", True):
+            user_data["preferences"]["smart_draft"] = smart_draft_val
+            if is_guest:
+                st.session_state.guest_prefs["smart_draft"] = smart_draft_val
+            else:
+                db_data[st.session_state.user] = user_data
+                GitHubStorage.save_db(db_data)
+            st.toast(
+                t("smart_draft_on", lang) if smart_draft_val else t("smart_draft_off", lang),
+                icon="💾"
+            )
+
+        status_txt = t("smart_draft_on", lang) if smart_draft_val else t("smart_draft_off", lang)
+        st.caption(f"→ {status_txt}")
+
+        # Đảm bảo khi tắt, xóa draft cũ
+        if not smart_draft_val:
+            clear_draft_cookie_via_js()
+
+    st.divider()
+
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         mem = st.text_area("Memory:", value=user_data.get("custom_instructions", ""),
                            height=120, placeholder=t("memory_placeholder", lang),
                            key="sidebar_memory_ta")
-        if st.button(t("save_memory_btn", lang), use_container_width=True):
+        if st.button(t("save_memory_btn", lang), use_container_width=True, key="sidebar_save_mem"):
             if is_guest:
                 st.session_state.guest_memory = mem.strip()
                 user_data["custom_instructions"] = mem.strip()
@@ -1721,7 +1908,33 @@ with st.sidebar:
             st.rerun()
 
 # ==========================================
-# 23. MAIN CHAT
+# 25. SMART DRAFT: INJECT TRACKER
+# ==========================================
+smart_draft_enabled = bool(user_data["preferences"].get("smart_draft", True))
+inject_smart_draft_tracker(
+    enabled=smart_draft_enabled,
+    min_words=SMART_DRAFT_MIN_WORDS,
+    interval_sec=SMART_DRAFT_INTERVAL_SEC,
+    idle_sec=SMART_DRAFT_IDLE_SEC
+)
+
+# Đọc draft từ cookie (JS đã ghi)
+def get_saved_draft():
+    try:
+        raw = cookies.get(COOKIE_DRAFT)
+        ts = cookies.get(COOKIE_DRAFT_TS)
+        if raw:
+            from urllib.parse import unquote
+            text = unquote(raw)
+            return text, ts
+    except Exception:
+        pass
+    return None, None
+
+draft_text, draft_ts = get_saved_draft()
+
+# ==========================================
+# 26. MAIN CHAT
 # ==========================================
 _show_update_notice_if_needed()
 render_reboot_banner_if_needed()
@@ -1741,6 +1954,44 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id in user
 
 st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{sel_model}`")
 
+# === DRAFT RESTORE BANNER ===
+if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
+    st.markdown(f"""
+    <div class="draft-banner">
+        <b>{t('draft_restored_title', lang)}</b><br>
+        <span style="opacity:0.85;">{t('draft_restored_desc', lang)}</span>
+        <div class="draft-preview">{draft_text}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    dc1, dc2, _ = st.columns([1, 1, 2])
+    with dc1:
+        if st.button(t("draft_restore_btn", lang), use_container_width=True, key="draft_restore_btn"):
+            # Copy vào clipboard qua JS
+            safe_text = json.dumps(draft_text)
+            inject_js(f"""
+            (function() {{
+                const txt = {safe_text};
+                if (navigator.clipboard && navigator.clipboard.writeText) {{
+                    navigator.clipboard.writeText(txt).catch(function(){{}});
+                }} else {{
+                    const ta = d.createElement('textarea');
+                    ta.value = txt;
+                    d.body.appendChild(ta);
+                    ta.select();
+                    try {{ d.execCommand('copy'); }} catch(e){{}}
+                    d.body.removeChild(ta);
+                }}
+            }})();
+            """)
+            st.toast(t("draft_copied_toast", lang), icon="📋")
+    with dc2:
+        if st.button(t("draft_discard_btn", lang), use_container_width=True, key="draft_discard_btn"):
+            clear_draft_cookie_via_js()
+            st.toast(t("draft_discarded_toast", lang), icon="🗑️")
+            time.sleep(0.3)
+            st.rerun()
+
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -1748,9 +1999,12 @@ for msg in st.session_state.messages:
             st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 24. XỬ LÝ PROMPT
+# 27. XỬ LÝ PROMPT
 # ==========================================
 def _process_prompt(user_prompt):
+    # Xóa draft khi gửi tin
+    clear_draft_cookie_via_js()
+
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
