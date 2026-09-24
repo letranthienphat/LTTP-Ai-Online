@@ -27,7 +27,13 @@
   "__system_config__": {
     "maintenance_mode": false,
     "whitelist_users": [],
-    "maintenance_note": "I'm test for new features, come back in 5 minutes."
+    "maintenance_note": "I'm test for new features, come back in 5 minutes.",
+    "announcement": {
+      "enabled": false,
+      "title": "",
+      "body": "",
+      "updated_at": ""
+    }
   },
   "__traffic_log__": {
     "2026-09-24": {
