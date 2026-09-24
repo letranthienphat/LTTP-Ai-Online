@@ -22,7 +22,7 @@
     }
   },
   "__system_config__": {
-    "maintenance_mode": true,
+    "maintenance_mode": false,
     "whitelist_users": []
   }
 }
