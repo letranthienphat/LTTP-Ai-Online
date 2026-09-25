@@ -96,6 +96,12 @@
           "label": "Admin",
           "role": "admin",
           "device": "e4559896-94b8-4036-bce9-5b12af78f40a"
+        },
+        {
+          "time": "2026-09-25 18:22:04",
+          "label": "phát",
+          "role": "user",
+          "device": "e932d83a-215f-42a9-8c3f-60838e3f4575"
         }
       ]
     }
