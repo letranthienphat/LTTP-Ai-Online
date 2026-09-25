@@ -87,6 +87,16 @@
           "device": "fdb344f8-8218-4f21-bf93-b0dfbd05b826"
         }
       ]
+    },
+    "2026-09-25": {
+      "visits": [
+        {
+          "time": "2026-09-25 18:19:09",
+          "label": "Admin",
+          "role": "admin",
+          "device": "e4559896-94b8-4036-bce9-5b12af78f40a"
+        }
+      ]
     }
   }
 }
