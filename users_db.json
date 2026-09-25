@@ -26,7 +26,7 @@
     }
   },
   "__system_config__": {
-    "maintenance_mode": true,
+    "maintenance_mode": false,
     "maintenance_note": "I'm test for new features, come back in 5 minutes.",
     "announcement": {
       "enabled": true,
