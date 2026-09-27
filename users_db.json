@@ -120,6 +120,12 @@
           "label": "Admin",
           "role": "admin",
           "device": "8e4b466f-6f22-4f36-b965-9f5a26b48eed"
+        },
+        {
+          "time": "2026-09-27 09:22:35",
+          "label": "phát",
+          "role": "user",
+          "device": "d8482d8f-1369-4497-925c-289a26588911"
         }
       ]
     }
