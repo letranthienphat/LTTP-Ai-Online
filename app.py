@@ -33,26 +33,23 @@ SYSTEM_CONFIG_KEY = "__system_config__"
 TRAFFIC_LOG_KEY = "__traffic_log__"
 BUG_REPORTS_KEY = "__bug_reports__"
 TRAFFIC_RETENTION_DAYS = 30
-BUG_REPORTS_MAX = 50  # Giữ tối đa 50 report gần nhất
+BUG_REPORTS_MAX = 50
 
 VN_TZ_OFFSET = timedelta(hours=7)
 VERSION_SCAN_INTERVAL = 60
 
-# Smart draft constants
 SMART_DRAFT_MIN_WORDS = 20
 SMART_DRAFT_INTERVAL_SEC = 5
 SMART_DRAFT_IDLE_SEC = 20
 COOKIE_DRAFT = "LTTP_chat_draft"
 COOKIE_DRAFT_TS = "LTTP_draft_ts"
-COOKIE_DRAFT_ENABLED = "LTTP_draft_enabled"
 
-# Bug report cookie chunk settings
+# Bug report chunks
 BR_COOKIE_PREFIX = "LTTP_br_"
-BR_COOKIE_META = "LTTP_br_meta"  # {chunks: N, ts: ..., text: ...}
-BR_CHUNK_SIZE = 3000  # ký tự mỗi chunk
-BR_MAX_CHUNKS = 15  # tối đa 15 chunks = 45KB base64 (đủ cho ảnh 240p)
+BR_META_COOKIE = "LTTP_br_meta"
+BR_CHUNK_SIZE = 3000
+BR_MAX_CHUNKS = 20
 
-# Streaming update interval
 STREAM_UPDATE_INTERVAL = 0.05
 
 def vn_now() -> datetime:
@@ -370,8 +367,16 @@ st.markdown("""
         white-space: pre-wrap; word-break: break-word;
         margin-top: 6px;
     }
+    .bug-report-reply {
+        margin-top: 8px;
+        padding: 8px 12px;
+        background: rgba(16, 185, 129, 0.08);
+        border-left: 3px solid #10b981;
+        border-radius: 6px;
+        font-size: 0.88rem;
+        color: #10b981;
+    }
 
-    /* Ẩn nút attach trong chat_input */
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -428,130 +433,206 @@ def is_temporary_session() -> bool:
 
 def safe_save_db(data: dict) -> tuple:
     if is_temporary_session():
-        return True, "Temporary session - not saved to database"
+        return True, "Temporary session - not saved"
     return GitHubStorage.save_db(data)
 
 # ==========================================
-# 4. JAVASCRIPT INJECTION
+# 4. JAVASCRIPT INJECTION (dùng template thô, tránh f-string lỗi)
 # ==========================================
 def inject_js(js_code: str, height: int = 0):
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="utf-8"></head>
-    <body style="margin:0;padding:0;">
-    <script>
-    (function() {{
-        try {{
-            const w = window.parent || window;
-            const d = w.document;
-            {js_code}
-        }} catch (e) {{
-            console.warn("LTTP JS error:", e);
-        }}
-    }})();
-    </script>
-    </body>
-    </html>
-    """
+    html_template = (
+        "<!DOCTYPE html>\n"
+        "<html>\n"
+        "<head><meta charset=\"utf-8\"></head>\n"
+        "<body style=\"margin:0;padding:0;\">\n"
+        "<script>\n"
+        "(function() {\n"
+        "    try {\n"
+        "        const w = window.parent || window;\n"
+        "        const d = w.document;\n"
+        "        __JS_CODE__\n"
+        "    } catch (e) {\n"
+        "        console.warn('LTTP JS error:', e);\n"
+        "    }\n"
+        "})();\n"
+        "</script>\n"
+        "</body>\n"
+        "</html>"
+    )
+    html = html_template.replace("__JS_CODE__", js_code)
     components.html(html, height=height, scrolling=False)
 
 
 def inject_version_scanner():
-    js = f"""
-    const CURRENT_VERSION = "{APP_VERSION}";
-    const SCAN_INTERVAL_MS = {VERSION_SCAN_INTERVAL * 1000};
-    const COOKIE_NAME = "LTTP_app_version";
-    
-    function getCookie(name) {{
-        const value = `; ${{d.cookie}}`;
-        const parts = value.split(`; ${{name}}=`);
-        if (parts.length === 2) return parts.pop().split(';').shift();
-        return null;
-    }}
-    
-    function checkVersion() {{
-        try {{
-            const cached = getCookie(COOKIE_NAME);
-            if (cached && cached !== CURRENT_VERSION) {{
-                if (!d.getElementById('lttp-reboot-banner-injected')) {{
-                    const banner = d.createElement('div');
-                    banner.id = 'lttp-reboot-banner-injected';
-                    banner.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:999999;padding:14px 24px;background:linear-gradient(90deg,#f59e0b,#f97316);color:white;border-radius:12px;box-shadow:0 6px 24px rgba(249,115,22,0.55);font-family:sans-serif;max-width:90vw;';
-                    banner.innerHTML = '<div style="font-weight:800;font-size:1.05rem;margin-bottom:4px;">🚀 Đã có phiên bản mới!</div><div style="font-size:0.9rem;margin-bottom:10px;opacity:0.95;">Vui lòng tải lại trang để cập nhật.</div><button onclick="location.reload()" style="background:white;color:#f97316;border:none;padding:8px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.9rem;">Tải lại ngay</button>';
-                    d.body.appendChild(banner);
-                }}
-            }}
-        }} catch (e) {{}}
-    }}
-    
-    setTimeout(checkVersion, 3000);
-    setInterval(checkVersion, SCAN_INTERVAL_MS);
-    """
+    js = (
+        'const CURRENT_VERSION = "' + APP_VERSION + '";\n'
+        'const SCAN_INTERVAL_MS = ' + str(VERSION_SCAN_INTERVAL * 1000) + ';\n'
+        'const COOKIE_NAME = "LTTP_app_version";\n'
+        '\n'
+        'function getCookie(name) {\n'
+        '    const value = "; " + d.cookie;\n'
+        '    const parts = value.split("; " + name + "=");\n'
+        '    if (parts.length === 2) return parts.pop().split(";").shift();\n'
+        '    return null;\n'
+        '}\n'
+        '\n'
+        'function checkVersion() {\n'
+        '    try {\n'
+        '        const cached = getCookie(COOKIE_NAME);\n'
+        '        if (cached && cached !== CURRENT_VERSION) {\n'
+        '            if (!d.getElementById("lttp-reboot-banner-injected")) {\n'
+        '                const banner = d.createElement("div");\n'
+        '                banner.id = "lttp-reboot-banner-injected";\n'
+        '                banner.style.cssText = "position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:999999;padding:14px 24px;background:linear-gradient(90deg,#f59e0b,#f97316);color:white;border-radius:12px;box-shadow:0 6px 24px rgba(249,115,22,0.55);font-family:sans-serif;max-width:90vw;";\n'
+        '                banner.innerHTML = "<div style=\\"font-weight:800;font-size:1.05rem;margin-bottom:4px;\\">🚀 Đã có phiên bản mới!</div><div style=\\"font-size:0.9rem;margin-bottom:10px;opacity:0.95;\\">Vui lòng tải lại trang để cập nhật.</div><button onclick=\\"location.reload()\\" style=\\"background:white;color:#f97316;border:none;padding:8px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.9rem;\\">Tải lại ngay</button>";\n'
+        '                d.body.appendChild(banner);\n'
+        '            }\n'
+        '        }\n'
+        '    } catch (e) {}\n'
+        '}\n'
+        '\n'
+        'setTimeout(checkVersion, 3000);\n'
+        'setInterval(checkVersion, SCAN_INTERVAL_MS);\n'
+    )
     inject_js(js)
 
 
-def inject_smart_draft_tracker(enabled: bool, min_words: int,
-                                interval_sec: int, idle_sec: int):
+def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
     if not enabled:
-        js = f"""
-        d.cookie = "{COOKIE_DRAFT}=; max-age=0; path=/";
-        d.cookie = "{COOKIE_DRAFT_TS}=; max-age=0; path=/";
-        """
-        inject_js(js)
+        js_clear = (
+            'd.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
+            'd.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
+        )
+        inject_js(js_clear)
         return
 
-    js = f"""
-    const MIN_WORDS = {min_words};
-    const INTERVAL_MS = {interval_sec * 1000};
-    const IDLE_MS = {idle_sec * 1000};
-    const DRAFT_COOKIE = "{COOKIE_DRAFT}";
-    const TS_COOKIE = "{COOKIE_DRAFT_TS}";
-    
-    let lastSavedText = "";
-    let lastIdleSavedText = "";
-    let typingTimer = null;
-    let periodicTimer = null;
-    let currentTextarea = null;
-    
-    function countWords(s) {{
-        if (!s) return 0;
-        return s.trim().split(/\\s+/).filter(Boolean).length;
-    }}
-    
-    function saveDraft(text, reason) {{
-        try {{
-            const encoded = encodeURIComponent(text);
-            const trimmed = encoded.length > 3500 ? encoded.slice(0, 3500) : encoded;
-            d.cookie = `${{DRAFT_COOKIE}}=${{trimmed}}; path=/; max-age=86400`;
-            d.cookie = `${{TS_COOKIE}}=${{Date.now()}}; path=/; max-age=86400`;
-            lastSavedText = text;
-        }} catch (e) {{}}
-    }}
-    
-    function attachToTextarea() {{
-        const candidates = d.querySelectorAll(
-            'textarea[data-testid="stChatInputTextArea"], ' +
-            'section[data-testid="stChatInput"] textarea, ' +
-            'div[data-testid="stChatInput"] textarea, ' +
-            'textarea[aria-label*="chat" i], textarea[placeholder]'
-        );
-        let ta = null;
-        for (const c of candidates) {{
-            if (c.offsetParent !== null) {{ ta = c; break; }}
-        }}
-        if (!ta || ta === currentTextarea) return;
-        
-        currentTextarea = ta;
-        const handler = function() {{
-            const text = ta.value || "";
-            const words = countWords(text);
-            
-            if (typingTimer) clearTimeout(typingTimer);
-            if (periodicTimer) {{ clearInterval(periodicTimer); periodicTimer = null; }}
-            
-            if (words > MIN_WORDS) {{
-                periodicTimer = setInterval(function() {{
-                    const cur = ta.value || "";
-                    if (cur && cur !== lastSavedText) {{
-                       
+    js = (
+        'const MIN_WORDS = ' + str(min_words) + ';\n'
+        'const INTERVAL_MS = ' + str(interval_sec * 1000) + ';\n'
+        'const IDLE_MS = ' + str(idle_sec * 1000) + ';\n'
+        'const DRAFT_COOKIE = "' + COOKIE_DRAFT + '";\n'
+        'const TS_COOKIE = "' + COOKIE_DRAFT_TS + '";\n'
+        '\n'
+        'let lastSavedText = "";\n'
+        'let lastIdleSavedText = "";\n'
+        'let typingTimer = null;\n'
+        'let periodicTimer = null;\n'
+        'let currentTextarea = null;\n'
+        '\n'
+        'function countWords(s) {\n'
+        '    if (!s) return 0;\n'
+        '    return s.trim().split(/\\s+/).filter(Boolean).length;\n'
+        '}\n'
+        '\n'
+        'function saveDraft(text) {\n'
+        '    try {\n'
+        '        const encoded = encodeURIComponent(text);\n'
+        '        const trimmed = encoded.length > 3500 ? encoded.slice(0, 3500) : encoded;\n'
+        '        d.cookie = DRAFT_COOKIE + "=" + trimmed + "; path=/; max-age=86400";\n'
+        '        d.cookie = TS_COOKIE + "=" + Date.now() + "; path=/; max-age=86400";\n'
+        '        lastSavedText = text;\n'
+        '    } catch (e) {}\n'
+        '}\n'
+        '\n'
+        'function attachToTextarea() {\n'
+        '    const candidates = d.querySelectorAll(\n'
+        '        "textarea[data-testid=\\"stChatInputTextArea\\"], " +\n'
+        '        "section[data-testid=\\"stChatInput\\"] textarea, " +\n'
+        '        "div[data-testid=\\"stChatInput\\"] textarea, " +\n'
+        '        "textarea[aria-label*=\\"chat\\" i], " +\n'
+        '        "textarea[placeholder]"\n'
+        '    );\n'
+        '    let ta = null;\n'
+        '    for (const c of candidates) {\n'
+        '        if (c.offsetParent !== null) { ta = c; break; }\n'
+        '    }\n'
+        '    if (!ta || ta === currentTextarea) return;\n'
+        '    \n'
+        '    currentTextarea = ta;\n'
+        '    const handler = function() {\n'
+        '        const text = ta.value || "";\n'
+        '        const words = countWords(text);\n'
+        '        \n'
+        '        if (typingTimer) clearTimeout(typingTimer);\n'
+        '        if (periodicTimer) { clearInterval(periodicTimer); periodicTimer = null; }\n'
+        '        \n'
+        '        if (words > MIN_WORDS) {\n'
+        '            periodicTimer = setInterval(function() {\n'
+        '                const cur = ta.value || "";\n'
+        '                if (cur && cur !== lastSavedText) {\n'
+        '                    saveDraft(cur);\n'
+        '                }\n'
+        '            }, INTERVAL_MS);\n'
+        '        }\n'
+        '        \n'
+        '        typingTimer = setTimeout(function() {\n'
+        '            const cur = ta.value || "";\n'
+        '            if (cur && cur !== lastIdleSavedText) {\n'
+        '                saveDraft(cur);\n'
+        '                lastIdleSavedText = cur;\n'
+        '            }\n'
+        '        }, IDLE_MS);\n'
+        '    };\n'
+        '    \n'
+        '    ta.removeEventListener("input", ta._lttpHandler);\n'
+        '    ta._lttpHandler = handler;\n'
+        '    ta.addEventListener("input", handler);\n'
+        '}\n'
+        '\n'
+        'attachToTextarea();\n'
+        'setInterval(attachToTextarea, 2000);\n'
+    )
+    inject_js(js)
+
+
+def clear_draft_cookie_via_js():
+    js_clear = (
+        'd.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
+        'd.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
+    )
+    inject_js(js_clear)
+
+
+def inject_screenshot_capture(max_chunks: int):
+    """
+    JS chụp màn hình parent bằng html2canvas, resize 360p, convert jpeg base64,
+    chia thành chunks và ghi vào cookie LTTP_br_0..N + LTTP_br_meta.
+    """
+    js = (
+        'if (typeof html2canvas === "undefined") {\n'
+        '    const s = d.createElement("script");\n'
+        '    s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";\n'
+        '    d.head.appendChild(s);\n'
+        '}\n'
+        '\n'
+        'window.__lttp_do_screenshot = function() {\n'
+        '    try {\n'
+        '        if (typeof html2canvas === "undefined") {\n'
+        '            setTimeout(window.__lttp_do_screenshot, 500);\n'
+        '            return;\n'
+        '        }\n'
+        '        html2canvas(d.body, {\n'
+        '            backgroundColor: "#0e1117",\n'
+        '            scale: 1,\n'
+        '            logging: false,\n'
+        '            useCORS: true,\n'
+        '            allowTaint: true,\n'
+        '            windowWidth: d.documentElement.clientWidth,\n'
+        '            windowHeight: d.documentElement.clientHeight\n'
+        '        }).then(function(canvas) {\n'
+        '            const targetWidth = 480;\n'
+        '            const scale = targetWidth / canvas.width;\n'
+        '            const targetHeight = Math.round(canvas.height * scale);\n'
+        '            \n'
+        '            const off = d.createElement("canvas");\n'
+        '            off.width = targetWidth;\n'
+        '            off.height = targetHeight;\n'
+        '            const ctx = off.getContext("2d");\n'
+        '            ctx.drawImage(canvas, 0, 0, targetWidth, targetHeight);\n'
+        '            \n'
+        '            const dataUrl = off.toDataURL("image/jpeg", 0.4);\n'
+        '            const b64 = dataUrl.split(",")[1];\n'
+        '            \n'
+        '            const CHUNK_SIZE = ' + str(BR_CHUNK_SIZE) + ';\n'
+        '            const chunks = [];\n'
+        '            for (let i = 0; i < b64.length; i
