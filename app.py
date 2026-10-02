@@ -12,7 +12,6 @@ from collections import defaultdict
 from cryptography.fernet import Fernet
 from streamlit_cookies_controller import CookieController
 
-# Fallback cho Streamlit cũ (< 1.33) - dùng components.html
 try:
     from streamlit.components.v1 import html as _legacy_html
 except Exception:
@@ -26,7 +25,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.14.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -40,7 +39,6 @@ BUG_REPORTS_KEY = "__bug_reports__"
 TRAFFIC_RETENTION_DAYS = 30
 BUG_REPORTS_MAX = 50
 
-# Múi giờ Việt Nam GMT+7 (dùng timezone-aware datetime, không dùng utcnow deprecated)
 VN_TZ = timezone(timedelta(hours=7))
 VERSION_SCAN_INTERVAL = 60
 
@@ -67,8 +65,36 @@ TYPING_MODE_INSTANT = "instant"
 DEFAULT_TYPING_MODE = TYPING_MODE_SMOOTH
 DEFAULT_TYPING_CPS = 30
 
+# ===== CONTEXT / SUMMARY CONSTANTS =====
+CHARS_PER_TOKEN = 2.5
+
+MODEL_CONTEXT_BUDGET = {
+    "gemini-3.8-flash": 800_000,
+    "gemini-3.7-flash": 800_000,
+    "gemini-3.6-flash": 800_000,
+    "gemini-3.5-flash": 800_000,
+    "gemini-3.5-flash-lite": 800_000,
+    "gemini-3.1-flash-lite": 800_000,
+    "gemini-3.1-pro-preview": 1_500_000,
+    "gemini-2.5-flash": 800_000,
+    "gemini-2.5-flash-lite": 800_000,
+    "gemini-2.5-pro": 1_500_000,
+    "gemini-2.0-flash": 800_000,
+    "gemini-1.5-flash": 800_000,
+    "gemini-1.5-pro": 1_500_000,
+}
+DEFAULT_CONTEXT_BUDGET = 800_000
+
+HISTORY_BUDGET_RATIO = 0.30
+SUMMARY_BUDGET_RATIO = 0.15
+SUMMARY_TRIGGER_RATIO = 0.60
+
+MIN_RECENT_MESSAGES = 4
+MAX_RECENT_MESSAGES = 30
+
+SUMMARY_BATCH_SIZE = 30
+
 def vn_now() -> datetime:
-    """Thời gian hiện tại theo giờ VN (GMT+7), timezone-aware, không dùng utcnow deprecated."""
     return datetime.now(VN_TZ)
 
 # ==========================================
@@ -392,6 +418,16 @@ st.markdown("""
         font-size: 0.88rem;
         color: #10b981;
     }
+    .summary-view {
+        padding: 12px 16px;
+        background: rgba(102, 126, 234, 0.06);
+        border-left: 3px solid #667eea;
+        border-radius: 8px;
+        font-size: 0.88rem;
+        color: #e2e8f0;
+        white-space: pre-wrap; word-break: break-word;
+        max-height: 400px; overflow-y: auto;
+    }
 
     html, body, [data-testid="stAppViewContainer"], section.main {
         overflow-anchor: none !important;
@@ -467,36 +503,88 @@ def safe_save_db(data: dict) -> tuple:
         return True, "Temporary session - not saved"
     return GitHubStorage.save_db(data)
 
-# ==========================================
-# 4. JAVASCRIPT INJECTION - DÙNG st.html (Streamlit 1.33+)
-#    Script chạy trực tiếp trong DOM chính (không iframe)
-# ==========================================
-def _has_st_html() -> bool:
-    """Kiểm tra Streamlit có st.html không (>= 1.33)."""
-    return hasattr(st, "html")
 
+# ===== CONTEXT / TOKEN HELPERS =====
+def estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return int(len(text) / CHARS_PER_TOKEN) + 1
+
+
+def estimate_messages_tokens(messages: list) -> int:
+    if not messages:
+        return 0
+    total = 0
+    for m in messages:
+        total += estimate_tokens(m.get("content", ""))
+        total += 4
+    return total
+
+
+def get_context_budget(model_name: str) -> int:
+    for key, budget in MODEL_CONTEXT_BUDGET.items():
+        if key in model_name or model_name in key:
+            return budget
+    return DEFAULT_CONTEXT_BUDGET
+
+
+def smart_sliding_window(messages: list, budget_tokens: int,
+                          min_msgs: int = MIN_RECENT_MESSAGES,
+                          max_msgs: int = MAX_RECENT_MESSAGES) -> list:
+    if not messages:
+        return []
+
+    selected = []
+    accumulated = 0
+    for m in reversed(messages):
+        m_tokens = estimate_tokens(m.get("content", "")) + 4
+        if selected and (accumulated + m_tokens > budget_tokens):
+            break
+        if len(selected) >= max_msgs:
+            break
+        selected.append(m)
+        accumulated += m_tokens
+
+    selected.reverse()
+
+    if len(selected) < min_msgs and len(messages) >= min_msgs:
+        selected = messages[-min_msgs:]
+
+    return selected
+
+
+def truncate_message_smart(content: str, max_tokens: int) -> str:
+    if not content:
+        return content
+    cur_tokens = estimate_tokens(content)
+    if cur_tokens <= max_tokens:
+        return content
+
+    max_chars = int(max_tokens * CHARS_PER_TOKEN)
+    head_chars = int(max_chars * 0.6)
+    tail_chars = max_chars - head_chars
+    head = content[:head_chars]
+    tail = content[-tail_chars:] if tail_chars > 0 else ""
+    return (
+        head
+        + "\n\n[... nội dung giữa đã lược bớt để tiết kiệm context ...]\n\n"
+        + tail
+    )
+
+
+# ==========================================
+# 4. JAVASCRIPT INJECTION
+# ==========================================
 def inject_js(js_code: str):
-    """
-    Chèn JavaScript vào DOM chính của Streamlit.
-    - Streamlit >= 1.33: dùng st.html() - script chạy trong DOM chính, không cần window.parent.
-    - Streamlit cũ hơn: fallback components.html với iframe.
-    
-    LƯU Ý: với st.html, `window` và `document` là của trang chính.
-    Không cần `window.parent` như khi dùng components.html trong iframe.
-    """
-    # Bọc JS trong IIFE và bọc trong <script>
     wrapped_script = "<script>\n(function() {\n" + js_code + "\n})();\n</script>"
-    
-    if _has_st_html():
-        # Streamlit mới: dùng st.html
+
+    if hasattr(st, "html"):
         try:
             st.html(wrapped_script)
             return
         except Exception:
-            # fallback nếu có lỗi
             pass
-    
-    # Fallback cho Streamlit cũ
+
     if _legacy_html is not None:
         html_template = (
             "<!DOCTYPE html>\n"
@@ -514,7 +602,6 @@ def inject_js(js_code: str):
 
 
 def inject_version_scanner():
-    # Guard để không cài 2 lần
     js = (
         'if (window.__lttp_version_scanner_installed) return;\n'
         'window.__lttp_version_scanner_installed = true;\n'
@@ -601,7 +688,6 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         inject_js(js_clear)
         return
 
-    # Chỉ cài tracker 1 lần
     js = (
         'if (window.__lttp_draft_tracker_installed) return;\n'
         'window.__lttp_draft_tracker_installed = true;\n'
@@ -834,7 +920,7 @@ def is_rate_limit_error(error: Exception) -> bool:
     return any(k in err_str for k in keywords)
 
 # ==========================================
-# 6. GỌI GEMINI VỚI FAILOVER (STREAMING + TYPING MODES)
+# 6. GỌI GEMINI VỚI FAILOVER
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -1170,6 +1256,12 @@ def migrate_user_data(db_data: dict) -> tuple:
             if "updated_at" not in chat:
                 chat["updated_at"] = chat.get("created_at", vn_now().isoformat())
                 migrated = True
+            if "summary_updated_at" not in chat:
+                chat["summary_updated_at"] = ""
+                migrated = True
+            if "summary_token_count" not in chat:
+                chat["summary_token_count"] = 0
+                migrated = True
 
         if "api_keys" in uinfo:
             del uinfo["api_keys"]
@@ -1398,40 +1490,155 @@ def generate_chat_title(user_prompt, api_keys, model_name, lang="en"):
         return user_prompt[:25] + "..." if len(user_prompt) > 25 else user_prompt
 
 
-def generate_summary(older_messages, existing_summary, api_keys, model_name, lang="en"):
+def _fallback_summary(messages_to_summarize, existing_summary, lang="en"):
+    parts = []
+    if existing_summary:
+        parts.append(existing_summary)
+    for m in messages_to_summarize[-20:]:
+        role = "U" if m.get("role") == "user" else "A"
+        c = m.get("content", "")[:300]
+        parts.append(f"{role}: {c}")
+    return "\n".join(parts)
+
+
+def generate_summary_structured(
+    messages_to_summarize: list,
+    existing_summary: str,
+    api_keys: list,
+    model_name: str,
+    lang: str = "en",
+    target_tokens: int = 3000,
+) -> str:
+    if not messages_to_summarize and not existing_summary:
+        return ""
+
     try:
-        text_to_summarize = ""
-        if existing_summary:
-            prefix = "Bối cảnh tóm tắt trước đó" if lang == "vi" else "Previous summary context"
-            text_to_summarize += f"{prefix}:\n{existing_summary}\n\n"
-        limited = older_messages[-15:] if len(older_messages) > 15 else older_messages
-        for m in limited:
-            rl = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
-            c = m['content'][:500] + "..." if len(m['content']) > 500 else m['content']
-            text_to_summarize += f"- {rl}: {c}\n"
+        conv_lines = []
+        for m in messages_to_summarize:
+            role = "User" if m.get("role") == "user" else "Assistant"
+            content = m.get("content", "")
+            if len(content) > 4000:
+                content = content[:2400] + "\n[...]\n" + content[-1400:]
+            conv_lines.append(f"### {role}:\n{content}")
+
+        conversation_text = "\n\n".join(conv_lines)
+
         if lang == "vi":
-            prompt = ("Hãy tóm tắt ngắn gọn và đúc kết các ý chính, thông tin quan trọng của đoạn hội thoại sau "
-                      "thành 1 đoạn văn (dưới 150 từ) để làm bối cảnh cho các câu hỏi tiếp theo:\n\n" + text_to_summarize)
+            system_guide = (
+                "Bạn là chuyên gia tóm tắt hội thoại. Nhiệm vụ: tạo bản tóm tắt "
+                "ĐẦY ĐỦ nhưng GỌN GÀNG để AI khác có thể tiếp tục cuộc trò chuyện mà "
+                "không cần đọc lại toàn bộ lịch sử.\n\n"
+                "QUY TẮC BẮT BUỘC:\n"
+                "1. GIỮ LẠI TẤT CẢ: tên riêng, số liệu, ngày giờ, địa điểm, "
+                "quyết định đã chốt, yêu cầu/ràng buộc, sở thích của người dùng.\n"
+                "2. KHÔNG lược bỏ chi tiết dù nhỏ — chỉ viết ngắn gọn.\n"
+                "3. Nếu có mâu thuẫn giữa thông tin cũ và mới, ghi rõ cả hai "
+                "(ví dụ: \"Trước đây chọn X, nay đổi thành Y\").\n"
+                "4. Trình bày theo ĐÚNG các mục sau (bỏ mục nếu không có nội dung):\n"
+                "   - 📌 CHỦ ĐỀ / MỤC TIÊU\n"
+                "   - 📊 DỮ KIỆN QUAN TRỌNG (tên, số, ngày, địa điểm...)\n"
+                "   - ✅ QUYẾT ĐỊNH ĐÃ CHỐT\n"
+                "   - ⚠️ RÀNG BUỘC / YÊU CẦU BẮT BUỘC\n"
+                "   - 🎯 BỐI CẢNH KHÁC\n"
+                "   - ❓ CÂU HỎI / VẤN ĐỀ CHƯA GIẢI QUYẾT (nếu có)\n"
+                f"5. Độ dài mục tiêu: khoảng {target_tokens} token (không vượt quá).\n"
+                "6. Viết bằng tiếng Việt, giữ nguyên thuật ngữ/tên riêng tiếng Anh nếu cần."
+            )
         else:
-            prompt = ("Briefly summarize the key points and important information from the following conversation "
-                      "into one paragraph (under 150 words) to serve as context for follow-up questions:\n\n" + text_to_summarize)
+            system_guide = (
+                "You are a conversation summarization expert. Create a COMPLETE but "
+                "CONCISE summary so another AI can continue the conversation without "
+                "reading the full history.\n\n"
+                "MANDATORY RULES:\n"
+                "1. PRESERVE ALL: proper names, numbers, dates, places, decisions, "
+                "requirements/constraints, user preferences.\n"
+                "2. Do NOT drop any detail — just phrase it concisely.\n"
+                "3. If old and new info conflict, note both "
+                "(e.g. \"Previously X, now changed to Y\").\n"
+                "4. Format with EXACTLY these sections (skip if empty):\n"
+                "   - 📌 TOPIC / GOAL\n"
+                "   - 📊 KEY FACTS (names, numbers, dates, places...)\n"
+                "   - ✅ DECISIONS MADE\n"
+                "   - ⚠️ CONSTRAINTS / REQUIREMENTS\n"
+                "   - 🎯 OTHER CONTEXT\n"
+                "   - ❓ OPEN QUESTIONS / ISSUES (if any)\n"
+                f"5. Target length: about {target_tokens} tokens (do not exceed).\n"
+                "6. Keep English, preserve original proper nouns."
+            )
+
+        parts = [system_guide, ""]
+
+        if existing_summary:
+            label = "BẢN TÓM TẮT TRƯỚC ĐÓ (cần được gộp và nén lại):" if lang == "vi" \
+                else "PREVIOUS SUMMARY (to be merged and compressed):"
+            parts.append(label)
+            parts.append(existing_summary)
+            parts.append("")
+
+        label2 = "CÁC TIN NHẮN MỚI CẦN GỘP VÀO TÓM TẮT:" if lang == "vi" \
+            else "NEW MESSAGES TO MERGE INTO SUMMARY:"
+        parts.append(label2)
+        parts.append(conversation_text)
+        parts.append("")
+
+        final_ask = (
+            "Hãy trả về BẢN TÓM TẮT CẬP NHẬT theo đúng cấu trúc mục ở trên. "
+            "Nhớ: giữ mọi tên/số/ngày/quyết định/ràng buộc, gộp thông tin cũ và mới, "
+            "ghi rõ nếu có thay đổi."
+            if lang == "vi" else
+            "Return the UPDATED SUMMARY in the exact section format above. "
+            "Remember: keep all names/numbers/dates/decisions/constraints, merge "
+            "old and new info, note any changes."
+        )
+        parts.append(final_ask)
+
+        prompt = "\n".join(parts)
+
         text, err = call_gemini_with_failover(
-            prompt_inputs=[prompt], api_keys=api_keys,
-            preferred_model=model_name, lang=lang
+            prompt_inputs=[prompt],
+            api_keys=api_keys,
+            preferred_model=model_name,
+            lang=lang,
+            generation_config={
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "top_k": 40,
+            }
         )
         if text:
             return text.strip()
-        parts = [existing_summary] if existing_summary else []
-        for m in older_messages[-10:]:
-            r = "User" if m["role"] == "user" else "AI"
-            parts.append(f"{r}: {m['content'][:50]}...")
-        return " | ".join(parts)
+
+        return _fallback_summary(messages_to_summarize, existing_summary, lang)
+
     except Exception:
-        parts = [existing_summary] if existing_summary else []
-        for m in older_messages[-10:]:
-            r = "User" if m["role"] == "user" else "AI"
-            parts.append(f"{r}: {m['content'][:50]}...")
-        return " | ".join(parts)
+        return _fallback_summary(messages_to_summarize, existing_summary, lang)
+
+
+def generate_summary_in_batches(
+    messages_to_summarize: list,
+    existing_summary: str,
+    api_keys: list,
+    model_name: str,
+    lang: str = "en",
+    batch_size: int = SUMMARY_BATCH_SIZE,
+) -> str:
+    if len(messages_to_summarize) <= batch_size:
+        return generate_summary_structured(
+            messages_to_summarize, existing_summary,
+            api_keys, model_name, lang
+        )
+
+    batches = []
+    for i in range(0, len(messages_to_summarize), batch_size):
+        batches.append(messages_to_summarize[i:i + batch_size])
+
+    running_summary = existing_summary
+    for batch in batches:
+        running_summary = generate_summary_structured(
+            batch, running_summary,
+            api_keys, model_name, lang
+        )
+    return running_summary
 
 # ==========================================
 # 12. i18n
@@ -1602,6 +1809,17 @@ TRANSLATIONS = {
         "bug_report_view_screenshot": "View screenshot",
         "bug_report_status_replied": "✅ Replied",
         "bug_report_status_pending": "⏳ Awaiting reply",
+        "context_title": "📊 Context Info",
+        "context_model": "Model",
+        "context_budget": "Total budget",
+        "context_messages": "Messages",
+        "context_history_tokens": "Est. history tokens",
+        "context_summary_tokens": "Summary tokens",
+        "context_status_low": "🟢 Context usage: comfortable",
+        "context_status_mid": "🟡 Context usage: moderate",
+        "context_status_high": "🔴 Context nearly full — summarization will trigger",
+        "context_view_summary": "View current summary",
+        "context_no_summary": "No summary yet (conversation is short).",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -1768,6 +1986,17 @@ TRANSLATIONS = {
         "bug_report_view_screenshot": "Xem ảnh chụp",
         "bug_report_status_replied": "✅ Đã phản hồi",
         "bug_report_status_pending": "⏳ Chờ phản hồi",
+        "context_title": "📊 Thông tin ngữ cảnh",
+        "context_model": "Mô hình",
+        "context_budget": "Ngân sách tối đa",
+        "context_messages": "Số tin nhắn",
+        "context_history_tokens": "Token lịch sử (ước tính)",
+        "context_summary_tokens": "Token tóm tắt",
+        "context_status_low": "🟢 Ngữ cảnh còn thoải mái",
+        "context_status_mid": "🟡 Ngữ cảnh đang dùng vừa",
+        "context_status_high": "🔴 Ngữ cảnh gần đầy — sắp kích hoạt tóm tắt",
+        "context_view_summary": "Xem tóm tắt hiện tại",
+        "context_no_summary": "Chưa có tóm tắt (hội thoại còn ngắn).",
     }
 }
 
@@ -2925,6 +3154,37 @@ with st.sidebar:
 
     st.divider()
 
+    # CONTEXT INFO
+    with st.expander(t("context_title", lang), expanded=False):
+        ctx_budget = get_context_budget(sel_model) if 'sel_model' in dir() else get_context_budget(DEFAULT_MODEL)
+        cur_msgs = st.session_state.messages
+        cur_tokens = estimate_messages_tokens(cur_msgs)
+        cur_chat = user_chats.get(st.session_state.current_chat_id, {}) if st.session_state.current_chat_id else {}
+        summary_text = cur_chat.get("summary", "")
+        summary_tokens = estimate_tokens(summary_text)
+
+        st.markdown(f"**{t('context_model', lang)}:** `{sel_model if 'sel_model' in dir() else DEFAULT_MODEL}`")
+        st.markdown(f"**{t('context_budget', lang)}:** {ctx_budget:,} tokens")
+        st.markdown(f"**{t('context_messages', lang)}:** {len(cur_msgs)}")
+        st.markdown(f"**{t('context_history_tokens', lang)}:** {cur_tokens:,}")
+        st.markdown(f"**{t('context_summary_tokens', lang)}:** {summary_tokens:,}")
+
+        used_ratio = cur_tokens / max(1, ctx_budget)
+        if used_ratio < 0.3:
+            st.caption(t("context_status_low", lang))
+        elif used_ratio < 0.6:
+            st.caption(t("context_status_mid", lang))
+        else:
+            st.caption(t("context_status_high", lang))
+
+        if summary_text:
+            with st.expander(t("context_view_summary", lang)):
+                st.markdown(f'<div class="summary-view">{summary_text}</div>', unsafe_allow_html=True)
+        else:
+            st.caption(t("context_no_summary", lang))
+
+    st.divider()
+
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         mem = st.text_area("Memory:", value=user_data.get("custom_instructions", ""),
@@ -3189,6 +3449,8 @@ def _process_prompt(user_prompt):
             "title": t("new_chat", lang),
             "messages": [],
             "summary": "",
+            "summary_updated_at": "",
+            "summary_token_count": 0,
             "created_at": vn_now().isoformat(),
             "updated_at": vn_now().isoformat()
         }
@@ -3200,31 +3462,91 @@ def _process_prompt(user_prompt):
     chat_data = user_chats[st.session_state.current_chat_id]
     chat_summary = chat_data.get("summary", "")
 
-    if len(st.session_state.messages) > 10:
-        older = st.session_state.messages[:-6]
-        try:
-            chat_summary = generate_summary(older, chat_summary, SECRET_API_KEYS, sel_model, lang)
-            chat_data["summary"] = chat_summary
-        except Exception:
-            pass
+    # ===== SLIDING WINDOW + SUMMARY THÔNG MINH =====
+    context_budget = get_context_budget(sel_model)
+    history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
+    summary_budget = int(context_budget * SUMMARY_BUDGET_RATIO)
+    trigger_tokens = int(context_budget * SUMMARY_TRIGGER_RATIO)
 
+    all_messages = st.session_state.messages
+    total_tokens = estimate_messages_tokens(all_messages)
+
+    should_summarize = (
+        total_tokens > trigger_tokens
+        or len(all_messages) > 40
+    )
+
+    if should_summarize:
+        recent_keep = smart_sliding_window(
+            all_messages,
+            budget_tokens=history_budget,
+            min_msgs=MIN_RECENT_MESSAGES,
+            max_msgs=MAX_RECENT_MESSAGES,
+        )
+        if len(recent_keep) < len(all_messages):
+            older_messages = all_messages[: len(all_messages) - len(recent_keep)]
+        else:
+            older_messages = []
+
+        if older_messages:
+            try:
+                chat_summary = generate_summary_in_batches(
+                    older_messages,
+                    chat_summary,
+                    SECRET_API_KEYS,
+                    sel_model,
+                    lang,
+                )
+                chat_data["summary"] = chat_summary
+                chat_data["summary_updated_at"] = vn_now().isoformat()
+                chat_data["summary_token_count"] = estimate_tokens(chat_summary)
+            except Exception:
+                pass
+
+    # ===== BUILD PROMPT =====
     system_instruction = user_data.get("custom_instructions", "")
     if chat_summary:
-        label = "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]" if lang == "vi" else "[SUMMARIZED HISTORY CONTEXT]"
-        system_instruction += f"\n\n{label}: {chat_summary}"
+        label = (
+            "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT — hãy coi như sự thật đã biết, "
+            "không hỏi lại nếu không cần thiết]"
+            if lang == "vi" else
+            "[SUMMARIZED HISTORY CONTEXT — treat as known facts, "
+            "do not ask again unless necessary]"
+        )
+        system_instruction += f"\n\n{label}:\n{chat_summary}"
+
+    recent_window = smart_sliding_window(
+        st.session_state.messages,
+        budget_tokens=history_budget,
+        min_msgs=MIN_RECENT_MESSAGES,
+        max_msgs=MAX_RECENT_MESSAGES,
+    )
+    if recent_window and recent_window[-1].get("content") == user_prompt:
+        recent_window = recent_window[:-1]
 
     content_inputs = []
-    recent = st.session_state.messages[-6:]
     hist = ""
-    for m in recent[:-1]:
+    for m in recent_window:
         r = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
-        hist += f"{r}: {m['content']}\n"
+        c = m.get("content", "")
+        max_msg_tokens = int(history_budget / max(1, len(recent_window)))
+        if estimate_tokens(c) > max_msg_tokens * 2:
+            c = truncate_message_smart(c, max_msg_tokens)
+        hist += f"{r}: {c}\n"
 
     if hist:
         if lang == "vi":
-            full_prompt = f"Lịch sử hội thoại gần đây:\n{hist}\nCâu hỏi mới: {user_prompt}"
+            full_prompt = (
+                "Lịch sử hội thoại gần đây (mới nhất ở dưới cùng):\n"
+                f"{hist}\n"
+                f"---\nCâu hỏi mới của người dùng: {user_prompt}"
+            )
         else:
-            full_prompt = f"Recent conversation history:\n{hist}\nNew question: {user_prompt}"
+            full_prompt = (
+                "Recent conversation history (newest at bottom):\n"
+                f"{hist}\n"
+                f"---\nNew user question: {user_prompt}"
+            )
     else:
         full_prompt = user_prompt
     content_inputs.append(full_prompt)
