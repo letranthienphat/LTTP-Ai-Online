@@ -125,7 +125,7 @@
       "top_p": 0.95,
       "top_k": 40,
       "smart_draft": true,
-      "typing_mode": "controlled",
+      "typing_mode": "instant",
       "typing_cps": 30
     }
   },
