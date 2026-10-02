@@ -103,13 +103,21 @@
           {
             "role": "assistant",
             "content": "Đáp án đúng cho câu hỏi này là:\n\n**A. Tất cả các phương án đưa ra**\n\n**Giải thích:**\n* **Trồng nhiều cây xanh:** Giúp lọc không khí, giảm bụi và cung cấp thêm oxy.\n* **Xả rác đúng nơi quy định:** Giúp giữ vệ sinh môi trường sống, hạn chế ô nhiễm không khí do rác thải gây ra.\n* **Đeo khẩu trang trong môi trường có nhiều khói bụi:** Ngăn chặn trực tiếp bụi bẩn, vi khuẩn và các chất độc hại xâm nhập vào đường hô hấp.\n\nVì vậy, tất cả các hoạt động trên đều góp phần bảo vệ hệ hô hấp."
+          },
+          {
+            "role": "user",
+            "content": "Câu \"Phổi người trưởng thành có khoảng A 200 – 300 triệu phế nang. B 800 – 900 triệu phế nang. C 700 – 800 triệu phế nang. D 500 – 600 triệu phế nang.\" ấy, bạn sai ròi, C mới đúng."
+          },
+          {
+            "role": "assistant",
+            "content": "Chào bạn, mình xin lỗi vì đã nhầm lẫn ở câu hỏi trước nhé! \n\nTheo chuẩn kiến thức trong chương trình Sinh học (Cánh diều/Kết nối tri thức), phổi của người trưởng thành thực sự có khoảng **700 – 800 triệu phế nang** (hoặc một số tài liệu ghi nhận tổng diện tích bề mặt của khoảng 700 - 800 triệu phế nang này lên tới 70 - 90 $m^2$).\n\nVậy đáp án chính xác phải là:\n**C. 700 – 800 triệu phế nang.**\n\nCảm ơn bạn đã đính chính rất chính xác nhé! Bạn có câu hỏi nào tiếp theo cứ gửi cho mình nha."
           }
         ],
         "summary": "",
         "summary_updated_at": "",
         "summary_token_count": 0,
         "created_at": "2026-10-02T18:08:04.515566+07:00",
-        "updated_at": "2026-10-02T18:09:09.507564+07:00"
+        "updated_at": "2026-10-02T18:09:38.570552+07:00"
       }
     },
     "remembered_devices": [
