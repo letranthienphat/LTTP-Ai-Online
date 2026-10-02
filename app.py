@@ -21,7 +21,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.12.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -38,19 +38,28 @@ BUG_REPORTS_MAX = 50
 VN_TZ_OFFSET = timedelta(hours=7)
 VERSION_SCAN_INTERVAL = 60
 
+# Smart draft
 SMART_DRAFT_MIN_WORDS = 20
 SMART_DRAFT_INTERVAL_SEC = 5
 SMART_DRAFT_IDLE_SEC = 20
 COOKIE_DRAFT = "LTTP_chat_draft"
 COOKIE_DRAFT_TS = "LTTP_draft_ts"
 
-# Bug report chunks
+# Bug report
 BR_COOKIE_PREFIX = "LTTP_br_"
 BR_META_COOKIE = "LTTP_br_meta"
 BR_CHUNK_SIZE = 3000
 BR_MAX_CHUNKS = 20
 
+# Streaming
 STREAM_UPDATE_INTERVAL = 0.05
+
+# Typing speed modes
+TYPING_MODE_SMOOTH = "smooth"
+TYPING_MODE_CONTROLLED = "controlled"
+TYPING_MODE_INSTANT = "instant"
+DEFAULT_TYPING_MODE = TYPING_MODE_SMOOTH
+DEFAULT_TYPING_CPS = 30
 
 def vn_now() -> datetime:
     return datetime.utcnow() + VN_TZ_OFFSET
@@ -377,6 +386,22 @@ st.markdown("""
         color: #10b981;
     }
 
+    /* Ngăn browser tự anchor scroll khi content thay đổi */
+    html, body, [data-testid="stAppViewContainer"], section.main {
+        overflow-anchor: none !important;
+    }
+    
+    .typing-mode-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        background: rgba(102, 126, 234, 0.15);
+        color: #667eea;
+        margin-left: 6px;
+    }
+
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -437,7 +462,7 @@ def safe_save_db(data: dict) -> tuple:
     return GitHubStorage.save_db(data)
 
 # ==========================================
-# 4. JAVASCRIPT INJECTION (dùng template thô, tránh f-string lỗi)
+# 4. JAVASCRIPT INJECTION
 # ==========================================
 def inject_js(js_code: str, height: int = 0):
     html_template = (
@@ -493,6 +518,49 @@ def inject_version_scanner():
         '\n'
         'setTimeout(checkVersion, 3000);\n'
         'setInterval(checkVersion, SCAN_INTERVAL_MS);\n'
+    )
+    inject_js(js)
+
+
+def inject_scroll_guard():
+    js = (
+        'if (!window.__lttp_scroll_guard_installed) {\n'
+        '    window.__lttp_scroll_guard_installed = true;\n'
+        '    window.__lttp_scroll_lock = false;\n'
+        '    \n'
+        '    const origScrollIntoView = Element.prototype.scrollIntoView;\n'
+        '    Element.prototype.scrollIntoView = function() {\n'
+        '        if (window.__lttp_scroll_lock) return;\n'
+        '        return origScrollIntoView.apply(this, arguments);\n'
+        '    };\n'
+        '    \n'
+        '    function getScrollContainer() {\n'
+        '        let el = d.querySelector("section.main");\n'
+        '        if (el) return el;\n'
+        '        el = d.querySelector("[data-testid=\\"stAppViewContainer\\"]");\n'
+        '        if (el) return el;\n'
+        '        return d.scrollingElement || d.documentElement;\n'
+        '    }\n'
+        '    \n'
+        '    function updateLock() {\n'
+        '        const c = getScrollContainer();\n'
+        '        if (!c) return;\n'
+        '        const atBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < 150;\n'
+        '        window.__lttp_scroll_lock = !atBottom;\n'
+        '    }\n'
+        '    \n'
+        '    let ticking = false;\n'
+        '    d.addEventListener("scroll", function() {\n'
+        '        if (ticking) return;\n'
+        '        ticking = true;\n'
+        '        requestAnimationFrame(function() {\n'
+        '            updateLock();\n'
+        '            ticking = false;\n'
+        '        });\n'
+        '    }, true);\n'
+        '    \n'
+        '    setInterval(updateLock, 500);\n'
+        '}\n'
     )
     inject_js(js)
 
@@ -594,10 +662,6 @@ def clear_draft_cookie_via_js():
 
 
 def inject_screenshot_capture(max_chunks: int):
-    """
-    JS chụp màn hình parent bằng html2canvas, resize 360p, convert jpeg base64,
-    chia thành chunks và ghi vào cookie LTTP_br_0..N + LTTP_br_meta.
-    """
     js = (
         'if (typeof html2canvas === "undefined") {\n'
         '    const s = d.createElement("script");\n'
@@ -649,12 +713,6 @@ def inject_screenshot_capture(max_chunks: int):
         '                d.cookie = "' + BR_COOKIE_PREFIX + '" + i + "=" + chunks[i] + "; path=/; max-age=300";\n'
         '            }\n'
         '            d.cookie = "' + BR_META_COOKIE + '=" + maxToStore + "; path=/; max-age=300";\n'
-        '            \n'
-        '            if (window.parent && window.parent !== window) {\n'
-        '                try {\n'
-        '                    window.parent.postMessage({ type: "LTTP_SCREENSHOT_DONE" }, "*");\n'
-        '                } catch (e) {}\n'
-        '            }\n'
         '        }).catch(function(err) {\n'
         '            console.warn("Screenshot error:", err);\n'
         '        });\n'
@@ -669,7 +727,6 @@ def inject_screenshot_capture(max_chunks: int):
 
 
 def read_bug_report_screenshot():
-    """Đọc và ghép ảnh base64 từ cookie chunks."""
     try:
         meta = cookies.get(BR_META_COOKIE)
         if not meta:
@@ -747,7 +804,7 @@ def is_rate_limit_error(error: Exception) -> bool:
     return any(k in err_str for k in keywords)
 
 # ==========================================
-# 6. GỌI GEMINI VỚI FAILOVER (STREAMING)
+# 6. GỌI GEMINI VỚI FAILOVER (STREAMING + TYPING MODES)
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -760,8 +817,18 @@ def _build_model_chain(preferred_model: str) -> list:
 def stream_gemini_with_failover(
     prompt_inputs, api_keys, preferred_model,
     system_instruction=None, generation_config=None, lang="en",
-    ui_placeholder=None, stream_update_interval=STREAM_UPDATE_INTERVAL,
+    ui_placeholder=None,
+    typing_mode=TYPING_MODE_SMOOTH,
+    typing_cps=DEFAULT_TYPING_CPS,
 ):
+    """
+    Generator streaming với failover + kiểm soát tốc độ gõ.
+    
+    typing_mode:
+      - smooth: hiện ngay khi có chunk
+      - controlled: đệm chunk, release theo tốc độ typing_cps ký tự/giây
+      - instant: đợi response xong hết rồi yield 1 lần
+    """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
@@ -770,12 +837,14 @@ def stream_gemini_with_failover(
     last_error = None
     saw_rate_limit = False
     saw_other_error = False
-    last_update_time = 0.0
 
     for model_name in model_chain:
         for api_k in api_keys:
             accumulated = ""
             got_first_chunk = False
+
+            use_stream = (typing_mode != TYPING_MODE_INSTANT)
+
             try:
                 genai.configure(api_key=api_k)
                 model = genai.GenerativeModel(
@@ -783,7 +852,28 @@ def stream_gemini_with_failover(
                     system_instruction=system_instruction if system_instruction else None,
                     generation_config=generation_config or {}
                 )
+
+                if not use_stream:
+                    # === INSTANT: non-stream, đợi xong hết ===
+                    res = model.generate_content(prompt_inputs)
+                    text = getattr(res, "text", None)
+                    if text:
+                        if ui_placeholder is not None:
+                            ui_placeholder.markdown(text, unsafe_allow_html=True)
+                        yield text, True, None
+                        return
+                    else:
+                        saw_other_error = True
+                        last_error = "Empty response"
+                        continue
+
+                # === SMOOTH / CONTROLLED: dùng stream ===
                 response = model.generate_content(prompt_inputs, stream=True)
+
+                display_buffer = ""
+                pending_buffer = ""
+                last_release_time = time.time()
+                chars_per_sec = max(1, int(typing_cps))
 
                 for chunk in response:
                     try:
@@ -796,13 +886,50 @@ def stream_gemini_with_failover(
                     got_first_chunk = True
                     accumulated += chunk_text
 
-                    now = time.time()
-                    if ui_placeholder is not None and (now - last_update_time) >= stream_update_interval:
-                        display = accumulated + '<span class="typing-cursor"></span>'
-                        ui_placeholder.markdown(display, unsafe_allow_html=True)
-                        last_update_time = now
+                    if typing_mode == TYPING_MODE_SMOOTH:
+                        if ui_placeholder is not None:
+                            display = accumulated + '<span class="typing-cursor"></span>'
+                            ui_placeholder.markdown(display, unsafe_allow_html=True)
+                        yield accumulated, False, None
+                    else:
+                        # CONTROLLED
+                        pending_buffer += chunk_text
+                        now = time.time()
+                        elapsed = now - last_release_time
+                        chars_to_release = int(elapsed * chars_per_sec)
 
-                    yield accumulated, False, None
+                        if chars_to_release > 0:
+                            release = pending_buffer[:chars_to_release]
+                            pending_buffer = pending_buffer[chars_to_release:]
+                            display_buffer += release
+                            last_release_time = now
+                            if ui_placeholder is not None:
+                                disp = display_buffer + '<span class="typing-cursor"></span>'
+                                ui_placeholder.markdown(disp, unsafe_allow_html=True)
+                            yield display_buffer, False, None
+                        else:
+                            if ui_placeholder is not None:
+                                disp = display_buffer + '<span class="typing-cursor"></span>'
+                                ui_placeholder.markdown(disp, unsafe_allow_html=True)
+                            yield display_buffer, False, None
+
+                # Release nốt pending còn lại với tốc độ cps
+                if typing_mode == TYPING_MODE_CONTROLLED and pending_buffer:
+                    while pending_buffer:
+                        now = time.time()
+                        elapsed = now - last_release_time
+                        chars_to_release = int(elapsed * chars_per_sec)
+                        if chars_to_release <= 0:
+                            time.sleep(1.0 / chars_per_sec)
+                            continue
+                        release = pending_buffer[:chars_to_release]
+                        pending_buffer = pending_buffer[chars_to_release:]
+                        display_buffer += release
+                        last_release_time = now
+                        if ui_placeholder is not None:
+                            disp = display_buffer + '<span class="typing-cursor"></span>'
+                            ui_placeholder.markdown(disp, unsafe_allow_html=True)
+                        yield display_buffer, False, None
 
                 if accumulated:
                     if ui_placeholder is not None:
@@ -983,7 +1110,9 @@ def migrate_user_data(db_data: dict) -> tuple:
             uinfo["preferences"] = {
                 "model": DEFAULT_MODEL, "temperature": 0.7,
                 "top_p": 0.95, "top_k": 40,
-                "smart_draft": True
+                "smart_draft": True,
+                "typing_mode": DEFAULT_TYPING_MODE,
+                "typing_cps": DEFAULT_TYPING_CPS
             }
             migrated = True
         else:
@@ -994,7 +1123,9 @@ def migrate_user_data(db_data: dict) -> tuple:
                 migrated = True
             for k, dv in [("model", DEFAULT_MODEL), ("temperature", 0.7),
                           ("top_p", 0.95), ("top_k", 40),
-                          ("smart_draft", True)]:
+                          ("smart_draft", True),
+                          ("typing_mode", DEFAULT_TYPING_MODE),
+                          ("typing_cps", DEFAULT_TYPING_CPS)]:
                 if k not in prefs:
                     prefs[k] = dv
                     migrated = True
@@ -1321,11 +1452,11 @@ TRANSLATIONS = {
         "model_select": "Select AI model:",
         "gen_config": "🎨 How A.I responds",
         "temperature": "Creativity level",
-        "temperature_help": "**Creativity level** — how imaginative the A.I is.\n\n- **Low (0.0–0.3):** Safe, sticks to facts.\n- **Medium (0.4–0.7):** Balanced — default.\n- **High (0.8–1.0):** Creative, surprising.\n\n👉 *Tip:* Raise if repetitive; lower if it invents facts.",
+        "temperature_help": "**Creativity level** — how imaginative the A.I is.\n\n- **Low:** Safe, sticks to facts.\n- **Medium:** Balanced — default.\n- **High:** Creative.\n\n👉 *Tip:* Raise if repetitive; lower if it invents facts.",
         "top_p": "Diversity",
-        "top_p_help": "**Diversity** — how many word choices the A.I considers.\n\n- **Low:** Predictable.\n- **High:** Rich and varied.\n\n👉 *Tip:* Keep at 0.95.",
+        "top_p_help": "**Diversity** — how many word choices the A.I considers.\n\n- **Low:** Predictable.\n- **High:** Rich.\n\n👉 Keep at 0.95.",
         "top_k": "Focus level",
-        "top_k_help": "**Focus level** — how many candidate words per step.\n\n- **Low:** Tight, focused.\n- **High:** Varied.\n\n👉 *Tip:* Keep at 40.",
+        "top_k_help": "**Focus level** — candidate words per step.\n\n- **Low:** Tight.\n- **High:** Varied.\n\n👉 Keep at 40.",
         "save_params": "💾 Save settings",
         "params_saved": "Settings saved!",
         "reset_params": "↺ Defaults",
@@ -1411,7 +1542,19 @@ TRANSLATIONS = {
         "draft_discard_btn": "🗑️ Discard draft",
         "draft_discarded_toast": "Draft discarded",
         "draft_copied_toast": "Draft copied to clipboard!",
-        # Bug reports
+        "typing_mode_label": "Typing speed",
+        "typing_mode_help": (
+            "Choose how A.I's response appears:\n\n"
+            "• **Smooth** — text appears as fast as A.I generates it (default).\n"
+            "• **Controlled** — text is revealed at a fixed characters-per-second speed.\n"
+            "• **Instant** — no typing effect; the full answer appears at once when ready.\n\n"
+            "👉 Pick **Instant** if you prefer to read the whole answer immediately."
+        ),
+        "typing_mode_smooth": "🌊 Smooth",
+        "typing_mode_controlled": "⌨️ Controlled",
+        "typing_mode_instant": "⚡ Instant",
+        "typing_cps_label": "Typing speed (chars/second):",
+        "typing_mode_saved": "Typing mode saved!",
         "bug_report_btn": "🐛 Report a Bug",
         "bug_report_title": "🐛 Bug Report",
         "bug_report_desc": "Help us improve! Describe what went wrong. A screenshot is automatically attached.",
@@ -1475,11 +1618,11 @@ TRANSLATIONS = {
         "model_select": "Chọn mô hình AI:",
         "gen_config": "🎨 Cách A.I trả lời",
         "temperature": "Mức độ sáng tạo",
-        "temperature_help": "**Mức độ sáng tạo** — A.I bay bổng đến mức nào.\n\n- **Thấp:** An toàn, bám sát sự thật.\n- **Trung bình:** Cân bằng — mặc định.\n- **Cao:** Sáng tạo, bất ngờ.\n\n👉 *Mẹo:* Tăng nếu lặp; giảm nếu bịa.",
+        "temperature_help": "**Mức độ sáng tạo** — A.I bay bổng đến mức nào.\n\n- **Thấp:** An toàn.\n- **Trung bình:** Cân bằng.\n- **Cao:** Sáng tạo.\n\n👉 Tăng nếu lặp; giảm nếu bịa.",
         "top_p": "Mức độ đa dạng",
-        "top_p_help": "**Mức độ đa dạng** — A.I cân nhắc bao nhiêu từ.\n\n- **Thấp:** Dễ đoán.\n- **Cao:** Phong phú.\n\n👉 *Mẹo:* Giữ 0.95.",
+        "top_p_help": "**Mức độ đa dạng** — số lựa chọn từ.\n\n- **Thấp:** Dễ đoán.\n- **Cao:** Phong phú.\n\n👉 Giữ 0.95.",
         "top_k": "Mức độ tập trung",
-        "top_k_help": "**Mức độ tập trung** — số từ tiềm năng mỗi bước.\n\n- **Thấp:** Gọn gàng.\n- **Cao:** Đa dạng.\n\n👉 *Mẹo:* Giữ 40.",
+        "top_k_help": "**Mức độ tập trung** — số từ mỗi bước.\n\n- **Thấp:** Gọn.\n- **Cao:** Đa dạng.\n\n👉 Giữ 40.",
         "save_params": "💾 Lưu cài đặt",
         "params_saved": "Đã lưu cài đặt!",
         "reset_params": "↺ Mặc định",
@@ -1565,7 +1708,19 @@ TRANSLATIONS = {
         "draft_discard_btn": "🗑️ Xóa nháp",
         "draft_discarded_toast": "Đã xóa nháp",
         "draft_copied_toast": "Đã sao chép!",
-        # Bug reports
+        "typing_mode_label": "Tốc độ gõ",
+        "typing_mode_help": (
+            "Chọn cách câu trả lời của A.I xuất hiện:\n\n"
+            "• **Mượt mà** — chữ hiện nhanh như A.I tạo ra (mặc định).\n"
+            "• **Kiểm soát** — chữ hiện đều theo tốc độ ký tự/giây.\n"
+            "• **Hiện ngay** — không có hiệu ứng gõ, câu trả lời hiện một lần khi xong.\n\n"
+            "👉 Chọn **Hiện ngay** để đọc toàn bộ tức thì."
+        ),
+        "typing_mode_smooth": "🌊 Mượt mà",
+        "typing_mode_controlled": "⌨️ Kiểm soát",
+        "typing_mode_instant": "⚡ Hiện ngay",
+        "typing_cps_label": "Tốc độ gõ (ký tự/giây):",
+        "typing_mode_saved": "Đã lưu chế độ gõ!",
         "bug_report_btn": "🐛 Báo cáo lỗi",
         "bug_report_title": "🐛 Báo cáo lỗi",
         "bug_report_desc": "Giúp chúng tôi cải thiện! Mô tả lỗi bạn gặp. Ảnh chụp màn hình sẽ được tự động đính kèm.",
@@ -1623,13 +1778,17 @@ for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
 if "guest_prefs" not in st.session_state:
     st.session_state.guest_prefs = {
         "model": DEFAULT_MODEL, "temperature": 0.7,
-        "top_p": 0.95, "top_k": 40, "smart_draft": True
+        "top_p": 0.95, "top_k": 40, "smart_draft": True,
+        "typing_mode": DEFAULT_TYPING_MODE,
+        "typing_cps": DEFAULT_TYPING_CPS
     }
 
 if "test_prefs" not in st.session_state:
     st.session_state.test_prefs = {
         "model": DEFAULT_MODEL, "temperature": 0.7,
-        "top_p": 0.95, "top_k": 40, "smart_draft": True
+        "top_p": 0.95, "top_k": 40, "smart_draft": True,
+        "typing_mode": DEFAULT_TYPING_MODE,
+        "typing_cps": DEFAULT_TYPING_CPS
     }
 
 # ==========================================
@@ -1652,6 +1811,7 @@ def _init_version_cookie():
 
 _init_version_cookie()
 inject_version_scanner()
+inject_scroll_guard()
 
 _seen_ver = cookies.get("LTTP_seen_version")
 if _seen_ver:
@@ -1820,7 +1980,6 @@ def bug_report_dialog():
     st.markdown(f"### {t('bug_report_title', lang)}")
     st.caption(t("bug_report_desc", lang))
 
-    # Bước 1: nút chụp ảnh
     st.markdown(f"**{t('bug_report_screenshot_label', lang)}**")
     col_cap, col_clear = st.columns([1, 1])
     with col_cap:
@@ -1833,7 +1992,6 @@ def bug_report_dialog():
             clear_bug_report_cookies()
             st.rerun()
 
-    # Đọc ảnh chụp từ cookie
     b64 = read_bug_report_screenshot()
     if b64:
         try:
@@ -1843,7 +2001,6 @@ def bug_report_dialog():
     else:
         st.caption(t("bug_report_no_screenshot", lang))
 
-    # Bước 2: mô tả lỗi
     bug_text = st.text_area(
         t("bug_report_text_label", lang),
         value=st.session_state.get("bug_report_text", ""),
@@ -1852,11 +2009,9 @@ def bug_report_dialog():
         key="bug_dialog_text"
     )
 
-    # Bước 3: gửi
     col_send, col_cancel = st.columns(2)
     with col_send:
         if st.button(t("bug_report_submit_btn", lang), use_container_width=True, type="primary", key="bug_submit_btn"):
-            # Đọc lại ảnh (phòng trường hợp có mới)
             final_b64 = read_bug_report_screenshot()
 
             if not final_b64 and not bug_text.strip():
@@ -1874,9 +2029,7 @@ def bug_report_dialog():
                     "replied_at": "",
                     "replied_by": "",
                 }
-                # Lưu vào DB (trừ test session)
                 if is_temporary_session():
-                    # Test session: lưu vào session_state only
                     st.session_state.setdefault("test_bug_reports", []).insert(0, report)
                     st.success(t("bug_report_success", lang))
                 else:
@@ -1999,7 +2152,9 @@ def render_auth_ui():
                                 "preferences": {
                                     "model": DEFAULT_MODEL, "temperature": 0.7,
                                     "top_p": 0.95, "top_k": 40,
-                                    "smart_draft": True
+                                    "smart_draft": True,
+                                    "typing_mode": DEFAULT_TYPING_MODE,
+                                    "typing_cps": DEFAULT_TYPING_CPS
                                 }
                             }
                             ok, msg = GitHubStorage.save_db(db)
@@ -2019,7 +2174,9 @@ def render_auth_ui():
             st.session_state.guest_chats = {}
             st.session_state.guest_prefs = {
                 "model": DEFAULT_MODEL, "temperature": 0.7,
-                "top_p": 0.95, "top_k": 40, "smart_draft": True
+                "top_p": 0.95, "top_k": 40, "smart_draft": True,
+                "typing_mode": DEFAULT_TYPING_MODE,
+                "typing_cps": DEFAULT_TYPING_CPS
             }
             st.session_state.guest_memory = ""
             st.session_state.traffic_recorded = False
@@ -2266,7 +2423,7 @@ def render_admin_panel():
             st.error(f"Error: {msg}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 3. BUG REPORTS (Admin)
+    # 3. BUG REPORTS
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("bug_report_admin_title", lang))
     st.caption(t("bug_report_admin_desc", lang))
@@ -2276,7 +2433,6 @@ def render_admin_panel():
     if not reports:
         st.caption(t("bug_report_admin_empty", lang))
     else:
-        # Sắp xếp mới nhất trước
         reports_sorted = sorted(reports, key=lambda x: x.get("time", ""), reverse=True)
         for rpt in reports_sorted:
             rid = rpt.get("id", "")
@@ -2310,7 +2466,6 @@ def render_admin_panel():
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
-                # Screenshot hiển thị
                 if ss:
                     with st.expander(t("bug_report_view_screenshot", lang), expanded=False):
                         try:
@@ -2318,7 +2473,6 @@ def render_admin_panel():
                         except Exception:
                             st.caption("⚠️ Không đọc được ảnh." if lang == "vi" else "⚠️ Cannot read image.")
 
-                # Form phản hồi
                 reply_key = f"reply_text_{rid}"
                 reply_input = st.text_area(
                     t("bug_report_admin_reply_label", lang),
@@ -2437,7 +2591,9 @@ def render_maintenance_screen():
                     st.session_state.test_memory = ""
                     st.session_state.test_prefs = {
                         "model": DEFAULT_MODEL, "temperature": 0.7,
-                        "top_p": 0.95, "top_k": 40, "smart_draft": True
+                        "top_p": 0.95, "top_k": 40, "smart_draft": True,
+                        "typing_mode": DEFAULT_TYPING_MODE,
+                        "typing_cps": DEFAULT_TYPING_CPS
                     }
                     st.session_state.traffic_recorded = True
                     st.toast(t("test_login_success", lang), icon="🔧")
@@ -2459,7 +2615,6 @@ if maintenance_mode:
         render_maintenance_screen()
         st.stop()
 
-# Bỏ test khi không maintenance
 if not maintenance_mode and is_temporary_session():
     st.session_state.user = None
     st.session_state.is_temporary = False
@@ -2511,6 +2666,8 @@ else:
     user_data["preferences"].setdefault("top_p", 0.95)
     user_data["preferences"].setdefault("top_k", 40)
     user_data["preferences"].setdefault("smart_draft", True)
+    user_data["preferences"].setdefault("typing_mode", DEFAULT_TYPING_MODE)
+    user_data["preferences"].setdefault("typing_cps", DEFAULT_TYPING_CPS)
     st.session_state.language = user_data.get("language", "en")
     lang = st.session_state.language
     user_chats = user_data["chats"]
@@ -2567,12 +2724,10 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-    # Nút báo cáo lỗi
     if st.button(t("bug_report_btn", lang), use_container_width=True, key="bug_report_open_btn"):
         st.session_state.bug_report_open = True
         st.rerun()
 
-    # Nút xem báo cáo của tôi (chỉ user thật)
     if not is_test and not is_guest:
         with st.expander(t("bug_report_my_reports", lang), expanded=False):
             my_reports = get_user_bug_reports(db_data, st.session_state.user)
@@ -2596,7 +2751,6 @@ with st.sidebar:
                         )
                     st.markdown("---")
 
-    # Logout button
     logout_label = t("test_logout", lang) if is_test else t("logout_btn", lang)
     if st.button(logout_label, use_container_width=True, key="logout_btn"):
         if not is_guest and not is_test:
@@ -2659,8 +2813,8 @@ with st.sidebar:
 
     st.divider()
 
-    # SETTINGS
     with st.expander(t("settings_title", lang), expanded=False):
+        # Smart Draft
         col_lbl, col_help = st.columns([0.85, 0.15])
         with col_lbl:
             st.markdown(f"**{t('smart_draft_label', lang)}**")
@@ -2694,6 +2848,68 @@ with st.sidebar:
 
         if not smart_draft_val:
             clear_draft_cookie_via_js()
+
+        st.markdown("---")
+
+        # Typing mode
+        tcol1, tcol2 = st.columns([0.85, 0.15])
+        with tcol1:
+            st.markdown(f"**⌨️ {t('typing_mode_label', lang)}**")
+        with tcol2:
+            with st.popover("❓", use_container_width=True):
+                st.markdown(t("typing_mode_help", lang))
+
+        typing_mode_options = [
+            TYPING_MODE_SMOOTH,
+            TYPING_MODE_CONTROLLED,
+            TYPING_MODE_INSTANT,
+        ]
+        typing_mode_labels = {
+            TYPING_MODE_SMOOTH: t("typing_mode_smooth", lang),
+            TYPING_MODE_CONTROLLED: t("typing_mode_controlled", lang),
+            TYPING_MODE_INSTANT: t("typing_mode_instant", lang),
+        }
+        current_mode = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
+        try:
+            default_idx = typing_mode_options.index(current_mode)
+        except ValueError:
+            default_idx = 0
+
+        selected_mode = st.radio(
+            t("typing_mode_label", lang),
+            options=typing_mode_options,
+            index=default_idx,
+            format_func=lambda x: typing_mode_labels.get(x, x),
+            key="typing_mode_radio",
+            label_visibility="collapsed"
+        )
+
+        if selected_mode == TYPING_MODE_CONTROLLED:
+            new_cps = st.slider(
+                t("typing_cps_label", lang),
+                min_value=5, max_value=120,
+                value=int(user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)),
+                step=5,
+                key="typing_cps_slider"
+            )
+        else:
+            new_cps = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
+
+        old_mode = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
+        old_cps = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
+        if selected_mode != old_mode or new_cps != old_cps:
+            user_data["preferences"]["typing_mode"] = selected_mode
+            user_data["preferences"]["typing_cps"] = new_cps
+            if is_test:
+                st.session_state.test_prefs["typing_mode"] = selected_mode
+                st.session_state.test_prefs["typing_cps"] = new_cps
+            elif is_guest:
+                st.session_state.guest_prefs["typing_mode"] = selected_mode
+                st.session_state.guest_prefs["typing_cps"] = new_cps
+            else:
+                db_data[st.session_state.user] = user_data
+                safe_save_db(db_data)
+            st.toast(t("typing_mode_saved", lang), icon="⌨️")
 
     st.divider()
 
@@ -2762,7 +2978,6 @@ with st.sidebar:
             db_data[st.session_state.user] = user_data
             safe_save_db(db_data)
 
-    # GENERATION SETTINGS
     with st.expander(t("gen_config", lang), expanded=False):
         tcol1, tcol2 = st.columns([0.85, 0.15])
         with tcol1:
@@ -2894,9 +3109,16 @@ current_title = t("new_chat", lang)
 if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
     current_title = user_chats[st.session_state.current_chat_id].get("title", "Chat")
 
-st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{sel_model}`")
+typing_mode_now = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
+if typing_mode_now == TYPING_MODE_INSTANT:
+    typing_badge = '⚡ Instant'
+elif typing_mode_now == TYPING_MODE_CONTROLLED:
+    typing_badge = f'⌨️ {user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)} cps'
+else:
+    typing_badge = '🌊 Smooth'
 
-# DRAFT RESTORE BANNER
+st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{sel_model}` <span class='typing-mode-badge'>{typing_badge}</span>", unsafe_allow_html=True)
+
 if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
     st.markdown(f"""
     <div class="draft-banner">
@@ -2940,7 +3162,7 @@ for msg in st.session_state.messages:
             st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER["en"])}</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 32. XỬ LÝ PROMPT (STREAMING)
+# 32. XỬ LÝ PROMPT
 # ==========================================
 def _process_prompt(user_prompt):
     clear_draft_cookie_via_js()
@@ -3007,6 +3229,9 @@ def _process_prompt(user_prompt):
         </div>
         """, unsafe_allow_html=True)
 
+        typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
+        typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
+
         for text_so_far, done, err in stream_gemini_with_failover(
             prompt_inputs=content_inputs,
             api_keys=SECRET_API_KEYS,
@@ -3017,6 +3242,8 @@ def _process_prompt(user_prompt):
             },
             lang=lang,
             ui_placeholder=ai_placeholder,
+            typing_mode=typing_mode_use,
+            typing_cps=typing_cps_use,
         ):
             if text_so_far:
                 final_text = text_so_far
