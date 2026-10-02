@@ -95,13 +95,21 @@
           {
             "role": "assistant",
             "content": "Đáp án đúng cho câu hỏi này là:\n\n**D. 500 – 600 triệu phế nang.**\n\n**Giải thích:** \nMỗi lá phổi của người trưởng thành chứa hàng triệu phế nang (túi khí nhỏ) để thực hiện quá trình trao đổi khí. Tổng số phế nang ở cả hai phổi thường dao động trong khoảng từ **500 đến 600 triệu**, tạo ra một diện tích bề mặt trao đổi khí rất lớn."
+          },
+          {
+            "role": "user",
+            "content": "Hoạt động nào dưới đây góp phần bảo vệ đường hô hấp của bạn ?\nA\nTất cả các phương án đưa ra\nB\nTrồng nhiều cây xanh\nC\nXả rác đúng nơi quy định\nD\nĐeo khẩu trang trong môi trường có nhiều khói bụi"
+          },
+          {
+            "role": "assistant",
+            "content": "Đáp án đúng cho câu hỏi này là:\n\n**A. Tất cả các phương án đưa ra**\n\n**Giải thích:**\n* **Trồng nhiều cây xanh:** Giúp lọc không khí, giảm bụi và cung cấp thêm oxy.\n* **Xả rác đúng nơi quy định:** Giúp giữ vệ sinh môi trường sống, hạn chế ô nhiễm không khí do rác thải gây ra.\n* **Đeo khẩu trang trong môi trường có nhiều khói bụi:** Ngăn chặn trực tiếp bụi bẩn, vi khuẩn và các chất độc hại xâm nhập vào đường hô hấp.\n\nVì vậy, tất cả các hoạt động trên đều góp phần bảo vệ hệ hô hấp."
           }
         ],
         "summary": "",
         "summary_updated_at": "",
         "summary_token_count": 0,
         "created_at": "2026-10-02T18:08:04.515566+07:00",
-        "updated_at": "2026-10-02T18:08:45.748012+07:00"
+        "updated_at": "2026-10-02T18:09:09.507564+07:00"
       }
     },
     "remembered_devices": [
