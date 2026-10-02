@@ -112,6 +112,24 @@
         "summary_token_count": 0,
         "created_at": "2026-10-02T18:07:50.539255+07:00",
         "updated_at": "2026-10-02T18:07:53.927393+07:00"
+      },
+      "afec4516-a33f-41a6-9563-2764b3dd9716": {
+        "title": "Ghép nối cơ quan hô hấp",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Câu 8: Ghép nối thông tin ở hai cột dưới đây sao cho phù hợp.\n1\nHọng\n2\nThanh quản\n3\nKhí quản\n4\nPhế nang\nA\nNơi diễn ra quá trình trao đổi khí tại phổi\nB\nDẫn khí từ ngoài vào phổi, chất nhầy và lông rung giúp đẩy vật lạ ra khỏi đường hô hấp\nC\nNắp thanh quản có thể cử động để đậy kín đường hô hấp khi nuốt thức ăn\nD\nTiêu diệt vi khuẩn trong không khí trước khi vào phổi"
+          },
+          {
+            "role": "assistant",
+            "content": "Dưới đây là đáp án ghép nối chính xác cho các cơ quan hô hấp ở cột 1 với chức năng/đặc điểm ở cột 2:\n\n* **1 - D** (Họng: Tiêu diệt vi khuẩn trong không khí trước khi vào phổi - *nhờ có tuyến amidan và V.A chứa nhiều bạch cầu*).\n* **2 - C** (Thanh quản: Nắp thanh quản có thể cử động để đậy kín đường hô hấp khi nuốt thức ăn).\n* **3 - B** (Khí quản: Dẫn khí từ ngoài vào phổi, chất nhầy và lông rung giúp đẩy vật lạ ra khỏi đường hô hấp).\n* **4 - A** (Phế nang: Nơi diễn ra quá trình trao đổi khí tại phổi).\n\n**Tóm tắt kết quả ghép nối:**\n* **1 – D**\n* **2 – C**\n* **3 – B**\n* **4 – A**"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "created_at": "2026-10-02T18:08:04.515566+07:00",
+        "updated_at": "2026-10-02T18:08:08.131903+07:00"
       }
     },
     "remembered_devices": [
