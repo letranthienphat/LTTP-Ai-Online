@@ -6,12 +6,17 @@ import base64
 import hashlib
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 import google.generativeai as genai
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from cryptography.fernet import Fernet
 from streamlit_cookies_controller import CookieController
+
+# Fallback cho Streamlit cũ (< 1.33) - dùng components.html
+try:
+    from streamlit.components.v1 import html as _legacy_html
+except Exception:
+    _legacy_html = None
 
 try:
     from google.api_core import exceptions as google_exceptions
@@ -21,7 +26,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.13.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -35,7 +40,8 @@ BUG_REPORTS_KEY = "__bug_reports__"
 TRAFFIC_RETENTION_DAYS = 30
 BUG_REPORTS_MAX = 50
 
-VN_TZ_OFFSET = timedelta(hours=7)
+# Múi giờ Việt Nam GMT+7 (dùng timezone-aware datetime, không dùng utcnow deprecated)
+VN_TZ = timezone(timedelta(hours=7))
 VERSION_SCAN_INTERVAL = 60
 
 # Smart draft
@@ -62,7 +68,8 @@ DEFAULT_TYPING_MODE = TYPING_MODE_SMOOTH
 DEFAULT_TYPING_CPS = 30
 
 def vn_now() -> datetime:
-    return datetime.utcnow() + VN_TZ_OFFSET
+    """Thời gian hiện tại theo giờ VN (GMT+7), timezone-aware, không dùng utcnow deprecated."""
+    return datetime.now(VN_TZ)
 
 # ==========================================
 # 1. CẤU HÌNH TRANG & SECRETS
@@ -386,7 +393,6 @@ st.markdown("""
         color: #10b981;
     }
 
-    /* Ngăn browser tự anchor scroll khi content thay đổi */
     html, body, [data-testid="stAppViewContainer"], section.main {
         overflow-anchor: none !important;
     }
@@ -462,40 +468,62 @@ def safe_save_db(data: dict) -> tuple:
     return GitHubStorage.save_db(data)
 
 # ==========================================
-# 4. JAVASCRIPT INJECTION
+# 4. JAVASCRIPT INJECTION - DÙNG st.html (Streamlit 1.33+)
+#    Script chạy trực tiếp trong DOM chính (không iframe)
 # ==========================================
-def inject_js(js_code: str, height: int = 0):
-    html_template = (
-        "<!DOCTYPE html>\n"
-        "<html>\n"
-        "<head><meta charset=\"utf-8\"></head>\n"
-        "<body style=\"margin:0;padding:0;\">\n"
-        "<script>\n"
-        "(function() {\n"
-        "    try {\n"
-        "        const w = window.parent || window;\n"
-        "        const d = w.document;\n"
-        "        __JS_CODE__\n"
-        "    } catch (e) {\n"
-        "        console.warn('LTTP JS error:', e);\n"
-        "    }\n"
-        "})();\n"
-        "</script>\n"
-        "</body>\n"
-        "</html>"
-    )
-    html = html_template.replace("__JS_CODE__", js_code)
-    components.html(html, height=height, scrolling=False)
+def _has_st_html() -> bool:
+    """Kiểm tra Streamlit có st.html không (>= 1.33)."""
+    return hasattr(st, "html")
+
+def inject_js(js_code: str):
+    """
+    Chèn JavaScript vào DOM chính của Streamlit.
+    - Streamlit >= 1.33: dùng st.html() - script chạy trong DOM chính, không cần window.parent.
+    - Streamlit cũ hơn: fallback components.html với iframe.
+    
+    LƯU Ý: với st.html, `window` và `document` là của trang chính.
+    Không cần `window.parent` như khi dùng components.html trong iframe.
+    """
+    # Bọc JS trong IIFE và bọc trong <script>
+    wrapped_script = "<script>\n(function() {\n" + js_code + "\n})();\n</script>"
+    
+    if _has_st_html():
+        # Streamlit mới: dùng st.html
+        try:
+            st.html(wrapped_script)
+            return
+        except Exception:
+            # fallback nếu có lỗi
+            pass
+    
+    # Fallback cho Streamlit cũ
+    if _legacy_html is not None:
+        html_template = (
+            "<!DOCTYPE html>\n"
+            "<html>\n"
+            "<head><meta charset=\"utf-8\"></head>\n"
+            "<body style=\"margin:0;padding:0;\">\n"
+            + wrapped_script +
+            "\n</body>\n"
+            "</html>"
+        )
+        try:
+            _legacy_html(html_template, height=0, scrolling=False)
+        except Exception:
+            pass
 
 
 def inject_version_scanner():
+    # Guard để không cài 2 lần
     js = (
+        'if (window.__lttp_version_scanner_installed) return;\n'
+        'window.__lttp_version_scanner_installed = true;\n'
         'const CURRENT_VERSION = "' + APP_VERSION + '";\n'
         'const SCAN_INTERVAL_MS = ' + str(VERSION_SCAN_INTERVAL * 1000) + ';\n'
         'const COOKIE_NAME = "LTTP_app_version";\n'
         '\n'
         'function getCookie(name) {\n'
-        '    const value = "; " + d.cookie;\n'
+        '    const value = "; " + document.cookie;\n'
         '    const parts = value.split("; " + name + "=");\n'
         '    if (parts.length === 2) return parts.pop().split(";").shift();\n'
         '    return null;\n'
@@ -505,12 +533,12 @@ def inject_version_scanner():
         '    try {\n'
         '        const cached = getCookie(COOKIE_NAME);\n'
         '        if (cached && cached !== CURRENT_VERSION) {\n'
-        '            if (!d.getElementById("lttp-reboot-banner-injected")) {\n'
-        '                const banner = d.createElement("div");\n'
+        '            if (!document.getElementById("lttp-reboot-banner-injected")) {\n'
+        '                const banner = document.createElement("div");\n'
         '                banner.id = "lttp-reboot-banner-injected";\n'
         '                banner.style.cssText = "position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:999999;padding:14px 24px;background:linear-gradient(90deg,#f59e0b,#f97316);color:white;border-radius:12px;box-shadow:0 6px 24px rgba(249,115,22,0.55);font-family:sans-serif;max-width:90vw;";\n'
         '                banner.innerHTML = "<div style=\\"font-weight:800;font-size:1.05rem;margin-bottom:4px;\\">🚀 Đã có phiên bản mới!</div><div style=\\"font-size:0.9rem;margin-bottom:10px;opacity:0.95;\\">Vui lòng tải lại trang để cập nhật.</div><button onclick=\\"location.reload()\\" style=\\"background:white;color:#f97316;border:none;padding:8px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.9rem;\\">Tải lại ngay</button>";\n'
-        '                d.body.appendChild(banner);\n'
+        '                document.body.appendChild(banner);\n'
         '            }\n'
         '        }\n'
         '    } catch (e) {}\n'
@@ -524,43 +552,42 @@ def inject_version_scanner():
 
 def inject_scroll_guard():
     js = (
-        'if (!window.__lttp_scroll_guard_installed) {\n'
-        '    window.__lttp_scroll_guard_installed = true;\n'
-        '    window.__lttp_scroll_lock = false;\n'
-        '    \n'
-        '    const origScrollIntoView = Element.prototype.scrollIntoView;\n'
-        '    Element.prototype.scrollIntoView = function() {\n'
-        '        if (window.__lttp_scroll_lock) return;\n'
-        '        return origScrollIntoView.apply(this, arguments);\n'
-        '    };\n'
-        '    \n'
-        '    function getScrollContainer() {\n'
-        '        let el = d.querySelector("section.main");\n'
-        '        if (el) return el;\n'
-        '        el = d.querySelector("[data-testid=\\"stAppViewContainer\\"]");\n'
-        '        if (el) return el;\n'
-        '        return d.scrollingElement || d.documentElement;\n'
-        '    }\n'
-        '    \n'
-        '    function updateLock() {\n'
-        '        const c = getScrollContainer();\n'
-        '        if (!c) return;\n'
-        '        const atBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < 150;\n'
-        '        window.__lttp_scroll_lock = !atBottom;\n'
-        '    }\n'
-        '    \n'
-        '    let ticking = false;\n'
-        '    d.addEventListener("scroll", function() {\n'
-        '        if (ticking) return;\n'
-        '        ticking = true;\n'
-        '        requestAnimationFrame(function() {\n'
-        '            updateLock();\n'
-        '            ticking = false;\n'
-        '        });\n'
-        '    }, true);\n'
-        '    \n'
-        '    setInterval(updateLock, 500);\n'
+        'if (window.__lttp_scroll_guard_installed) return;\n'
+        'window.__lttp_scroll_guard_installed = true;\n'
+        'window.__lttp_scroll_lock = false;\n'
+        '\n'
+        'const origScrollIntoView = Element.prototype.scrollIntoView;\n'
+        'Element.prototype.scrollIntoView = function() {\n'
+        '    if (window.__lttp_scroll_lock) return;\n'
+        '    return origScrollIntoView.apply(this, arguments);\n'
+        '};\n'
+        '\n'
+        'function getScrollContainer() {\n'
+        '    let el = document.querySelector("section.main");\n'
+        '    if (el) return el;\n'
+        '    el = document.querySelector("[data-testid=\\"stAppViewContainer\\"]");\n'
+        '    if (el) return el;\n'
+        '    return document.scrollingElement || document.documentElement;\n'
         '}\n'
+        '\n'
+        'function updateLock() {\n'
+        '    const c = getScrollContainer();\n'
+        '    if (!c) return;\n'
+        '    const atBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < 150;\n'
+        '    window.__lttp_scroll_lock = !atBottom;\n'
+        '}\n'
+        '\n'
+        'let ticking = false;\n'
+        'document.addEventListener("scroll", function() {\n'
+        '    if (ticking) return;\n'
+        '    ticking = true;\n'
+        '    requestAnimationFrame(function() {\n'
+        '        updateLock();\n'
+        '        ticking = false;\n'
+        '    });\n'
+        '}, true);\n'
+        '\n'
+        'setInterval(updateLock, 500);\n'
     )
     inject_js(js)
 
@@ -568,13 +595,16 @@ def inject_scroll_guard():
 def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
     if not enabled:
         js_clear = (
-            'd.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
-            'd.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
+            'document.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
+            'document.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
         )
         inject_js(js_clear)
         return
 
+    # Chỉ cài tracker 1 lần
     js = (
+        'if (window.__lttp_draft_tracker_installed) return;\n'
+        'window.__lttp_draft_tracker_installed = true;\n'
         'const MIN_WORDS = ' + str(min_words) + ';\n'
         'const INTERVAL_MS = ' + str(interval_sec * 1000) + ';\n'
         'const IDLE_MS = ' + str(idle_sec * 1000) + ';\n'
@@ -596,14 +626,14 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         '    try {\n'
         '        const encoded = encodeURIComponent(text);\n'
         '        const trimmed = encoded.length > 3500 ? encoded.slice(0, 3500) : encoded;\n'
-        '        d.cookie = DRAFT_COOKIE + "=" + trimmed + "; path=/; max-age=86400";\n'
-        '        d.cookie = TS_COOKIE + "=" + Date.now() + "; path=/; max-age=86400";\n'
+        '        document.cookie = DRAFT_COOKIE + "=" + trimmed + "; path=/; max-age=86400";\n'
+        '        document.cookie = TS_COOKIE + "=" + Date.now() + "; path=/; max-age=86400";\n'
         '        lastSavedText = text;\n'
         '    } catch (e) {}\n'
         '}\n'
         '\n'
         'function attachToTextarea() {\n'
-        '    const candidates = d.querySelectorAll(\n'
+        '    const candidates = document.querySelectorAll(\n'
         '        "textarea[data-testid=\\"stChatInputTextArea\\"], " +\n'
         '        "section[data-testid=\\"stChatInput\\"] textarea, " +\n'
         '        "div[data-testid=\\"stChatInput\\"] textarea, " +\n'
@@ -615,15 +645,15 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         '        if (c.offsetParent !== null) { ta = c; break; }\n'
         '    }\n'
         '    if (!ta || ta === currentTextarea) return;\n'
-        '    \n'
+        '\n'
         '    currentTextarea = ta;\n'
         '    const handler = function() {\n'
         '        const text = ta.value || "";\n'
         '        const words = countWords(text);\n'
-        '        \n'
+        '\n'
         '        if (typingTimer) clearTimeout(typingTimer);\n'
         '        if (periodicTimer) { clearInterval(periodicTimer); periodicTimer = null; }\n'
-        '        \n'
+        '\n'
         '        if (words > MIN_WORDS) {\n'
         '            periodicTimer = setInterval(function() {\n'
         '                const cur = ta.value || "";\n'
@@ -632,7 +662,7 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         '                }\n'
         '            }, INTERVAL_MS);\n'
         '        }\n'
-        '        \n'
+        '\n'
         '        typingTimer = setTimeout(function() {\n'
         '            const cur = ta.value || "";\n'
         '            if (cur && cur !== lastIdleSavedText) {\n'
@@ -641,7 +671,7 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         '            }\n'
         '        }, IDLE_MS);\n'
         '    };\n'
-        '    \n'
+        '\n'
         '    ta.removeEventListener("input", ta._lttpHandler);\n'
         '    ta._lttpHandler = handler;\n'
         '    ta.addEventListener("input", handler);\n'
@@ -655,8 +685,8 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
 
 def clear_draft_cookie_via_js():
     js_clear = (
-        'd.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
-        'd.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
+        'document.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
+        'document.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
     )
     inject_js(js_clear)
 
@@ -664,9 +694,9 @@ def clear_draft_cookie_via_js():
 def inject_screenshot_capture(max_chunks: int):
     js = (
         'if (typeof html2canvas === "undefined") {\n'
-        '    const s = d.createElement("script");\n'
+        '    const s = document.createElement("script");\n'
         '    s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";\n'
-        '    d.head.appendChild(s);\n'
+        '    document.head.appendChild(s);\n'
         '}\n'
         '\n'
         'window.__lttp_do_screenshot = function() {\n'
@@ -675,44 +705,44 @@ def inject_screenshot_capture(max_chunks: int):
         '            setTimeout(window.__lttp_do_screenshot, 500);\n'
         '            return;\n'
         '        }\n'
-        '        html2canvas(d.body, {\n'
+        '        html2canvas(document.body, {\n'
         '            backgroundColor: "#0e1117",\n'
         '            scale: 1,\n'
         '            logging: false,\n'
         '            useCORS: true,\n'
         '            allowTaint: true,\n'
-        '            windowWidth: d.documentElement.clientWidth,\n'
-        '            windowHeight: d.documentElement.clientHeight\n'
+        '            windowWidth: document.documentElement.clientWidth,\n'
+        '            windowHeight: document.documentElement.clientHeight\n'
         '        }).then(function(canvas) {\n'
         '            const targetWidth = 480;\n'
         '            const scale = targetWidth / canvas.width;\n'
         '            const targetHeight = Math.round(canvas.height * scale);\n'
-        '            \n'
-        '            const off = d.createElement("canvas");\n'
+        '\n'
+        '            const off = document.createElement("canvas");\n'
         '            off.width = targetWidth;\n'
         '            off.height = targetHeight;\n'
         '            const ctx = off.getContext("2d");\n'
         '            ctx.drawImage(canvas, 0, 0, targetWidth, targetHeight);\n'
-        '            \n'
+        '\n'
         '            const dataUrl = off.toDataURL("image/jpeg", 0.4);\n'
         '            const b64 = dataUrl.split(",")[1];\n'
-        '            \n'
+        '\n'
         '            const CHUNK_SIZE = ' + str(BR_CHUNK_SIZE) + ';\n'
         '            const chunks = [];\n'
         '            for (let i = 0; i < b64.length; i += CHUNK_SIZE) {\n'
         '                chunks.push(b64.slice(i, i + CHUNK_SIZE));\n'
         '            }\n'
-        '            \n'
+        '\n'
         '            for (let i = 0; i < ' + str(max_chunks) + '; i++) {\n'
-        '                d.cookie = "' + BR_COOKIE_PREFIX + '" + i + "=; max-age=0; path=/";\n'
+        '                document.cookie = "' + BR_COOKIE_PREFIX + '" + i + "=; max-age=0; path=/";\n'
         '            }\n'
-        '            d.cookie = "' + BR_META_COOKIE + '=; max-age=0; path=/";\n'
-        '            \n'
+        '            document.cookie = "' + BR_META_COOKIE + '=; max-age=0; path=/";\n'
+        '\n'
         '            const maxToStore = Math.min(chunks.length, ' + str(max_chunks) + ');\n'
         '            for (let i = 0; i < maxToStore; i++) {\n'
-        '                d.cookie = "' + BR_COOKIE_PREFIX + '" + i + "=" + chunks[i] + "; path=/; max-age=300";\n'
+        '                document.cookie = "' + BR_COOKIE_PREFIX + '" + i + "=" + chunks[i] + "; path=/; max-age=300";\n'
         '            }\n'
-        '            d.cookie = "' + BR_META_COOKIE + '=" + maxToStore + "; path=/; max-age=300";\n'
+        '            document.cookie = "' + BR_META_COOKIE + '=" + maxToStore + "; path=/; max-age=300";\n'
         '        }).catch(function(err) {\n'
         '            console.warn("Screenshot error:", err);\n'
         '        });\n'
@@ -821,14 +851,6 @@ def stream_gemini_with_failover(
     typing_mode=TYPING_MODE_SMOOTH,
     typing_cps=DEFAULT_TYPING_CPS,
 ):
-    """
-    Generator streaming với failover + kiểm soát tốc độ gõ.
-    
-    typing_mode:
-      - smooth: hiện ngay khi có chunk
-      - controlled: đệm chunk, release theo tốc độ typing_cps ký tự/giây
-      - instant: đợi response xong hết rồi yield 1 lần
-    """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
@@ -854,7 +876,6 @@ def stream_gemini_with_failover(
                 )
 
                 if not use_stream:
-                    # === INSTANT: non-stream, đợi xong hết ===
                     res = model.generate_content(prompt_inputs)
                     text = getattr(res, "text", None)
                     if text:
@@ -867,7 +888,6 @@ def stream_gemini_with_failover(
                         last_error = "Empty response"
                         continue
 
-                # === SMOOTH / CONTROLLED: dùng stream ===
                 response = model.generate_content(prompt_inputs, stream=True)
 
                 display_buffer = ""
@@ -892,7 +912,6 @@ def stream_gemini_with_failover(
                             ui_placeholder.markdown(display, unsafe_allow_html=True)
                         yield accumulated, False, None
                     else:
-                        # CONTROLLED
                         pending_buffer += chunk_text
                         now = time.time()
                         elapsed = now - last_release_time
@@ -913,7 +932,6 @@ def stream_gemini_with_failover(
                                 ui_placeholder.markdown(disp, unsafe_allow_html=True)
                             yield display_buffer, False, None
 
-                # Release nốt pending còn lại với tốc độ cps
                 if typing_mode == TYPING_MODE_CONTROLLED and pending_buffer:
                     while pending_buffer:
                         now = time.time()
@@ -1147,10 +1165,10 @@ def migrate_user_data(db_data: dict) -> tuple:
                     chat[k] = dv
                     migrated = True
             if "created_at" not in chat:
-                chat["created_at"] = datetime.now().isoformat()
+                chat["created_at"] = vn_now().isoformat()
                 migrated = True
             if "updated_at" not in chat:
-                chat["updated_at"] = chat.get("created_at", datetime.now().isoformat())
+                chat["updated_at"] = chat.get("created_at", vn_now().isoformat())
                 migrated = True
 
         if "api_keys" in uinfo:
@@ -2304,7 +2322,6 @@ def render_admin_panel():
     ann_body = str(cur_ann.get("body", ""))
     ann_updated = str(cur_ann.get("updated_at", ""))
 
-    # 1. ANNOUNCEMENT
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("announcement_panel_title", lang))
     st.caption(t("announcement_panel_desc", lang))
@@ -2377,7 +2394,6 @@ def render_admin_panel():
                 st.error(f"Error: {msg}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 2. MAINTENANCE
     status_text = t("sys_paused", lang) if cur_maint else t("sys_running", lang)
     st.markdown(f"**{t('sys_status', lang)}:** {status_text}")
 
@@ -2423,7 +2439,6 @@ def render_admin_panel():
             st.error(f"Error: {msg}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 3. BUG REPORTS
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("bug_report_admin_title", lang))
     st.caption(t("bug_report_admin_desc", lang))
@@ -2517,7 +2532,6 @@ def render_admin_panel():
                 st.markdown("---")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 4. TRAFFIC
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     _render_traffic_analytics(lang, db.get(TRAFFIC_LOG_KEY, {}))
     st.markdown('</div>', unsafe_allow_html=True)
@@ -2814,7 +2828,6 @@ with st.sidebar:
     st.divider()
 
     with st.expander(t("settings_title", lang), expanded=False):
-        # Smart Draft
         col_lbl, col_help = st.columns([0.85, 0.15])
         with col_lbl:
             st.markdown(f"**{t('smart_draft_label', lang)}**")
@@ -2851,7 +2864,6 @@ with st.sidebar:
 
         st.markdown("---")
 
-        # Typing mode
         tcol1, tcol2 = st.columns([0.85, 0.15])
         with tcol1:
             st.markdown(f"**⌨️ {t('typing_mode_label', lang)}**")
@@ -3138,12 +3150,12 @@ if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
                 '    if (navigator.clipboard && navigator.clipboard.writeText) {\n'
                 '        navigator.clipboard.writeText(txt).catch(function(){});\n'
                 '    } else {\n'
-                '        const ta = d.createElement("textarea");\n'
+                '        const ta = document.createElement("textarea");\n'
                 '        ta.value = txt;\n'
-                '        d.body.appendChild(ta);\n'
+                '        document.body.appendChild(ta);\n'
                 '        ta.select();\n'
-                '        try { d.execCommand("copy"); } catch(e){}\n'
-                '        d.body.removeChild(ta);\n'
+                '        try { document.execCommand("copy"); } catch(e){}\n'
+                '        document.body.removeChild(ta);\n'
                 '    }\n'
                 '})();\n'
             )
@@ -3177,8 +3189,8 @@ def _process_prompt(user_prompt):
             "title": t("new_chat", lang),
             "messages": [],
             "summary": "",
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "created_at": vn_now().isoformat(),
+            "updated_at": vn_now().isoformat()
         }
         if is_test:
             st.session_state.test_chats = user_chats
@@ -3289,7 +3301,7 @@ def _process_prompt(user_prompt):
                 chat_data["title"] = user_prompt[:30] + "..." if len(user_prompt) > 30 else user_prompt
 
         chat_data["messages"] = st.session_state.messages
-        chat_data["updated_at"] = datetime.now().isoformat()
+        chat_data["updated_at"] = vn_now().isoformat()
         user_chats[st.session_state.current_chat_id] = chat_data
 
         if is_test:
