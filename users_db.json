@@ -94,6 +94,24 @@
         "summary_token_count": 0,
         "created_at": "2026-10-02T18:07:16.290437+07:00",
         "updated_at": "2026-10-02T18:07:44.250082+07:00"
+      },
+      "faa10017-b31b-4188-9ded-1ff4b7484e4a": {
+        "title": "Dung tích sống nam giới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Dung tích sống trung bình của nam giới người Việt nằm trong khoảng\nA\n2500 – 3000 ml.\nB\n3000 – 3500 ml.\nC\n1000 – 2000 ml.\nD\n800 – 1500 ml."
+          },
+          {
+            "role": "assistant",
+            "content": "Đáp án đúng là: **B. 3000 – 3500 ml.**\n\n**Giải thích:**\nDung tích sống (vital capacity) là thể tích khí lớn nhất mà một người có thể thở ra sau khi cố gắng hít vào hết sức. Ở nam giới trưởng thành người Việt Nam, dung tích sống trung bình thường dao động trong khoảng từ 3000 đến 3500 ml (trong khi nữ giới thường thấp hơn, khoảng 2500 - 3000 ml)."
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "created_at": "2026-10-02T18:07:50.539255+07:00",
+        "updated_at": "2026-10-02T18:07:53.927393+07:00"
       }
     },
     "remembered_devices": [
