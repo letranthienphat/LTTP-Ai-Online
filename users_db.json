@@ -100,6 +100,24 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
+      },
+      "d766b5fc-a8cb-41c1-9299-4c12e85b8230": {
+        "title": "Năm thành lập Samsung",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Samsung được thành lập năm nào?"
+          },
+          {
+            "role": "assistant",
+            "content": "Samsung được thành lập vào năm **1938** (cụ thể là ngày 1 tháng 3 năm 1938) bởi ông Lee Byung-chul tại Daegu, Hàn Quốc. Ban đầu, công ty khởi nghiệp là một công ty buôn bán nhỏ chuyên về mì ống và các sản phẩm nông sản trước khi vươn lên trở thành tập đoàn công nghệ hàng đầu thế giới như hiện nay."
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "created_at": "2026-10-02T21:36:26.922761+07:00",
+        "updated_at": "2026-10-02T21:36:30.404310+07:00"
       }
     },
     "remembered_devices": [
