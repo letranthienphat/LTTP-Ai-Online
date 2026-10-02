@@ -78,7 +78,7 @@
       "top_p": 0.95,
       "top_k": 40,
       "smart_draft": true,
-      "typing_mode": "smooth",
+      "typing_mode": "controlled",
       "typing_cps": 30
     }
   },
