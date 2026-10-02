@@ -76,6 +76,24 @@
         "updated_at": "2026-10-02T17:56:12.097444+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
+      },
+      "923d8977-4afc-46e0-b240-98da41600d89": {
+        "title": "Số lượng vòng sụn khí quản",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Khí quản người được tạo thành bởi bao nhiêu vòng sụn khuyết hình chữ C ?\nA\n20 – 25 vòng sụn\nB\n15 – 20 vòng sụn\nC\n10 – 15 vòng sụn\nD\n25 – 30 vòng sụn"
+          },
+          {
+            "role": "assistant",
+            "content": "Đáp án đúng là **B. 15 – 20 vòng sụn**\n\n**Giải thích:** Khí quản của người là một ống dẫn khí được cấu tạo bởi 15 - 20 vòng sụn khuyết hình chữ C, xếp chồng lên nhau và được liên kết với nhau bằng các mô liên kết và cơ trơn. Cấu trúc hình chữ C giúp khí quản luôn mở rộng để không khí lưu thông dễ dàng, đồng thời phần khuyết phía sau (nơi tiếp giáp với thực quản) giúp thực quản có thể giãn nở dễ dàng khi nuốt thức ăn."
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "created_at": "2026-10-02T18:07:16.290437+07:00",
+        "updated_at": "2026-10-02T18:07:44.250082+07:00"
       }
     },
     "remembered_devices": [
