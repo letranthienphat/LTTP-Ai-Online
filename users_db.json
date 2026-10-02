@@ -219,6 +219,12 @@
           "label": "phát",
           "role": "user",
           "device": "7732ac2a-f103-49fe-8970-ba566d952bdd"
+        },
+        {
+          "time": "2026-10-02 17:27:41",
+          "label": "phát",
+          "role": "user",
+          "device": "8675c7aa-b1ed-4c68-88c8-166bac5a945b"
         }
       ]
     }
