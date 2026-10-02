@@ -100,6 +100,24 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
+      },
+      "2aacda45-bd5d-4abb-bc4f-e54cc214ca02": {
+        "title": "Giới thiệu bản thân",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Bạn là ai?"
+          },
+          {
+            "role": "assistant",
+            "content": "Tôi là một trợ lý ảo trí tuệ nhân tạo được phát triển bởi Google. Tôi ở đây để hỗ trợ bạn giải đáp thắc mắc, viết văn bản, dịch thuật, phân tích dữ liệu, lập trình và nhiều việc khác nữa. \n\nTôi có thể giúp gì cho bạn hôm nay?"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "created_at": "2026-10-02T20:28:15.294564+07:00",
+        "updated_at": "2026-10-02T20:28:41.931542+07:00"
       }
     },
     "remembered_devices": [
