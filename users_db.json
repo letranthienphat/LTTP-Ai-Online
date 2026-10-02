@@ -57,7 +57,9 @@
         ],
         "summary": "Đoạn hội thoại xoay quanh **\"Cuộc thi Thiết kế Video giới thiệu sách\"** thuộc Tuần lễ hưởng ứng học tập suốt đời năm 2026 của trường THCS và THPT Nguyễn Huệ, dành cho học sinh từ khối 6 đến 12. Phản hồi các câu hỏi của người dùng, AI đã cung cấp thông tin chi tiết về cuộc thi và hướng dẫn quy trình thực hiện từ khâu chuẩn bị, chọn sách đến lên ý tưởng kịch bản. Hiện tại, người dùng đang yêu cầu liệt kê các phương pháp và công cụ thiết kế video cụ thể (như PowerPoint, Canva,...) để triển khai sản xuất sản phẩm dự thi.",
         "created_at": "2026-10-02T10:11:55.789689",
-        "updated_at": "2026-10-02T17:45:06.291235+07:00"
+        "updated_at": "2026-10-02T17:45:06.291235+07:00",
+        "summary_updated_at": "",
+        "summary_token_count": 0
       }
     },
     "remembered_devices": [
