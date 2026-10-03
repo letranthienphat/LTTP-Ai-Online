@@ -27,7 +27,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.16.0"
+APP_VERSION = "1.40.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -41,6 +41,7 @@ BUG_REPORTS_KEY = "__bug_reports__"
 SECURITY_LOG_KEY = "__security_log__"
 SECURITY_ALERTS_KEY = "__security_alerts__"
 BLOCKLIST_KEY = "__blocklist__"
+GUEST_QUOTAS_KEY = "__guest_quotas__"
 
 TRAFFIC_RETENTION_DAYS = 30
 BUG_REPORTS_MAX = 50
@@ -69,13 +70,23 @@ TYPING_MODE_INSTANT = "instant"
 DEFAULT_TYPING_MODE = TYPING_MODE_SMOOTH
 DEFAULT_TYPING_CPS = 30
 
-# Stop generation
 COOKIE_STOP_FLAG = "LTTP_stop_flag"
+QL_MODE_COOKIE = "LTTP_ql_mode"
 
 # Performance tuning
 SUMMARY_TRIGGER_RATIO = 0.85
 GEMINI_REQUEST_TIMEOUT = 12
 MODEL_LIST_CACHE_SECONDS = 300
+
+# Changelog
+CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
+CHANGELOG_CACHE_SECONDS = 600
+
+# Guest quota
+GUEST_DAILY_MSG_LIMIT_HIGH = 150
+GUEST_DAILY_MSG_LIMIT_NORMAL = 100
+HIGH_FREQ_MSG_THRESHOLD = 100
+HIGH_FREQ_USER_COUNT_THRESHOLD = 5
 
 CHARS_PER_TOKEN = 2.5
 MODEL_CONTEXT_BUDGET = {
@@ -89,7 +100,6 @@ MODEL_CONTEXT_BUDGET = {
 }
 DEFAULT_CONTEXT_BUDGET = 800_000
 HISTORY_BUDGET_RATIO = 0.30
-SUMMARY_BUDGET_RATIO = 0.15
 MIN_RECENT_MESSAGES = 4
 MAX_RECENT_MESSAGES = 30
 SUMMARY_BATCH_SIZE = 30
@@ -137,6 +147,7 @@ SUSPICIOUS_PATTERNS = [
 def vn_now() -> datetime:
     return datetime.now(VN_TZ)
 
+
 # ==========================================
 # HẰNG SỐ QUAN TRỌNG
 # ==========================================
@@ -153,13 +164,13 @@ UPDATE_NOTICE = {
 REBOOT_NOTICE = {
     "vi": {
         "title": "Đã có phiên bản mới!",
-        "desc": "Vui lòng tải lại trang (F5 hoặc Ctrl+R) để cập nhật lên phiên bản mới nhất.",
+        "desc": "Vui lòng tải lại trang (F5 hoặc Ctrl+R) để cập nhật.",
         "button": "Tải lại ngay",
         "later": "Để sau",
     },
     "en": {
         "title": "New version available!",
-        "desc": "Please reload the page (F5 or Ctrl+R) to update to the latest version.",
+        "desc": "Please reload the page (F5 or Ctrl+R) to update.",
         "button": "Reload now",
         "later": "Later",
     },
@@ -194,6 +205,7 @@ COPYRIGHT_GUARD_PROMPT_EN = (
     "6. NEVER help create fake accounts, spam, DDoS, or exploit vulnerabilities.\n"
     "7. Stay professional, no insults, no discrimination."
 )
+
 
 # ==========================================
 # 1. CẤU HÌNH TRANG & SECRETS
@@ -249,8 +261,9 @@ LEGACY_MODEL_MAP = {
 
 RATE_LIMIT_RETRY_DELAY = 60
 
+
 # ==========================================
-# 2. CUSTOM CSS
+# 2. CUSTOM CSS + RESPONSIVE
 # ==========================================
 st.markdown("""
 <style>
@@ -505,6 +518,42 @@ st.markdown("""
         background: rgba(102,126,234,0.15); color:#667eea;
         margin-left: 6px;
     }
+    .ql-mode-badge {
+        display: inline-block; padding: 2px 8px;
+        border-radius: 6px; font-size: 0.72rem;
+        font-weight: 600;
+        background: rgba(245,158,11,0.15); color:#f59e0b;
+        margin-left: 6px;
+    }
+    .changelog-view {
+        padding: 12px 16px;
+        background: rgba(102,126,234,0.06);
+        border-left: 3px solid #667eea;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        color: #e2e8f0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 500px;
+        overflow-y: auto;
+        line-height: 1.6;
+    }
+    .quota-warning {
+        padding: 10px 14px;
+        background: rgba(251,191,36,0.1);
+        border: 1px solid rgba(251,191,36,0.35);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        color: #fbbf24;
+        margin-bottom: 12px;
+    }
+    .lttp-stop-gen {
+        transition: all 0.2s ease;
+    }
+    .lttp-stop-gen:hover {
+        background: rgba(239,68,68,0.25) !important;
+        border-color: rgba(239,68,68,0.7) !important;
+    }
 
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
@@ -522,8 +571,43 @@ st.markdown("""
         opacity: 0 !important;
         pointer-events: none !important;
     }
+
+    /* ===== RESPONSIVE (v1.40.0) ===== */
+    @media (max-width: 768px) {
+        .main-header { font-size: 1.6rem !important; }
+        .stButton button {
+            min-height: 42px !important;
+            font-size: 0.95rem !important;
+        }
+        .user-card { padding: 8px 10px !important; }
+        .ai-loading-box { padding: 10px 14px !important; gap: 8px !important; }
+        .spinner { width: 18px !important; height: 18px !important; }
+        .ai-loading-text { font-size: 0.85rem !important; }
+        .stat-card { padding: 10px 12px !important; }
+        .stat-value { font-size: 1.3rem !important; }
+        .stat-label { font-size: 0.7rem !important; }
+        section[data-testid="stChatInput"] textarea {
+            font-size: 16px !important;
+        }
+        section[data-testid="stSidebar"] .stButton button {
+            padding: 6px 8px !important;
+            font-size: 0.85rem !important;
+        }
+        section.main .block-container {
+            padding-left: 0.6rem !important;
+            padding-right: 0.6rem !important;
+            padding-top: 1rem !important;
+        }
+    }
+    @media (min-width: 769px) {
+        section.main .block-container {
+            padding-top: 1.5rem !important;
+        }
+    }
+    img { max-width: 100% !important; height: auto !important; }
 </style>
 """, unsafe_allow_html=True)
+
 
 # ==========================================
 # 3. HÀM TIỆN ÍCH
@@ -585,14 +669,11 @@ def get_context_budget(model_name: str) -> int:
     return DEFAULT_CONTEXT_BUDGET
 
 def get_available_models_cached() -> list:
-    """Lấy danh sách model từ Gemini, có cache 5 phút."""
     now = time.time()
     cached = st.session_state.get("_models_cache")
     cached_time = st.session_state.get("_models_cache_time", 0)
-
     if cached and (now - cached_time) < MODEL_LIST_CACHE_SECONDS:
         return cached
-
     models = FALLBACK_MODELS.copy()
     if SECRET_API_KEYS:
         try:
@@ -605,7 +686,6 @@ def get_available_models_cached() -> list:
                 models = list(dict.fromkeys(dyn + FALLBACK_MODELS))
         except Exception:
             pass
-
     st.session_state._models_cache = models
     st.session_state._models_cache_time = now
     return models
@@ -642,6 +722,132 @@ def truncate_message_smart(content: str, max_tokens: int) -> str:
     head = content[:head_chars]
     tail = content[-tail_chars:] if tail_chars > 0 else ""
     return head + "\n\n[... nội dung giữa đã lược bớt ...]\n\n" + tail
+
+
+# ==========================================
+# 3b. CHANGELOG / QUICK LOOKUP / GUEST QUOTA
+# ==========================================
+def fetch_changelog_cached() -> tuple:
+    now = time.time()
+    cached = st.session_state.get("_changelog_cache")
+    cached_time = st.session_state.get("_changelog_cache_time", 0)
+    if cached is not None and (now - cached_time) < CHANGELOG_CACHE_SECONDS:
+        return cached
+    try:
+        resp = requests.get(
+            CHANGELOG_URL,
+            timeout=8,
+            headers={"User-Agent": "LTTP-AI-Online/1.40.0"}
+        )
+        if resp.status_code == 200:
+            content = resp.text.strip()
+            fetched_at = vn_now().strftime("%Y-%m-%d %H:%M:%S")
+            result = (content, fetched_at, True)
+        else:
+            result = (f"⚠️ HTTP {resp.status_code}", "", False)
+    except requests.exceptions.Timeout:
+        result = ("⚠️ Timeout loading changelog.", "", False)
+    except Exception as e:
+        result = (f"⚠️ Error: {str(e)[:100]}", "", False)
+    st.session_state._changelog_cache = result
+    st.session_state._changelog_cache_time = now
+    return result
+
+
+def count_high_frequency_users(db_data: dict) -> int:
+    try:
+        yesterday = (vn_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        hf_count = 0
+        for username, uinfo in db_data.items():
+            if username in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY, BUG_REPORTS_KEY,
+                            SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY,
+                            GUEST_QUOTAS_KEY):
+                continue
+            if not isinstance(uinfo, dict):
+                continue
+            msg_count = 0
+            for cid, chat in uinfo.get("chats", {}).items():
+                if not isinstance(chat, dict):
+                    continue
+                updated = chat.get("updated_at", "")
+                if updated and updated >= yesterday:
+                    msgs = chat.get("messages", [])
+                    if isinstance(msgs, list):
+                        msg_count += sum(1 for m in msgs if isinstance(m, dict) and m.get("role") == "user")
+            if msg_count >= HIGH_FREQ_MSG_THRESHOLD:
+                hf_count += 1
+        return hf_count
+    except Exception:
+        return 0
+
+
+def get_guest_daily_limit(db_data: dict) -> int:
+    hf_count = count_high_frequency_users(db_data)
+    if hf_count < HIGH_FREQ_USER_COUNT_THRESHOLD:
+        return GUEST_DAILY_MSG_LIMIT_HIGH
+    return GUEST_DAILY_MSG_LIMIT_NORMAL
+
+
+def get_guest_quota_used(db_data: dict, guest_device: str) -> int:
+    try:
+        guest_quotas = db_data.get(GUEST_QUOTAS_KEY, {})
+        if not isinstance(guest_quotas, dict):
+            return 0
+        today = vn_now().strftime("%Y-%m-%d")
+        entry = guest_quotas.get(guest_device, {})
+        if not isinstance(entry, dict):
+            return 0
+        if entry.get("date") != today:
+            return 0
+        return int(entry.get("count", 0))
+    except Exception:
+        return 0
+
+
+def increment_guest_quota(db_data: dict, guest_device: str) -> int:
+    guest_quotas = db_data.setdefault(GUEST_QUOTAS_KEY, {})
+    if not isinstance(guest_quotas, dict):
+        guest_quotas = {}
+        db_data[GUEST_QUOTAS_KEY] = guest_quotas
+    today = vn_now().strftime("%Y-%m-%d")
+    entry = guest_quotas.get(guest_device, {})
+    if not isinstance(entry, dict) or entry.get("date") != today:
+        entry = {"date": today, "count": 0}
+    entry["count"] = int(entry.get("count", 0)) + 1
+    guest_quotas[guest_device] = entry
+    return entry["count"]
+
+
+def check_guest_quota(db_data: dict) -> tuple:
+    if not st.session_state.get("is_guest", False):
+        return True, 0, 0
+    used = get_guest_quota_used(db_data, device_id)
+    limit = get_guest_daily_limit(db_data)
+    return (used < limit, used, limit)
+
+
+def is_quick_lookup_mode() -> bool:
+    return bool(st.session_state.get("_ql_mode", False))
+
+
+def set_quick_lookup_mode(enabled: bool):
+    st.session_state._ql_mode = enabled
+    try:
+        if enabled:
+            cookies.set(QL_MODE_COOKIE, "1", max_age=COOKIE_MAX_AGE)
+        else:
+            cookies.set(QL_MODE_COOKIE, "", max_age=0)
+    except Exception:
+        pass
+
+
+def load_quick_lookup_from_cookie():
+    if "_ql_mode" not in st.session_state:
+        try:
+            v = cookies.get(QL_MODE_COOKIE)
+            st.session_state._ql_mode = (v == "1")
+        except Exception:
+            st.session_state._ql_mode = False
 
 
 # ==========================================
@@ -812,7 +1018,7 @@ def enforce_rate_limit(action: str, human_name: str) -> bool:
         raise_security_alert(
             db, severity,
             f"🚫 Auto-block: {human_name}",
-            f"Device vượt rate limit {count}/{max_actions} trong {window}s. Đã block tạm thời.",
+            f"Device vượt rate limit {count}/{max_actions} trong {window}s.",
             {"action": action, "count": count, "max": max_actions}
         )
     elif severity == "medium":
@@ -961,7 +1167,6 @@ def inject_scroll_guard():
     inject_js(js)
 
 def inject_stop_button_listener():
-    """Lắng nghe click trên nút Stop generation."""
     js = (
         'if (window.__lttp_stop_listener_installed) return;\n'
         'window.__lttp_stop_listener_installed = true;\n'
@@ -970,7 +1175,6 @@ def inject_stop_button_listener():
         '    for (let i = 0; i < 5 && el; i++) {\n'
         '        if (el.classList && el.classList.contains("lttp-stop-gen")) {\n'
         '            document.cookie = "LTTP_stop_flag=1; path=/; max-age=120";\n'
-        '            console.log("LTTP: stop flag set");\n'
         '            break;\n'
         '        }\n'
         '        el = el.parentElement;\n'
@@ -1517,10 +1721,14 @@ def migrate_user_data(db_data: dict) -> tuple:
     if BLOCKLIST_KEY not in db_data:
         db_data[BLOCKLIST_KEY] = {}
         migrated = True
+    if GUEST_QUOTAS_KEY not in db_data:
+        db_data[GUEST_QUOTAS_KEY] = {}
+        migrated = True
 
     for username, uinfo in db_data.items():
         if username in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY, BUG_REPORTS_KEY,
-                        SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY):
+                        SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY,
+                        GUEST_QUOTAS_KEY):
             continue
         if not isinstance(uinfo, dict):
             continue
@@ -1724,7 +1932,8 @@ class GitHubStorage:
                         "announcement": {"enabled": False, "title": "", "body": "", "updated_at": ""}
                     },
                     TRAFFIC_LOG_KEY: {}, BUG_REPORTS_KEY: [],
-                    SECURITY_LOG_KEY: [], SECURITY_ALERTS_KEY: [], BLOCKLIST_KEY: {}
+                    SECURITY_LOG_KEY: [], SECURITY_ALERTS_KEY: [],
+                    BLOCKLIST_KEY: {}, GUEST_QUOTAS_KEY: {}
                 }
                 GitHubStorage._cache = data
                 GitHubStorage._cache_time = time.time()
@@ -1910,7 +2119,7 @@ TRANSLATIONS = {
         "pass_min": "❌ Password must be at least 6 characters.",
         "pass_mismatch": "❌ Passwords do not match.",
         "username_taken": "❌ Username is already taken.",
-        "register_success": "🎉 Registration successful! Please switch to Login tab.",
+        "register_success": "🎉 Registration successful!",
         "login_fail": "❌ Invalid username or password!",
         "login_success": "Login successful!",
         "auto_login": "Auto-login successful! Welcome",
@@ -2056,11 +2265,6 @@ TRANSLATIONS = {
         "context_model": "Model", "context_budget": "Total budget",
         "context_messages": "Messages", "context_history_tokens": "Est. history tokens",
         "context_summary_tokens": "Summary tokens",
-        "context_status_low": "🟢 Comfortable",
-        "context_status_mid": "🟡 Moderate",
-        "context_status_high": "🔴 Nearly full",
-        "context_view_summary": "View current summary",
-        "context_no_summary": "No summary yet.",
         "security_title": "🛡️ Security",
         "security_desc": "Alerts and logs from abuse detection.",
         "security_no_alerts": "No security alerts.",
@@ -2076,13 +2280,26 @@ TRANSLATIONS = {
         "security_alert_deleted": "Alert deleted!",
         "security_delete_alert": "🗑️ Delete alert",
         "blocked_title": "🚫 Access Temporarily Blocked",
-        "blocked_desc": "Your device has been temporarily blocked due to suspicious activity.",
+        "blocked_desc": "Your device has been temporarily blocked.",
         "blocked_reason": "Reason",
         "blocked_until": "Blocked until",
         "terms_title": "📜 Terms of Use",
         "terms_required": "You must accept the Terms of Use to register.",
         "terms_accept_checkbox": "I have read and accept the Terms of Use",
         "terms_show_btn": "📜 View Terms of Use",
+        "ql_btn_enable": "🔍 Enable Quick Lookup",
+        "ql_btn_disable": "🔍✓ Disable Quick Lookup",
+        "ql_badge": "QUICK LOOKUP",
+        "ql_enabled_toast": "Quick Lookup enabled - AI won't remember context",
+        "ql_disabled_toast": "Quick Lookup disabled",
+        "ql_title": "Quick Lookup",
+        "guest_quota_title": "Guest Daily Quota",
+        "guest_quota_used": "Used",
+        "guest_quota_limit": "Limit",
+        "guest_quota_exceeded": "⚠️ You have reached the daily guest limit. Please register to continue.",
+        "changelog_title": "📢 What's New",
+        "changelog_refresh": "🔄 Refresh",
+        "changelog_retry": "🔄 Retry",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -2096,7 +2313,7 @@ TRANSLATIONS = {
         "pass_min": "❌ Mật khẩu phải có ít nhất 6 ký tự.",
         "pass_mismatch": "❌ Mật khẩu xác nhận không khớp.",
         "username_taken": "❌ Tên đăng nhập đã được sử dụng.",
-        "register_success": "🎉 Đăng ký thành công! Hãy chuyển qua tab Đăng nhập.",
+        "register_success": "🎉 Đăng ký thành công!",
         "login_fail": "❌ Mật khẩu hoặc tên đăng nhập không chính xác!",
         "login_success": "Đăng nhập thành công!",
         "auto_login": "Tự động đăng nhập thành công! Xin chào",
@@ -2242,11 +2459,6 @@ TRANSLATIONS = {
         "context_model": "Mô hình", "context_budget": "Ngân sách tối đa",
         "context_messages": "Số tin nhắn", "context_history_tokens": "Token lịch sử (ước tính)",
         "context_summary_tokens": "Token tóm tắt",
-        "context_status_low": "🟢 Ngữ cảnh còn thoải mái",
-        "context_status_mid": "🟡 Ngữ cảnh đang dùng vừa",
-        "context_status_high": "🔴 Ngữ cảnh gần đầy",
-        "context_view_summary": "Xem tóm tắt hiện tại",
-        "context_no_summary": "Chưa có tóm tắt.",
         "security_title": "🛡️ Bảo mật",
         "security_desc": "Cảnh báo và nhật ký từ hệ thống phát hiện bất thường.",
         "security_no_alerts": "Không có cảnh báo bảo mật.",
@@ -2269,6 +2481,19 @@ TRANSLATIONS = {
         "terms_required": "Bạn phải chấp nhận Điều khoản sử dụng để đăng ký.",
         "terms_accept_checkbox": "Tôi đã đọc và chấp nhận Điều khoản sử dụng",
         "terms_show_btn": "📜 Xem Điều khoản sử dụng",
+        "ql_btn_enable": "🔍 Bật Quick Lookup",
+        "ql_btn_disable": "🔍✓ Tắt Quick Lookup",
+        "ql_badge": "QUICK LOOKUP",
+        "ql_enabled_toast": "Đã bật Quick Lookup - AI sẽ không nhớ ngữ cảnh",
+        "ql_disabled_toast": "Đã tắt Quick Lookup",
+        "ql_title": "Tra cứu nhanh",
+        "guest_quota_title": "Hạn mức Khách hàng ngày",
+        "guest_quota_used": "Đã dùng",
+        "guest_quota_limit": "Giới hạn",
+        "guest_quota_exceeded": "⚠️ Bạn đã đạt giới hạn guest hôm nay. Vui lòng đăng ký để tiếp tục.",
+        "changelog_title": "📢 Có gì mới",
+        "changelog_refresh": "🔄 Tải lại",
+        "changelog_retry": "🔄 Thử lại",
     }
 }
 
@@ -2317,7 +2542,10 @@ for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
               ("bug_report_open", False),
               ("bug_report_text", ""),
               ("_models_cache", None),
-              ("_models_cache_time", 0)]:
+              ("_models_cache_time", 0),
+              ("_changelog_cache", None),
+              ("_changelog_cache_time", 0),
+              ("_ql_mode", False)]:
     if k not in st.session_state:
         st.session_state[k] = dv
 
@@ -2336,6 +2564,7 @@ if "test_prefs" not in st.session_state:
         "typing_mode": DEFAULT_TYPING_MODE,
         "typing_cps": DEFAULT_TYPING_CPS
     }
+
 
 # ==========================================
 # 14. VERSION CHECK
@@ -2359,6 +2588,7 @@ _init_version_cookie()
 inject_version_scanner()
 inject_scroll_guard()
 inject_stop_button_listener()
+load_quick_lookup_from_cookie()
 
 _seen_ver = cookies.get("LTTP_seen_version")
 if _seen_ver:
@@ -2382,6 +2612,7 @@ announcement = {
     "updated_at": str(_ann_cfg.get("updated_at", "")),
 }
 
+
 # ==========================================
 # 15. BLOCK CHECK
 # ==========================================
@@ -2402,6 +2633,7 @@ if _block_status["blocked"]:
     """, unsafe_allow_html=True)
     st.stop()
 
+
 # ==========================================
 # 16. AUTO-LOGIN
 # ==========================================
@@ -2412,7 +2644,8 @@ if (not st.session_state.user
         and device_id and db_data):
     for username, uinfo in db_data.items():
         if username in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY, BUG_REPORTS_KEY,
-                        SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY):
+                        SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY,
+                        GUEST_QUOTAS_KEY):
             continue
         if not isinstance(uinfo, dict):
             continue
@@ -2421,6 +2654,7 @@ if (not st.session_state.user
             st.session_state.language = uinfo.get("language", "en")
             st.toast(f"{t('auto_login', st.session_state.language)} {username}", icon="⚡")
             break
+
 
 # ==========================================
 # 17. RECORD TRAFFIC
@@ -2446,6 +2680,7 @@ def _try_record_traffic_once():
 
 _try_record_traffic_once()
 
+
 # ==========================================
 # 18. UPDATE NOTICE
 # ==========================================
@@ -2462,6 +2697,7 @@ def _show_update_notice_if_needed():
             f'<div class="update-notice">{notice_text} • v{APP_VERSION}</div>',
             unsafe_allow_html=True
         )
+
 
 # ==========================================
 # 19. REBOOT BANNER
@@ -2487,6 +2723,7 @@ def render_reboot_banner_if_needed():
         if st.button(f"⏸️ {notice.get('later', 'Later')}", use_container_width=True, key="reboot_later_btn"):
             st.session_state.reboot_banner_dismissed = True
             st.rerun()
+
 
 # ==========================================
 # 20. ANNOUNCEMENT + TEST BANNER
@@ -2520,6 +2757,7 @@ def render_test_banner():
     lang = st.session_state.get("language", "en")
     st.markdown(f'<div class="test-notice">{t("test_banner", lang)}</div>', unsafe_allow_html=True)
 
+
 # ==========================================
 # 21. BUG REPORT DIALOG
 # ==========================================
@@ -2544,7 +2782,7 @@ def bug_report_dialog():
     b64 = read_bug_report_screenshot()
     if b64:
         try:
-            st.image("data:image/jpeg;base64," + b64, caption="Preview (240-360p)", width=320)
+            st.image("data:image/jpeg;base64," + b64, caption="Preview", width=320)
         except Exception:
             st.caption("⚠️ Preview error.")
     else:
@@ -2598,6 +2836,7 @@ def bug_report_dialog():
             st.session_state.bug_report_open = False
             st.rerun()
 
+
 # ==========================================
 # 22. AUTH UI
 # ==========================================
@@ -2650,7 +2889,8 @@ def render_auth_ui():
                         db = GitHubStorage.load_db(force_refresh=True)
                         if (u_name_lower in db
                                 and u_name_lower not in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY, BUG_REPORTS_KEY,
-                                                          SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY)
+                                                          SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY,
+                                                          GUEST_QUOTAS_KEY)
                                 and isinstance(db[u_name_lower], dict)
                                 and db[u_name_lower].get("password") == hash_password(u_pass)):
                             st.session_state.user = u_name_lower
@@ -2692,7 +2932,8 @@ def render_auth_ui():
                     elif reg_u in (ADMIN_USERNAME.lower(), TEST_USERNAME.lower(),
                                    SYSTEM_CONFIG_KEY.lower(), TRAFFIC_LOG_KEY.lower(),
                                    BUG_REPORTS_KEY.lower(), SECURITY_LOG_KEY.lower(),
-                                   SECURITY_ALERTS_KEY.lower(), BLOCKLIST_KEY.lower()):
+                                   SECURITY_ALERTS_KEY.lower(), BLOCKLIST_KEY.lower(),
+                                   GUEST_QUOTAS_KEY.lower()):
                         st.error("❌ Reserved username.")
                     elif len(reg_p) < 6:
                         st.error(t("pass_min", lang))
@@ -2742,6 +2983,7 @@ def render_auth_ui():
             st.session_state.guest_memory = ""
             st.session_state.traffic_recorded = False
             st.rerun()
+
 
 # ==========================================
 # 23. TRAFFIC ANALYTICS
@@ -2828,6 +3070,7 @@ def _render_traffic_analytics(lang: str, traffic: dict):
                 dev = mask_device(v.get("device", ""))
                 icon = {"user": "👤", "guest": "👥", "admin": "🛡️"}.get(role, "❓")
                 st.markdown(f"<div class='traffic-row'>{icon} <b>{ts}</b> — {lbl} <span style='opacity:0.5'>({dev})</span></div>", unsafe_allow_html=True)
+
 
 # ==========================================
 # 24. SECURITY PANEL
@@ -2936,6 +3179,7 @@ def render_security_panel(lang: str, db: dict):
                 f"<div class='traffic-row'><b>[{sev.upper()}]</b> {ts} — {ev} — {dev} ({u})<br>{msg}</div>",
                 unsafe_allow_html=True
             )
+
 
 # ==========================================
 # 25. ADMIN PANEL
@@ -3138,7 +3382,8 @@ def render_admin_panel():
     with st.expander("📋 Existing users", expanded=False):
         user_list = [u for u in db.keys()
                      if u not in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY, BUG_REPORTS_KEY,
-                                   SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY)
+                                   SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY,
+                                   GUEST_QUOTAS_KEY)
                      and isinstance(db[u], dict)]
         if user_list:
             for u in sorted(user_list):
@@ -3154,6 +3399,7 @@ def render_admin_panel():
         st.session_state.is_temporary = False
         st.session_state.traffic_recorded = False
         st.rerun()
+
 
 # ==========================================
 # 26. MAINTENANCE SCREEN
@@ -3209,6 +3455,7 @@ def render_maintenance_screen():
                 else:
                     st.error("❌ Sai thông tin." if lang == "vi" else "❌ Invalid credentials.")
 
+
 # ==========================================
 # 27. ROUTING
 # ==========================================
@@ -3236,6 +3483,7 @@ if not maintenance_mode and is_temporary_session():
 if not st.session_state.user and not st.session_state.is_guest:
     render_auth_ui()
     st.stop()
+
 
 # ==========================================
 # 28. LOAD USER / GUEST / TEST DATA
@@ -3282,9 +3530,7 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.current_chat_id = None
     st.session_state.messages = []
 
-# ==========================================
-# SAFE INIT — đảm bảo các biến luôn tồn tại
-# ==========================================
+# Safe init
 _SAFE_MODEL = user_data["preferences"].get("model", DEFAULT_MODEL)
 _SAFE_TEMP = float(user_data["preferences"].get("temperature", 0.7))
 _SAFE_TOP_P = float(user_data["preferences"].get("top_p", 0.95))
@@ -3294,6 +3540,7 @@ sel_model = _SAFE_MODEL
 temperature = _SAFE_TEMP
 top_p = _SAFE_TOP_P
 top_k = _SAFE_TOP_K
+
 
 # ==========================================
 # 29. SIDEBAR
@@ -3319,6 +3566,7 @@ with st.sidebar:
                 st.session_state.language = lc
                 st.rerun()
 
+    # User card
     if is_test:
         st.markdown(f"""
         <div class="user-card">
@@ -3328,11 +3576,17 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
     elif is_guest:
+        db_data_fresh = GitHubStorage.load_db()
+        g_used = get_guest_quota_used(db_data_fresh, device_id)
+        g_limit = get_guest_daily_limit(db_data_fresh)
         st.markdown(f"""
         <div class="user-card">
             <div style="font-weight:700;font-size:1.1rem;color:#94a3b8;">👤 {t('guest_mode', lang)}</div>
             <div style="font-size:0.8rem;opacity:0.7;"><span class="pulse-dot"></span>{t('online', lang)} | {t('device_id', lang)}: {mask_device(device_id)}</div>
             <span class="status-badge badge-guest">GUEST</span>
+            <div style="font-size:0.75rem;margin-top:6px;color:#94a3b8;">
+                {t('guest_quota_used', lang)}: <b>{g_used}</b> / {g_limit}
+            </div>
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -3390,12 +3644,15 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+
+    # NEW CHAT BUTTON
     if st.button(t("new_chat_btn", lang), type="primary", use_container_width=True, key="new_chat_btn"):
         if enforce_rate_limit("new_chat", "New chat"):
             st.session_state.current_chat_id = None
             st.session_state.messages = []
             st.rerun()
 
+    # CHAT LIST with Quick Lookup button
     st.subheader(t("chat_list", lang))
     if not user_chats:
         st.caption(t("no_chats", lang))
@@ -3408,10 +3665,23 @@ with st.sidebar:
             title = item.get("title", t("new_chat", lang))
             active = (cid == st.session_state.current_chat_id)
             label = f"📌 {title}" if active else f"💬 {title}"
-            cc, cd = st.columns([0.8, 0.2])
+            cc, cq, cd = st.columns([0.7, 0.15, 0.15])
             if cc.button(label, key=f"sel_{cid}", use_container_width=True):
                 st.session_state.current_chat_id = cid
                 st.session_state.messages = user_chats[cid].get("messages", [])
+                st.rerun()
+            ql_label = "🔍✓" if is_quick_lookup_mode() else "🔍"
+            ql_help = (
+                t("ql_btn_disable", lang) if is_quick_lookup_mode() else t("ql_btn_enable", lang)
+            )
+            if cq.button(ql_label, key=f"ql_{cid}", help=ql_help):
+                new_state = not is_quick_lookup_mode()
+                set_quick_lookup_mode(new_state)
+                st.toast(
+                    t("ql_enabled_toast", lang) if new_state else t("ql_disabled_toast", lang),
+                    icon="🔍"
+                )
+                time.sleep(0.3)
                 st.rerun()
             if cd.button("🗑️", key=f"del_{cid}", help=t("delete_chat_tooltip", lang)):
                 if enforce_rate_limit("delete_chat", "Delete chat"):
@@ -3434,6 +3704,7 @@ with st.sidebar:
 
     st.divider()
 
+    # SETTINGS
     with st.expander(t("settings_title", lang), expanded=False):
         col_lbl, col_help = st.columns([0.85, 0.15])
         with col_lbl:
@@ -3514,33 +3785,61 @@ with st.sidebar:
 
     st.divider()
 
+    # ===== CONTEXT INFO (RÚT GỌN in v1.40.0) =====
     with st.expander(t("context_title", lang), expanded=False):
         ctx_budget = get_context_budget(sel_model)
         cur_msgs = st.session_state.messages
         cur_tokens = estimate_messages_tokens(cur_msgs)
-        cur_chat = user_chats.get(st.session_state.current_chat_id, {}) if st.session_state.current_chat_id else {}
-        summary_text = cur_chat.get("summary", "")
-        summary_tokens = estimate_tokens(summary_text)
         st.markdown(f"**{t('context_model', lang)}:** `{sel_model}`")
-        st.markdown(f"**{t('context_budget', lang)}:** {ctx_budget:,} tokens")
         st.markdown(f"**{t('context_messages', lang)}:** {len(cur_msgs)}")
         st.markdown(f"**{t('context_history_tokens', lang)}:** {cur_tokens:,}")
-        st.markdown(f"**{t('context_summary_tokens', lang)}:** {summary_tokens:,}")
         used_ratio = cur_tokens / max(1, ctx_budget)
-        if used_ratio < 0.3:
-            st.caption(t("context_status_low", lang))
-        elif used_ratio < 0.6:
-            st.caption(t("context_status_mid", lang))
+        if used_ratio < 0.5:
+            st.caption("🟢 OK")
+        elif used_ratio < 0.8:
+            st.caption("🟡 " + ("Đang dùng vừa" if lang == "vi" else "Moderate"))
         else:
-            st.caption(t("context_status_high", lang))
-        if summary_text:
-            with st.expander(t("context_view_summary", lang)):
-                st.markdown(f'<div class="summary-view">{summary_text}</div>', unsafe_allow_html=True)
-        else:
-            st.caption(t("context_no_summary", lang))
+            st.caption("🔴 " + ("Gần đầy" if lang == "vi" else "Nearly full"))
 
     st.divider()
 
+    # ===== CHANGELOG (NEW in v1.40.0) =====
+    with st.expander(
+        t("changelog_title", lang),
+        expanded=False
+    ):
+        cl_content, cl_time, cl_ok = fetch_changelog_cached()
+        if cl_ok:
+            st.caption(
+                f"🕐 {('Cập nhật lúc' if lang == 'vi' else 'Fetched at')}: {cl_time}"
+            )
+            safe_cl = (cl_content
+                       .replace("&", "&amp;")
+                       .replace("<", "&lt;")
+                       .replace(">", "&gt;"))
+            st.markdown(f'<div class="changelog-view">{safe_cl}</div>', unsafe_allow_html=True)
+            if st.button(
+                t("changelog_refresh", lang),
+                use_container_width=True,
+                key="changelog_refresh_btn"
+            ):
+                st.session_state._changelog_cache = None
+                st.session_state._changelog_cache_time = 0
+                st.rerun()
+        else:
+            st.caption(cl_content)
+            if st.button(
+                t("changelog_retry", lang),
+                use_container_width=True,
+                key="changelog_retry_btn"
+            ):
+                st.session_state._changelog_cache = None
+                st.session_state._changelog_cache_time = 0
+                st.rerun()
+
+    st.divider()
+
+    # MEMORY
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         mem = st.text_area("Memory:", value=user_data.get("custom_instructions", ""),
@@ -3682,6 +3981,7 @@ with st.sidebar:
                     st.toast(t("reset_params_toast", lang), icon="🔄")
                     time.sleep(0.3); st.rerun()
 
+
 # ==========================================
 # 30. SMART DRAFT
 # ==========================================
@@ -3695,11 +3995,13 @@ inject_smart_draft_tracker(
 
 draft_text, draft_ts = get_saved_draft()
 
+
 # ==========================================
 # 31. BUG REPORT DIALOG TRIGGER
 # ==========================================
 if st.session_state.get("bug_report_open", False):
     bug_report_dialog()
+
 
 # ==========================================
 # 32. MAIN CHAT
@@ -3717,6 +4019,15 @@ if not SECRET_API_KEYS:
 
 if is_guest:
     st.markdown(f'<div class="guest-banner">👤 {t("guest_banner", lang)}</div>', unsafe_allow_html=True)
+    # Guest quota indicator
+    db_q = GitHubStorage.load_db()
+    g_used_now = get_guest_quota_used(db_q, device_id)
+    g_limit_now = get_guest_daily_limit(db_q)
+    st.markdown(
+        f'<div class="quota-warning">📊 {t("guest_quota_title", lang)}: '
+        f'<b>{g_used_now}</b> / {g_limit_now}</div>',
+        unsafe_allow_html=True
+    )
 
 current_title = t("new_chat", lang)
 if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
@@ -3730,7 +4041,11 @@ elif typing_mode_now == TYPING_MODE_CONTROLLED:
 else:
     typing_badge = '🌊 Smooth'
 
-st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{sel_model}` <span class='typing-mode-badge'>{typing_badge}</span>", unsafe_allow_html=True)
+ql_badge = ""
+if is_quick_lookup_mode():
+    ql_badge = f" <span class='ql-mode-badge'>🔍 {t('ql_badge', lang)}</span>"
+
+st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{sel_model}` <span class='typing-mode-badge'>{typing_badge}</span>{ql_badge}", unsafe_allow_html=True)
 
 if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
     st.markdown(f"""
@@ -3772,13 +4087,30 @@ for msg in st.session_state.messages:
         if msg["role"] == "assistant":
             st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER.get("en", ""))}</div>', unsafe_allow_html=True)
 
+
 # ==========================================
 # 33. XỬ LÝ PROMPT
 # ==========================================
 def _run_deferred_tasks(chat_data, user_prompt, lang):
-    """Chạy các tác vụ tốn thời gian SAU KHI user đã thấy response."""
     try:
         all_messages = st.session_state.messages
+
+        # Không tóm tắt khi ở QL mode
+        if is_quick_lookup_mode():
+            # Chỉ đặt title nếu cần
+            if not chat_data.get("title") or chat_data.get("title") in (t("new_chat", lang), "Quick Lookup"):
+                chat_data["title"] = "Quick Lookup"
+            if st.session_state.current_chat_id:
+                user_chats[st.session_state.current_chat_id] = chat_data
+                if is_test:
+                    st.session_state.test_chats = user_chats
+                elif is_guest:
+                    st.session_state.guest_chats = user_chats
+                else:
+                    user_data["chats"] = user_chats
+                    db_data[st.session_state.user] = user_data
+                    safe_save_db(db_data)
+            return
 
         # Đặt title nếu chưa có
         if not chat_data.get("title") or chat_data.get("title") == t("new_chat", lang):
@@ -3817,7 +4149,6 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
                 except Exception:
                     pass
 
-        # Lưu lại
         if st.session_state.current_chat_id:
             user_chats[st.session_state.current_chat_id] = chat_data
             if is_test:
@@ -3836,6 +4167,20 @@ def _process_prompt(user_prompt):
     if not enforce_message_content(user_prompt):
         return
 
+    # Guest quota check
+    if is_guest:
+        db_q = GitHubStorage.load_db(force_refresh=True)
+        allowed, used_now, limit_now = check_guest_quota(db_q)
+        if not allowed:
+            st.error(t("guest_quota_exceeded", lang))
+            st.stop()
+        # Increment quota
+        increment_guest_quota(db_q, device_id)
+        try:
+            GitHubStorage.save_db(db_q)
+        except Exception:
+            pass
+
     clear_draft_cookie_via_js()
     clear_stop_flag()
 
@@ -3845,10 +4190,12 @@ def _process_prompt(user_prompt):
 
     if not st.session_state.current_chat_id:
         st.session_state.current_chat_id = str(uuid.uuid4())
+        ql_title = "Quick Lookup" if is_quick_lookup_mode() else t("new_chat", lang)
         user_chats[st.session_state.current_chat_id] = {
-            "title": t("new_chat", lang),
+            "title": ql_title,
             "messages": [], "summary": "", "summary_updated_at": "",
             "summary_token_count": 0,
+            "is_quick_lookup": is_quick_lookup_mode(),
             "created_at": vn_now().isoformat(),
             "updated_at": vn_now().isoformat()
         }
@@ -3869,15 +4216,26 @@ def _process_prompt(user_prompt):
     system_parts = [copyright_guard]
     if user_memory:
         system_parts.append("[USER PREFERENCES / RULES]:\n" + user_memory)
-    if chat_summary:
+
+    ql_active = is_quick_lookup_mode()
+    if chat_summary and not ql_active:
         ctx_label = "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]" if lang == "vi" else "[SUMMARIZED HISTORY CONTEXT]"
         system_parts.append(ctx_label + ":\n" + chat_summary)
+    if ql_active:
+        system_parts.append(
+            "[QUICK LOOKUP MODE]: Trả lời câu hỏi hiện tại mà KHÔNG dùng ngữ cảnh trước đó. Chỉ tập trung vào câu hỏi mới nhất."
+            if lang == "vi" else
+            "[QUICK LOOKUP MODE]: Answer the current question WITHOUT using prior context. Focus only on the latest question."
+        )
     system_instruction = "\n\n".join(system_parts)
 
     all_messages = st.session_state.messages
-    recent_window = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
-    if recent_window and recent_window[-1].get("content") == user_prompt:
-        recent_window = recent_window[:-1]
+    if ql_active:
+        recent_window = []  # QL: không có context
+    else:
+        recent_window = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
+        if recent_window and recent_window[-1].get("content") == user_prompt:
+            recent_window = recent_window[:-1]
 
     content_inputs = []
     hist = ""
@@ -3908,7 +4266,6 @@ def _process_prompt(user_prompt):
     final_err = None
 
     with st.chat_message("assistant"):
-        # Nút Stop (render dạng HTML để có class CSS riêng)
         stop_col1, stop_col2 = st.columns([6, 1])
         with stop_col2:
             stop_btn_placeholder = st.empty()
@@ -3949,7 +4306,6 @@ def _process_prompt(user_prompt):
                 final_err = err
                 break
 
-        # Xóa nút Stop sau khi stream xong
         stop_btn_placeholder.empty()
 
         if final_text:
@@ -3995,7 +4351,6 @@ def _process_prompt(user_prompt):
 
     clear_stop_flag()
 
-    # Lưu chat trước (nhanh)
     if final_text:
         chat_data["messages"] = st.session_state.messages
         chat_data["updated_at"] = vn_now().isoformat()
@@ -4009,7 +4364,6 @@ def _process_prompt(user_prompt):
             db_data[st.session_state.user] = user_data
             safe_save_db(db_data)
 
-    # Chạy deferred tasks (title + summary)
     if final_text and final_err not in ("stopped",):
         _run_deferred_tasks(chat_data, user_prompt, lang)
 
