@@ -100,25 +100,6 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
-      },
-      "b967a788-e88d-4667-9428-bb7b7f5005fa": {
-        "title": "Quick Lookup",
-        "messages": [
-          {
-            "role": "user",
-            "content": "Hệ thống A.I đầu tiên trên thế giới như thế nào?"
-          },
-          {
-            "role": "assistant",
-            "content": "Hệ thống AI (Trí tuệ nhân tạo) đầu tiên trên thế giới không phải là một chương trình máy tính phức tạp như ChatGPT hay các mô hình ngày nay, mà là một cỗ máy phần cứng thô sơ được tạo ra vào thập niên 1950. \n\nDưới đây là các mốc khởi nguồn quan trọng của hệ thống AI đầu tiên:\n\n### 1. Nền tảng lý thuyết (1950): Thử nghiệm Turing\nNăm 1950, nhà toán học người Anh **Alan Turing** đã xuất bản một bài báo mang tính bước ngoặt mang tựa đề *\"Computing Machinery and Intelligence\"*, trong đó ông đặt ra câu hỏi \"Liệu máy móc có thể suy nghĩ không?\" và đề xuất **Phép thử Turing (Turing Test)** để đo lường trí thông minh của máy tính.\n\n### 2. Chương trình AI phần mềm đầu tiên (1951): Logic Theorist\nNhiều nhà sử học coi **Logic Theorist**, được phát triển vào năm 1955-1956 bởi **Allen Newell, Herbert A. Simon và Cliff Shaw**, là chương trình AI đầu tiên trên thế giới. \n* **Cách hoạt động:** Nó được thiết kế để bắt chước kỹ năng giải quyết vấn đề của con người và đã thành công trong việc chứng minh 38 trong số 52 định lý toán học trong cuốn *Principia Mathematica* của Russell và Whitehead.\n\n### 3. Hệ thống phần cứng AI đầu tiên (1951): SNARC\nNếu xét về mặt **phần cứng/cơ học**, hệ thống đầu tiên có thể học hỏi là **SNARC** (Stochastic Neural Analog Reinforcement Calculator), do **Marvin Minsky** (một trong những cha đẻ của AI) và Dean Edmonds chế tạo năm 1951.\n* **Cấu tạo:** Nó sử dụng khoảng 300 bóng đèn điện tử chân không và các mạch điện tử mô phỏng mạng lưới thần kinh của một con chuột đang cố gắng tìm đường trong một mê cung.\n\n### 4. Thuật ngữ \"Trí tuệ nhân tạo\" ra đời (1956)\nCột mốc chính thức khai sinh ra lĩnh vực AI là **Hội nghị Dartmouth** vào mùa hè năm 1956, do John McCarthy tổ chức. Tại đây, thuật ngữ *\"Artificial Intelligence\"* (Trí tuệ nhân tạo) lần đầu tiên được sử dụng chính thức.\n\n---\n**Tóm lại:** Hệ thống AI đầu tiên trên thế giới là những chương trình hoặc cỗ máy đơn giản mô phỏng logic toán học cơ bản và khả năng học hỏi từ thử-sai (trial and error) ở cấp độ sơ khai nhất."
-          }
-        ],
-        "summary": "",
-        "summary_updated_at": "",
-        "summary_token_count": 0,
-        "is_quick_lookup": true,
-        "created_at": "2026-10-03T20:58:13.627322+07:00",
-        "updated_at": "2026-10-03T20:59:01.155428+07:00"
       }
     },
     "remembered_devices": [
