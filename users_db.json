@@ -100,24 +100,6 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
-      },
-      "bcea2c06-2cfc-4695-a978-98d0999748b3": {
-        "title": "Cuộc trò chuyện mới",
-        "messages": [
-          {
-            "role": "user",
-            "content": "Bluetooth 5.0 ra mắt năm nào? Vì sao Galaxy A7 2018 lại được trang bị Bluetooth 5.0? Bluetooth 5.0 cải tiến rất nhiều so với phiên bản cũ thế nào? Galaxy M55 và S22 Ultra dùng bluetooth phiên bản mấy?"
-          },
-          {
-            "role": "assistant",
-            "content": "Chào bạn, tôi là LTTP AI Online. Dưới đây là các thông tin chi tiết giải đáp các thắc mắc của bạn về Bluetooth 5.0 và các dòng điện thoại mà bạn quan tâm:\n\n### 1. Bluetooth 5.0 ra mắt năm nào?\nBluetooth 5.0 được Tổ chức Bluetooth Special Interest Group (SIG) chính thức ra mắt vào **tháng 12 năm 2016**.\n\n---\n\n### 2. Vì sao Galaxy A7 (2018) lại được trang bị Bluetooth 5.0?\nVào năm 2018, Galaxy A7 (2018) là một trong những thiết bị tầm trung chiến lược của Samsung, nổi bật với cụm 3 camera sau đầu tiên của hãng. Việc Samsung trang bị Bluetooth 5.0 cho chiếc máy này nhằm mang lại các lợi ích sau:\n* **Đón đầu công nghệ:** Vào năm 2018, Bluetooth 5.0 đang dần trở thành tiêu chuẩn mới. Việc đưa lên dòng tầm trung giúp thiết bị có vòng đời sử dụng lâu dài hơn, không bị lỗi thời quá nhanh.\n* **Hỗ trợ hệ sinh thái phụ kiện không dây:** Thời điểm này, thị trường tai nghe không dây (True Wireless) và các thiết bị đeo thông minh (đồng hồ, vòng đeo tay) bắt đầu bùng nổ. Bluetooth 5.0 giúp kết nối với các thiết bị này ổn định hơn và tiết kiệm pin hơn.\n\n---\n\n### 3. Bluetooth 5.0 cải tiến những gì so với phiên bản cũ (Bluetooth 4.2)?\nSo với Bluetooth 4.2 (tiền nhiệm phổ biến), Bluetooth 5.0 là một bước nhảy vọt lớn với các cải tiến cốt lõi:\n* **Tốc độ truyền dữ liệu nhanh gấp đôi:** Tăng từ tối đa 1 Mbps lên đến **2 Mbps**, giúp truyền tải tệp tin hoặc cập nhật phần mềm thiết bị nhanh hơn.\n* **Phạm vi phủ sóng gấp 4 lần:** Tầm hoạt động trong không gian mở có thể lên đến khoảng 240 mét (so với khoảng 50 mét của bản cũ), giúp duy trì kết nối ổn định ngay cả khi ở xa nguồn phát.\n* **Dung lượng dữ liệu phát sóng gấp 8 lần (Broadcast Capacity):** Khả năng truyền tải thông tin qua các gói tin (beacon) lớn hơn rất nhiều, hỗ trợ tốt cho các ứng dụng IoT (Internet vạn vật) và định vị thông minh.\n* **Tiết kiệm năng lượng hơn:** Tối ưu hóa mức tiêu thụ điện năng cho các thiết bị kết nối, giúp kéo dài thời gian sử dụng pin cho cả điện thoại lẫn các thiết bị ngoại vi.\n\n---\n\n### 4. Galaxy M55 và Galaxy S22 Ultra dùng Bluetooth phiên bản mấy?\n* **Samsung Galaxy M55 (ra mắt 2024):** Sử dụng chuẩn **Bluetooth 5.2**.\n* **Samsung Galaxy S22 Ultra (ra mắt 2022):** Sử dụng chuẩn **Bluetooth 5.2**.\n\nNếu bạn cần tìm hiểu thêm về các công nghệ kết nối khác hay thông số kỹ thuật của các dòng máy trên, hãy cho tôi biết nhé!"
-          }
-        ],
-        "summary": "",
-        "summary_updated_at": "",
-        "summary_token_count": 0,
-        "created_at": "2026-10-03T18:28:55.117555+07:00",
-        "updated_at": "2026-10-03T18:30:01.389751+07:00"
       }
     },
     "remembered_devices": [
