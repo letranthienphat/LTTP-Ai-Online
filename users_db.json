@@ -151,7 +151,7 @@
       "top_k": 40,
       "smart_draft": true,
       "typing_mode": "controlled",
-      "typing_cps": 40
+      "typing_cps": 45
     },
     "terms_accepted": false,
     "terms_accepted_at": ""
