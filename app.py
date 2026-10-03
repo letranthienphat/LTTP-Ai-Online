@@ -3652,7 +3652,7 @@ with st.sidebar:
             st.session_state.messages = []
             st.rerun()
 
-    # CHAT LIST with Quick Lookup button
+    # CHAT LIST (không còn nút QL cạnh từng chat)
     st.subheader(t("chat_list", lang))
     if not user_chats:
         st.caption(t("no_chats", lang))
@@ -3665,23 +3665,10 @@ with st.sidebar:
             title = item.get("title", t("new_chat", lang))
             active = (cid == st.session_state.current_chat_id)
             label = f"📌 {title}" if active else f"💬 {title}"
-            cc, cq, cd = st.columns([0.7, 0.15, 0.15])
+            cc, cd = st.columns([0.8, 0.2])
             if cc.button(label, key=f"sel_{cid}", use_container_width=True):
                 st.session_state.current_chat_id = cid
                 st.session_state.messages = user_chats[cid].get("messages", [])
-                st.rerun()
-            ql_label = "🔍✓" if is_quick_lookup_mode() else "🔍"
-            ql_help = (
-                t("ql_btn_disable", lang) if is_quick_lookup_mode() else t("ql_btn_enable", lang)
-            )
-            if cq.button(ql_label, key=f"ql_{cid}", help=ql_help):
-                new_state = not is_quick_lookup_mode()
-                set_quick_lookup_mode(new_state)
-                st.toast(
-                    t("ql_enabled_toast", lang) if new_state else t("ql_disabled_toast", lang),
-                    icon="🔍"
-                )
-                time.sleep(0.3)
                 st.rerun()
             if cd.button("🗑️", key=f"del_{cid}", help=t("delete_chat_tooltip", lang)):
                 if enforce_rate_limit("delete_chat", "Delete chat"):
@@ -3702,6 +3689,75 @@ with st.sidebar:
                         time.sleep(0.3)
                         st.rerun()
 
+    # ============ QUICK LOOKUP TOGGLE (dưới chat list) ============
+    ql_on = is_quick_lookup_mode()
+    if ql_on:
+        # Trạng thái BẬT — nút màu vàng cam
+        toggle_btn_label = "🔍 Quick Lookup: BẬT" if lang == "vi" else "🔍 Quick Lookup: ON"
+        toggle_help = (
+            "Nhấn để TẮT Quick Lookup — AI sẽ nhớ ngữ cảnh bình thường"
+            if lang == "vi" else
+            "Click to DISABLE Quick Lookup — AI will remember context normally"
+        )
+    else:
+        # Trạng thái TẮT — nút màu xám
+        toggle_btn_label = "🔍 Quick Lookup: TẮT" if lang == "vi" else "🔍 Quick Lookup: OFF"
+        toggle_help = (
+            "Nhấn để BẬT Quick Lookup — AI sẽ KHÔNG nhớ ngữ cảnh, chỉ trả lời câu hỏi mới nhất"
+            if lang == "vi" else
+            "Click to ENABLE Quick Lookup — AI will NOT remember context, only answers latest question"
+        )
+
+    # Hiển thị nút toggle lớn với màu sắc thay đổi theo trạng thái
+    if ql_on:
+        st.markdown("""
+        <style>
+        div[data-testid="stSidebar"] .ql-toggle-on button {
+            background: linear-gradient(90deg, #f59e0b, #f97316) !important;
+            color: white !important;
+            border: none !important;
+            font-weight: 700 !important;
+            padding: 10px 14px !important;
+            border-radius: 10px !important;
+            box-shadow: 0 4px 12px rgba(249, 115, 22, 0.35) !important;
+            transition: all 0.2s ease !important;
+        }
+        div[data-testid="stSidebar"] .ql-toggle-on button:hover {
+            transform: translateY(-1px) !important;
+            box-shadow: 0 6px 16px rgba(249, 115, 22, 0.5) !important;
+        }
+        </style>
+        <div class="ql-toggle-on"></div>
+        """, unsafe_allow_html=True)
+
+    if st.button(
+        toggle_btn_label,
+        use_container_width=True,
+        key="ql_toggle_main_btn",
+        help=toggle_help
+    ):
+        new_state = not ql_on
+        set_quick_lookup_mode(new_state)
+        st.toast(
+            t("ql_enabled_toast", lang) if new_state else t("ql_disabled_toast", lang),
+            icon="🔍"
+        )
+        time.sleep(0.3)
+        st.rerun()
+
+    # Caption mô tả ngắn dưới nút
+    if ql_on:
+        st.caption(
+            "⚠️ Đang BẬT — AI sẽ không nhớ ngữ cảnh trước đó."
+            if lang == "vi" else
+            "⚠️ Currently ON — AI won't remember prior context."
+        )
+    else:
+        st.caption(
+            "✅ Đang TẮT — AI nhớ ngữ cảnh bình thường."
+            if lang == "vi" else
+            "✅ Currently OFF — AI remembers context normally."
+        )
     st.divider()
 
     # SETTINGS
