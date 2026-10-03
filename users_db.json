@@ -100,25 +100,6 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
-      },
-      "c161e4b1-9bed-4dd2-b289-f71bb01a83ae": {
-        "title": "Hiểu nhầm hiệu năng máy tính",
-        "messages": [
-          {
-            "role": "user",
-            "content": "không, ý là máy tính nó chỉ mạnh hơn 8% toàn máy tính trên thế giới. Tức là có 92% còn lại là mạnh hơn hoặc ngang."
-          },
-          {
-            "role": "assistant",
-            "content": "À, tôi hiểu ý bạn rồi! Có lẽ bạn đang muốn nói đến một chiếc máy tính có hiệu năng đứng ở top 8% thế giới (tức là chỉ mạnh hơn 8% số máy tính còn lại, và có đến 92% máy tính khác mạnh hơn hoặc bằng nó), chứ không phải là nó mạnh hơn 92% toàn bộ máy tính.\n\nNếu hiểu theo cách này thì:\n- Chiếc máy tính đó nằm ở **phân khúc trung bình hoặc trung bình thấp** so với mặt bằng chung thế giới hiện tại.\n- Nó vẫn có thể xử lý tốt các tác vụ văn phòng cơ bản, học tập, lướt web, hoặc chơi một số tựa game nhẹ.\n- Tuy nhiên, nó sẽ gặp khó khăn với các tác vụ nặng như render video 4K, chơi game đồ họa cao (AAA), hay chạy các mô hình AI lớn.\n\nBạn đang nhắc đến cấu hình của một cỗ máy cụ thể nào đó hay đang so sánh trên một trang web benchmark (như Geekbench, UserBenchmark,...) phải không? Nếu bạn cần kiểm tra xem cấu hình đó có làm tốt một công việc cụ thể nào không, cứ chia sẻ thêm nhé!"
-          }
-        ],
-        "summary": "",
-        "summary_updated_at": "",
-        "summary_token_count": 0,
-        "is_quick_lookup": false,
-        "created_at": "2026-10-03T21:45:51.659329+07:00",
-        "updated_at": "2026-10-03T21:46:13.276503+07:00"
       }
     },
     "remembered_devices": [
