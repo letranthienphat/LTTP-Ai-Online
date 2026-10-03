@@ -4,3 +4,4 @@ Improve AI response time.
 Improve software stability.
 Integrated the history feature from version 1.40.0.
 Helps the software function smoothly between the phone and the computer.
+Integrated quick lookup feature. (To enable it, click the icon next to the "delete conversation" button; when enabled, the AI ​​will not retain previous conversation input, and the conversation will be named "Quick Lookup".)
