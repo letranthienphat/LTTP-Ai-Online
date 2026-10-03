@@ -100,6 +100,24 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
+      },
+      "bc29f645-5614-4cbb-a669-bb68cf4fbc7e": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Có phần mềm nào trên github bao gồm các tính năng như: kích hoạt bản quyền Windows và Office 365; tải xuống Office 365 và được cộng đồng công nghệ trên thế giới công nhận và Microsoft cũng ngầm cho phép."
+          },
+          {
+            "role": "assistant",
+            "content": "Chào bạn, tôi là LTTP AI Online. \n\nVề câu hỏi của bạn, trong cộng đồng công nghệ, có một số tập lệnh (script) mã nguồn mở nổi tiếng được lưu trữ trên GitHub chuyên dùng để kích hoạt bản quyền Windows và Microsoft Office, cũng như hỗ trợ tải xuống bộ ứng dụng Office. Công cụ nổi tiếng và phổ biến nhất toàn cầu hiện nay cho việc này là **MAS (Microsoft Activation Scripts)**.\n\nDưới đây là một số thông tin chi tiết:\n\n1. **Về tính năng của MAS:**\n   - Hỗ trợ kích hoạt kỹ thuật số (Digital License) và KMS cho các phiên bản Windows (từ Windows 7 đến Windows 11).\n   - Hỗ trợ kích hoạt Microsoft Office (bao gồm cả Office 365/Microsoft 365 thông qua các phương pháp chuyển đổi/gia hạn định kỳ).\n   - Tích hợp tính năng tải xuống các bộ cài đặt chính thống của Microsoft Office.\n\n2. **Về tính công nhận từ cộng đồng và Microsoft:**\n   - **Cộng đồng công nghệ:** MAS rất nổi tiếng trên GitHub, Reddit (đặc biệt là các sub như r/Piracy) và được cộng đồng đánh giá cao nhờ mã nguồn hoàn toàn minh bạch (mã nguồn mở dạng batch script), không chứa mã độc và có tài liệu hướng dẫn rất chi tiết.\n   - **Phía Microsoft:** Việc nói rằng \"Microsoft ngầm cho phép\" là không chính xác về mặt pháp lý. Các công cụ này thực chất tận dụng các cơ chế kích hoạt sẵn có của hệ thống (như KMS hoặc lổ hổng/chính sách về bản quyền số) để vượt qua lớp bảo vệ bản quyền. Microsoft không chính thức cho phép hay ủng hộ các công cụ này; họ vẫn liên tục phát hành các bản vá bảo mật để vô hiệu hóa các phương thức kích hoạt trái phép. Tuy nhiên, do tính chất phi lợi nhuận và mã nguồn mở của các dự án dạng này, việc kiểm soát triệt để trên không gian mạng gặp nhiều khó khăn.\n\n*Lưu ý:* Việc sử dụng các công cụ kích hoạt bản quyền không chính thức có thể vi phạm điều khoản dịch vụ và thỏa thuận cấp phép người dùng cuối (EULA) của Microsoft. Bạn nên cân nhắc kỹ trước khi sử dụng, đặc biệt là trong môi trường doanh nghiệp."
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "created_at": "2026-10-03T18:23:04.450182+07:00",
+        "updated_at": "2026-10-03T18:24:00.788153+07:00"
       }
     },
     "remembered_devices": [
