@@ -334,5 +334,6 @@
   "__bug_reports__": [],
   "__security_log__": [],
   "__security_alerts__": [],
-  "__blocklist__": {}
+  "__blocklist__": {},
+  "__guest_quotas__": {}
 }
