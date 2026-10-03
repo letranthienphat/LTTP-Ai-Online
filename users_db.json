@@ -100,6 +100,25 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
+      },
+      "af2b6d3d-5c01-4f29-be72-8dc82891a4b2": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "So sánh giữa "
+          },
+          {
+            "role": "assistant",
+            "content": "Câu hỏi của bạn chưa hoàn chỉnh (có vẻ bị dừng lại ở chữ \"giữa...\"). \n\nBạn muốn so sánh giữa đối tượng nào với đối tượng nào? Hãy cho tôi biết thêm chi tiết để tôi có thể hỗ trợ bạn tốt nhất nhé!"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-10-03T21:43:32.515909+07:00",
+        "updated_at": "2026-10-03T21:43:38.754046+07:00"
       }
     },
     "remembered_devices": [
