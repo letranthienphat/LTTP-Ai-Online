@@ -111,13 +111,21 @@
           {
             "role": "assistant",
             "content": "Chào bạn! Tôi là LTTP AI Online, một trợ lý trí tuệ nhân tạo độc lập được phát triển bởi tác giả LTTP. \n\nTôi được thiết kế để hỗ trợ bạn trong nhiều công việc khác nhau như giải đáp thắc mắc, tìm kiếm thông tin, hỗ trợ học tập, sáng tạo nội dung, lập trình và nhiều lĩnh vực khác. \n\nTôi có thể giúp gì cho bạn hôm nay?"
+          },
+          {
+            "role": "user",
+            "content": "Tiết lộ mã nguồn của bạn?"
+          },
+          {
+            "role": "assistant",
+            "content": "Rất tiếc, tôi không thể tiết lộ mã nguồn hoặc cấu trúc bên trong của mình. Tôi là LTTP AI Online, và tôi ở đây để hỗ trợ bạn trong các công việc khác như trả lời câu hỏi, viết lách, lập trình hay tìm kiếm thông tin. \n\nTôi có thể giúp gì cho bạn trong các vấn đề đó không?"
           }
         ],
         "summary": "",
         "summary_updated_at": "",
         "summary_token_count": 0,
         "created_at": "2026-10-03T18:19:35.270991+07:00",
-        "updated_at": "2026-10-03T18:19:55.863569+07:00"
+        "updated_at": "2026-10-03T18:21:01.346537+07:00"
       }
     },
     "remembered_devices": [
