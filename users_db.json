@@ -100,33 +100,6 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
-      },
-      "1416b1a8-fd45-4d1e-9f5f-9dc6d31758bf": {
-        "title": "Giới thiệu bản thân",
-        "messages": [
-          {
-            "role": "user",
-            "content": "Thông tin về bạn?"
-          },
-          {
-            "role": "assistant",
-            "content": "Tôi là LTTP AI Online — một trợ lý trí tuệ nhân tạo độc lập do tác giả LTTP phát triển.\n\nTôi được thiết kế để hỗ trợ bạn trong nhiều tác vụ khác nhau, bao gồm:\n* **Giải đáp thắc mắc:** Cung cấp thông tin và kiến thức về nhiều lĩnh vực.\n* **Hỗ trợ công việc & học tập:** Soạn thảo văn bản, viết lách, dịch thuật, tóm tắt tài liệu.\n* **Lập trình & Kỹ thuật:** Viết mã code, sửa lỗi (debug) và giải thích các khái niệm kỹ thuật.\n* **Sáng tạo & Lên ý tưởng:** Gợi ý ý tưởng mới cho các dự án của bạn.\n\nTôi luôn hoạt động với tinh thần chuyên nghiệp, lịch sự và tôn trọng người dùng. Tôi có thể giúp gì cho bạn hôm nay?"
-          },
-          {
-            "role": "user",
-            "content": "Hệ thống A.I đầu tiên là gì?"
-          },
-          {
-            "role": "assistant",
-            "content": "Hệ thống trí tuệ nhân tạo (AI) đầu tiên trên thế giới thường được công nhận là chương trình **Logic Theorist**, được phát triển vào năm **1955-1956** bởi Allen Newell, Herbert A. Simon và Cliff Shaw. \n\nLogic Theorist được thiết kế để mô phỏng khả năng tư duy giải quyết vấn đề của con người và nó đã thành công trong việc chứng minh 38 trong số 52 định lý toán học trong cuốn *Principia Mathematica* của Alfred North Whitehead và Bertrand Russell. \n\nBên cạnh đó, thuật ngữ \"Trí tuệ nhân tạo\" (Artificial Intelligence) chính thức được đặt tên và công nhận tại **Hội nghị Dartmouth** vào mùa hè năm **1956**, do John McCarthy cùng các cộng sự tổ chức. Hội nghị này đánh dấu sự ra đời của AI như một lĩnh vực nghiên cứu học thuật độc lập."
-          }
-        ],
-        "summary": "",
-        "summary_updated_at": "",
-        "summary_token_count": 0,
-        "is_quick_lookup": false,
-        "created_at": "2026-10-03T20:56:13.815705+07:00",
-        "updated_at": "2026-10-03T20:57:25.553753+07:00"
       }
     },
     "remembered_devices": [
