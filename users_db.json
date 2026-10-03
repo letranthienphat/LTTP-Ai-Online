@@ -100,6 +100,25 @@
         "updated_at": "2026-10-02T18:21:14.780949+07:00",
         "summary_updated_at": "",
         "summary_token_count": 0
+      },
+      "1416b1a8-fd45-4d1e-9f5f-9dc6d31758bf": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Thông tin về bạn?"
+          },
+          {
+            "role": "assistant",
+            "content": "Tôi là LTTP AI Online — một trợ lý trí tuệ nhân tạo độc lập do tác giả LTTP phát triển.\n\nTôi được thiết kế để hỗ trợ bạn trong nhiều tác vụ khác nhau, bao gồm:\n* **Giải đáp thắc mắc:** Cung cấp thông tin và kiến thức về nhiều lĩnh vực.\n* **Hỗ trợ công việc & học tập:** Soạn thảo văn bản, viết lách, dịch thuật, tóm tắt tài liệu.\n* **Lập trình & Kỹ thuật:** Viết mã code, sửa lỗi (debug) và giải thích các khái niệm kỹ thuật.\n* **Sáng tạo & Lên ý tưởng:** Gợi ý ý tưởng mới cho các dự án của bạn.\n\nTôi luôn hoạt động với tinh thần chuyên nghiệp, lịch sự và tôn trọng người dùng. Tôi có thể giúp gì cho bạn hôm nay?"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-10-03T20:56:13.815705+07:00",
+        "updated_at": "2026-10-03T20:56:30.519207+07:00"
       }
     },
     "remembered_devices": [
