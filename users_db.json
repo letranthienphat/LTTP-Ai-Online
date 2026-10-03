@@ -184,7 +184,9 @@
       "smart_draft": true,
       "typing_mode": "smooth",
       "typing_cps": 40
-    }
+    },
+    "terms_accepted": false,
+    "terms_accepted_at": ""
   },
   "__system_config__": {
     "maintenance_mode": false,
@@ -356,5 +358,8 @@
       ]
     }
   },
-  "__bug_reports__": []
+  "__bug_reports__": [],
+  "__security_log__": [],
+  "__security_alerts__": [],
+  "__blocklist__": {}
 }
