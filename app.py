@@ -27,7 +27,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.15.1"
+APP_VERSION = "1.16.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -69,6 +69,14 @@ TYPING_MODE_INSTANT = "instant"
 DEFAULT_TYPING_MODE = TYPING_MODE_SMOOTH
 DEFAULT_TYPING_CPS = 30
 
+# Stop generation
+COOKIE_STOP_FLAG = "LTTP_stop_flag"
+
+# Performance tuning
+SUMMARY_TRIGGER_RATIO = 0.85
+GEMINI_REQUEST_TIMEOUT = 12
+MODEL_LIST_CACHE_SECONDS = 300
+
 CHARS_PER_TOKEN = 2.5
 MODEL_CONTEXT_BUDGET = {
     "gemini-3.8-flash": 800_000, "gemini-3.7-flash": 800_000,
@@ -82,7 +90,6 @@ MODEL_CONTEXT_BUDGET = {
 DEFAULT_CONTEXT_BUDGET = 800_000
 HISTORY_BUDGET_RATIO = 0.30
 SUMMARY_BUDGET_RATIO = 0.15
-SUMMARY_TRIGGER_RATIO = 0.60
 MIN_RECENT_MESSAGES = 4
 MAX_RECENT_MESSAGES = 30
 SUMMARY_BATCH_SIZE = 30
@@ -131,7 +138,7 @@ def vn_now() -> datetime:
     return datetime.now(VN_TZ)
 
 # ==========================================
-# CÁC DICT HẰNG SỐ QUAN TRỌNG (đã thêm lại)
+# HẰNG SỐ QUAN TRỌNG
 # ==========================================
 DISCLAIMER = {
     "vi": "Lưu ý kiểm tra thông tin của A.I trước khi xác nhận thông tin.",
@@ -577,6 +584,32 @@ def get_context_budget(model_name: str) -> int:
             return budget
     return DEFAULT_CONTEXT_BUDGET
 
+def get_available_models_cached() -> list:
+    """Lấy danh sách model từ Gemini, có cache 5 phút."""
+    now = time.time()
+    cached = st.session_state.get("_models_cache")
+    cached_time = st.session_state.get("_models_cache_time", 0)
+
+    if cached and (now - cached_time) < MODEL_LIST_CACHE_SECONDS:
+        return cached
+
+    models = FALLBACK_MODELS.copy()
+    if SECRET_API_KEYS:
+        try:
+            genai.configure(api_key=SECRET_API_KEYS[0])
+            dyn = []
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    dyn.append(m.name.replace("models/", ""))
+            if dyn:
+                models = list(dict.fromkeys(dyn + FALLBACK_MODELS))
+        except Exception:
+            pass
+
+    st.session_state._models_cache = models
+    st.session_state._models_cache_time = now
+    return models
+
 def smart_sliding_window(messages: list, budget_tokens: int,
                           min_msgs: int = MIN_RECENT_MESSAGES,
                           max_msgs: int = MAX_RECENT_MESSAGES) -> list:
@@ -612,7 +645,7 @@ def truncate_message_smart(content: str, max_tokens: int) -> str:
 
 
 # ==========================================
-# 4. SECURITY: RATE LIMIT + ABUSE DETECTION
+# 4. SECURITY
 # ==========================================
 def _get_rl_key(action: str) -> str:
     return f"_rl_{action}"
@@ -927,6 +960,25 @@ def inject_scroll_guard():
     )
     inject_js(js)
 
+def inject_stop_button_listener():
+    """Lắng nghe click trên nút Stop generation."""
+    js = (
+        'if (window.__lttp_stop_listener_installed) return;\n'
+        'window.__lttp_stop_listener_installed = true;\n'
+        'document.addEventListener("click", function(e) {\n'
+        '    let el = e.target;\n'
+        '    for (let i = 0; i < 5 && el; i++) {\n'
+        '        if (el.classList && el.classList.contains("lttp-stop-gen")) {\n'
+        '            document.cookie = "LTTP_stop_flag=1; path=/; max-age=120";\n'
+        '            console.log("LTTP: stop flag set");\n'
+        '            break;\n'
+        '        }\n'
+        '        el = el.parentElement;\n'
+        '    }\n'
+        '}, true);\n'
+    )
+    inject_js(js)
+
 def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
     if not enabled:
         js_clear = (
@@ -1106,6 +1158,21 @@ def get_saved_draft():
         pass
     return None, None
 
+def check_stop_flag() -> bool:
+    try:
+        v = cookies.get(COOKIE_STOP_FLAG)
+        if v == "1":
+            return True
+    except Exception:
+        pass
+    return False
+
+def clear_stop_flag():
+    try:
+        cookies.set(COOKIE_STOP_FLAG, "", max_age=0)
+    except Exception:
+        pass
+
 
 # ==========================================
 # 6. LỖI 429
@@ -1138,7 +1205,7 @@ def is_rate_limit_error(error: Exception) -> bool:
 
 
 # ==========================================
-# 7. GỌI GEMINI VỚI FAILOVER
+# 7. GỌI GEMINI VỚI FAILOVER + STOP + TIMEOUT
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -1157,15 +1224,24 @@ def stream_gemini_with_failover(
     if not api_keys:
         yield "", True, "no_api_keys"
         return
+
     model_chain = _build_model_chain(preferred_model)
     last_error = None
     saw_rate_limit = False
     saw_other_error = False
+    was_stopped = False
+
     for model_name in model_chain:
+        if was_stopped:
+            break
         for api_k in api_keys:
+            if was_stopped:
+                break
+
             accumulated = ""
             got_first_chunk = False
             use_stream = (typing_mode != TYPING_MODE_INSTANT)
+
             try:
                 genai.configure(api_key=api_k)
                 model = genai.GenerativeModel(
@@ -1173,8 +1249,12 @@ def stream_gemini_with_failover(
                     system_instruction=system_instruction if system_instruction else None,
                     generation_config=generation_config or {}
                 )
+
                 if not use_stream:
-                    res = model.generate_content(prompt_inputs)
+                    res = model.generate_content(
+                        prompt_inputs,
+                        request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
+                    )
                     text = getattr(res, "text", None)
                     if text:
                         if ui_placeholder is not None:
@@ -1185,20 +1265,44 @@ def stream_gemini_with_failover(
                         saw_other_error = True
                         last_error = "Empty response"
                         continue
-                response = model.generate_content(prompt_inputs, stream=True)
+
+                response = model.generate_content(
+                    prompt_inputs,
+                    stream=True,
+                    request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
+                )
+
                 display_buffer = ""
                 pending_buffer = ""
                 last_release_time = time.time()
                 chars_per_sec = max(1, int(typing_cps))
+
                 for chunk in response:
+                    if check_stop_flag():
+                        was_stopped = True
+                        if ui_placeholder is not None and accumulated:
+                            stop_note = (
+                                "\n\n_[Đã dừng theo yêu cầu]_"
+                                if lang == "vi" else
+                                "\n\n_[Stopped by user]_"
+                            )
+                            ui_placeholder.markdown(accumulated + stop_note, unsafe_allow_html=True)
+                        if accumulated:
+                            yield accumulated, True, "stopped"
+                        else:
+                            yield "", True, "stopped"
+                        return
+
                     try:
                         chunk_text = getattr(chunk, "text", None)
                     except Exception:
                         chunk_text = None
                     if not chunk_text:
                         continue
+
                     got_first_chunk = True
                     accumulated += chunk_text
+
                     if typing_mode == TYPING_MODE_SMOOTH:
                         if ui_placeholder is not None:
                             display = accumulated + '<span class="typing-cursor"></span>'
@@ -1223,8 +1327,16 @@ def stream_gemini_with_failover(
                                 disp = display_buffer + '<span class="typing-cursor"></span>'
                                 ui_placeholder.markdown(disp, unsafe_allow_html=True)
                             yield display_buffer, False, None
+
                 if typing_mode == TYPING_MODE_CONTROLLED and pending_buffer:
                     while pending_buffer:
+                        if check_stop_flag():
+                            was_stopped = True
+                            if ui_placeholder is not None and display_buffer:
+                                stop_note = "\n\n_[Đã dừng theo yêu cầu]_" if lang == "vi" else "\n\n_[Stopped by user]_"
+                                ui_placeholder.markdown(display_buffer + stop_note, unsafe_allow_html=True)
+                            yield display_buffer, True, "stopped"
+                            return
                         now = time.time()
                         elapsed = now - last_release_time
                         chars_to_release = int(elapsed * chars_per_sec)
@@ -1239,6 +1351,7 @@ def stream_gemini_with_failover(
                             disp = display_buffer + '<span class="typing-cursor"></span>'
                             ui_placeholder.markdown(disp, unsafe_allow_html=True)
                         yield display_buffer, False, None
+
                 if accumulated:
                     if ui_placeholder is not None:
                         ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
@@ -1248,6 +1361,7 @@ def stream_gemini_with_failover(
                     saw_other_error = True
                     last_error = "Empty response"
                     continue
+
             except Exception as ex:
                 last_error = str(ex)
                 if got_first_chunk and accumulated:
@@ -1262,6 +1376,11 @@ def stream_gemini_with_failover(
                 else:
                     saw_other_error = True
                     continue
+
+    if was_stopped:
+        yield "", True, "stopped"
+        return
+
     if saw_rate_limit and not saw_other_error:
         yield "", True, "rate_limit"
     elif saw_rate_limit and saw_other_error:
@@ -1291,7 +1410,10 @@ def call_gemini_with_failover(
                     system_instruction=system_instruction if system_instruction else None,
                     generation_config=generation_config or {}
                 )
-                res = model.generate_content(prompt_inputs)
+                res = model.generate_content(
+                    prompt_inputs,
+                    request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
+                )
                 text = getattr(res, "text", None)
                 if text:
                     return text, None
@@ -1773,7 +1895,7 @@ def generate_summary_in_batches(
 
 
 # ==========================================
-# 12. i18n (rút gọn cho gọn code — giữ đủ key cần dùng)
+# 12. i18n
 # ==========================================
 TRANSLATIONS = {
     "en": {
@@ -2193,7 +2315,9 @@ for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
               ("reboot_banner_dismissed", False),
               ("draft_last_saved_hash", ""),
               ("bug_report_open", False),
-              ("bug_report_text", "")]:
+              ("bug_report_text", ""),
+              ("_models_cache", None),
+              ("_models_cache_time", 0)]:
     if k not in st.session_state:
         st.session_state[k] = dv
 
@@ -2234,6 +2358,7 @@ def _init_version_cookie():
 _init_version_cookie()
 inject_version_scanner()
 inject_scroll_guard()
+inject_stop_button_listener()
 
 _seen_ver = cookies.get("LTTP_seen_version")
 if _seen_ver:
@@ -2332,7 +2457,6 @@ def _show_update_notice_if_needed():
         except Exception:
             pass
         st.session_state.seen_version = APP_VERSION
-        # Dùng .get() an toàn để tránh NameError nếu UPDATE_NOTICE chưa được định nghĩa
         notice_text = UPDATE_NOTICE.get(current_lang, UPDATE_NOTICE.get("en", "🔄 Updated"))
         st.markdown(
             f'<div class="update-notice">{notice_text} • v{APP_VERSION}</div>',
@@ -2706,7 +2830,7 @@ def _render_traffic_analytics(lang: str, traffic: dict):
                 st.markdown(f"<div class='traffic-row'>{icon} <b>{ts}</b> — {lbl} <span style='opacity:0.5'>({dev})</span></div>", unsafe_allow_html=True)
 
 # ==========================================
-# 24. SECURITY PANEL (admin)
+# 24. SECURITY PANEL
 # ==========================================
 def render_security_panel(lang: str, db: dict):
     st.markdown(f"### {t('security_title', lang)}")
@@ -3159,15 +3283,13 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.messages = []
 
 # ==========================================
-# FIX QUAN TRỌNG: ĐẢM BẢO CÁC BIẾN LUÔN TỒN TẠI
-# (Tránh NameError khi sidebar chưa render hoặc user chưa mở expander)
+# SAFE INIT — đảm bảo các biến luôn tồn tại
 # ==========================================
 _SAFE_MODEL = user_data["preferences"].get("model", DEFAULT_MODEL)
 _SAFE_TEMP = float(user_data["preferences"].get("temperature", 0.7))
 _SAFE_TOP_P = float(user_data["preferences"].get("top_p", 0.95))
 _SAFE_TOP_K = int(user_data["preferences"].get("top_k", 40))
 
-# Các biến này sẽ bị ghi đè bởi sidebar nếu có; nhưng ít nhất chúng luôn tồn tại
 sel_model = _SAFE_MODEL
 temperature = _SAFE_TEMP
 top_p = _SAFE_TOP_P
@@ -3448,18 +3570,7 @@ with st.sidebar:
         else:
             st.markdown(f"**Key {i}:** *Not configured* <span class='status-badge badge-missing'>{t('api_status_missing', lang)}</span>", unsafe_allow_html=True)
 
-    available_models = FALLBACK_MODELS.copy()
-    if SECRET_API_KEYS:
-        try:
-            genai.configure(api_key=SECRET_API_KEYS[0])
-            dyn = []
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    dyn.append(m.name.replace("models/", ""))
-            if dyn:
-                available_models = list(dict.fromkeys(dyn + FALLBACK_MODELS))
-        except Exception:
-            pass
+    available_models = get_available_models_cached()
 
     saved_model = user_data["preferences"].get("model", DEFAULT_MODEL)
     if saved_model not in available_models:
@@ -3484,7 +3595,6 @@ with st.sidebar:
             else:
                 db_data[st.session_state.user] = user_data
                 safe_save_db(db_data)
-    # Ghi đè biến toàn cục sel_model bằng giá trị mới nhất
     sel_model = _new_model
 
     with st.expander(t("gen_config", lang), expanded=False):
@@ -3665,11 +3775,69 @@ for msg in st.session_state.messages:
 # ==========================================
 # 33. XỬ LÝ PROMPT
 # ==========================================
+def _run_deferred_tasks(chat_data, user_prompt, lang):
+    """Chạy các tác vụ tốn thời gian SAU KHI user đã thấy response."""
+    try:
+        all_messages = st.session_state.messages
+
+        # Đặt title nếu chưa có
+        if not chat_data.get("title") or chat_data.get("title") == t("new_chat", lang):
+            try:
+                title = generate_chat_title(user_prompt, SECRET_API_KEYS, sel_model, lang)
+                chat_data["title"] = title
+            except Exception:
+                pass
+
+        # Tóm tắt nếu cần (chỉ khi vượt 85% ngưỡng)
+        context_budget = get_context_budget(sel_model)
+        history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
+        trigger_tokens = int(context_budget * SUMMARY_TRIGGER_RATIO)
+        total_tokens = estimate_messages_tokens(all_messages)
+
+        should_summarize = (total_tokens > trigger_tokens or len(all_messages) > 50)
+
+        if should_summarize:
+            recent_keep = smart_sliding_window(
+                all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES
+            )
+            if len(recent_keep) < len(all_messages):
+                older_messages = all_messages[: len(all_messages) - len(recent_keep)]
+            else:
+                older_messages = []
+
+            if older_messages:
+                try:
+                    new_summary = generate_summary_in_batches(
+                        older_messages, chat_data.get("summary", ""),
+                        SECRET_API_KEYS, sel_model, lang
+                    )
+                    chat_data["summary"] = new_summary
+                    chat_data["summary_updated_at"] = vn_now().isoformat()
+                    chat_data["summary_token_count"] = estimate_tokens(new_summary)
+                except Exception:
+                    pass
+
+        # Lưu lại
+        if st.session_state.current_chat_id:
+            user_chats[st.session_state.current_chat_id] = chat_data
+            if is_test:
+                st.session_state.test_chats = user_chats
+            elif is_guest:
+                st.session_state.guest_chats = user_chats
+            else:
+                user_data["chats"] = user_chats
+                db_data[st.session_state.user] = user_data
+                safe_save_db(db_data)
+    except Exception:
+        pass
+
+
 def _process_prompt(user_prompt):
     if not enforce_message_content(user_prompt):
         return
 
     clear_draft_cookie_via_js()
+    clear_stop_flag()
 
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
@@ -3694,28 +3862,8 @@ def _process_prompt(user_prompt):
 
     context_budget = get_context_budget(sel_model)
     history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
-    trigger_tokens = int(context_budget * SUMMARY_TRIGGER_RATIO)
-    all_messages = st.session_state.messages
-    total_tokens = estimate_messages_tokens(all_messages)
-    should_summarize = (total_tokens > trigger_tokens or len(all_messages) > 40)
 
-    if should_summarize:
-        recent_keep = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
-        if len(recent_keep) < len(all_messages):
-            older_messages = all_messages[: len(all_messages) - len(recent_keep)]
-        else:
-            older_messages = []
-        if older_messages:
-            try:
-                chat_summary = generate_summary_in_batches(
-                    older_messages, chat_summary, SECRET_API_KEYS, sel_model, lang,
-                )
-                chat_data["summary"] = chat_summary
-                chat_data["summary_updated_at"] = vn_now().isoformat()
-                chat_data["summary_token_count"] = estimate_tokens(chat_summary)
-            except Exception:
-                pass
-
+    # Build system prompt
     copyright_guard = COPYRIGHT_GUARD_PROMPT_VI if lang == "vi" else COPYRIGHT_GUARD_PROMPT_EN
     user_memory = user_data.get("custom_instructions", "").strip()
     system_parts = [copyright_guard]
@@ -3726,6 +3874,7 @@ def _process_prompt(user_prompt):
         system_parts.append(ctx_label + ":\n" + chat_summary)
     system_instruction = "\n\n".join(system_parts)
 
+    all_messages = st.session_state.messages
     recent_window = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
     if recent_window and recent_window[-1].get("content") == user_prompt:
         recent_window = recent_window[:-1]
@@ -3759,6 +3908,19 @@ def _process_prompt(user_prompt):
     final_err = None
 
     with st.chat_message("assistant"):
+        # Nút Stop (render dạng HTML để có class CSS riêng)
+        stop_col1, stop_col2 = st.columns([6, 1])
+        with stop_col2:
+            stop_btn_placeholder = st.empty()
+            stop_label = "⏹️ Dừng" if lang == "vi" else "⏹️ Stop"
+            stop_btn_placeholder.markdown(
+                f'<button class="lttp-stop-gen" '
+                f'style="width:100%;padding:6px 8px;background:rgba(239,68,68,0.15);'
+                f'color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:8px;'
+                f'cursor:pointer;font-weight:600;font-size:0.8rem;">{stop_label}</button>',
+                unsafe_allow_html=True
+            )
+
         ai_placeholder = st.empty()
         ai_placeholder.markdown(f"""
         <div class="ai-loading-box">
@@ -3787,6 +3949,9 @@ def _process_prompt(user_prompt):
                 final_err = err
                 break
 
+        # Xóa nút Stop sau khi stream xong
+        stop_btn_placeholder.empty()
+
         if final_text:
             ai_placeholder.markdown(final_text)
             st.markdown(
@@ -3800,6 +3965,21 @@ def _process_prompt(user_prompt):
                     if lang == "vi" else
                     "⚠️ Response may be incomplete."
                 )
+            elif final_err == "stopped":
+                st.info(
+                    "⏹️ Đã dừng tạo tin nhắn theo yêu cầu."
+                    if lang == "vi" else
+                    "⏹️ Generation stopped by user request."
+                )
+        elif final_err == "stopped":
+            ai_placeholder.markdown(
+                "_[Đã dừng theo yêu cầu]_" if lang == "vi" else "_[Stopped by user]_"
+            )
+            if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+                st.session_state.messages.pop()
+            clear_stop_flag()
+            st.rerun()
+            return
         elif final_err == "rate_limit":
             st.session_state.pending_retry_prompt = user_prompt
             if (st.session_state.messages and
@@ -3813,12 +3993,10 @@ def _process_prompt(user_prompt):
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
+    clear_stop_flag()
+
+    # Lưu chat trước (nhanh)
     if final_text:
-        if len(chat_data.get("messages", [])) == 0:
-            try:
-                chat_data["title"] = generate_chat_title(user_prompt, SECRET_API_KEYS, sel_model, lang)
-            except Exception:
-                chat_data["title"] = user_prompt[:30] + "..." if len(user_prompt) > 30 else user_prompt
         chat_data["messages"] = st.session_state.messages
         chat_data["updated_at"] = vn_now().isoformat()
         user_chats[st.session_state.current_chat_id] = chat_data
@@ -3829,10 +4007,13 @@ def _process_prompt(user_prompt):
         else:
             user_data["chats"] = user_chats
             db_data[st.session_state.user] = user_data
-            if time.time() - st.session_state.last_save_time > 1:
-                safe_save_db(db_data)
-                st.session_state.last_save_time = time.time()
-        st.rerun()
+            safe_save_db(db_data)
+
+    # Chạy deferred tasks (title + summary)
+    if final_text and final_err not in ("stopped",):
+        _run_deferred_tasks(chat_data, user_prompt, lang)
+
+    st.rerun()
 
 
 if st.session_state.pending_retry_prompt:
