@@ -2,7 +2,27 @@
   "phát": {
     "password": "aed6d8fac62b43b59f48d7450ec1011358d198a2a9533211d46322c1ba6eafc1",
     "custom_instructions": "",
-    "chats": {},
+    "chats": {
+      "55a44860-fc06-48ba-b242-8c07f1a70268": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hiệu lực của biển báo tốc độ không có chữ ZONE tại Việt Nam"
+          },
+          {
+            "role": "assistant",
+            "content": "Theo Quy chuẩn kỹ thuật quốc gia về báo hiệu đường bộ (**QCVN 41:2019/BGTVT**), biển báo tốc độ không có chữ \"ZONE\" là biển báo **P.127 \"Tốc độ tối đa cho phép\"**. \n\nHiệu lực của loại biển báo này được quy định cụ thể như sau:\n\n---\n\n### 1. Vị trí bắt đầu có hiệu lực\n* Biển có hiệu lực **bắt đầu từ vị trí đặt biển** trở đi theo chiều di chuyển của phương tiện.\n\n---\n\n### 2. Vị trí hết hiệu lực\nHiệu lực của biển P.127 (không có chữ ZONE) sẽ **kết thúc** khi gặp một trong các trường hợp sau:\n\n1. **Gặp biển báo hủy bỏ lệnh cấm:**\n   * Biển **DP.134** *\"Hết tốc độ tối đa cho phép\"*.\n   * Biển **DP.135** *\"Hết tất cả các lệnh cấm\"*.\n\n2. **Gặp biển báo tốc độ mới:**\n   * Gặp biển P.127 tiếp theo quy định một mức tốc độ tối đa khác.\n\n3. **Đến nút giao nhau (Ngã ba, ngã tư...):**\n   * Hiệu lực của biển P.127 **sẽ hết tác dụng khi đi qua nút giao tiếp theo** (nếu sau nút giao không có biển lặp lại).\n   * **Lưu ý ngoại lệ:** Nếu biển P.127 được đặt kèm **Biển phụ S.501** *\"Phạm vi tác dụng của biển\"* (ghi khoảng cách, ví dụ: \"500m\"), thì hiệu lực của biển kéo dài đúng khoảng cách ghi trên biển phụ, kể cả khi qua các nút giao nhau (trừ khi có biển báo khác thay thế).\n\n4. **Gặp biển báo \"Bắt đầu khu đông dân cư\" (R.420) hoặc \"Hết khu đông dân cư\" (R.421):**\n   * Trong một số trường hợp, việc ra/vào khu đông dân cư sẽ thay đổi quy định tốc độ áp dụng cho tuyến đường.\n\n---\n\n### 3. Điểm khác biệt quan trọng với Biển có chữ \"ZONE\" (P.127a)\n\n| Đặc điểm | Biển P.127 (Không có ZONE) | Biển P.127a (Có chữ ZONE) |\n| :--- | :--- | :--- |\n| **Phạm vi áp dụng** | Chỉ áp dụng trên **đoạn đường/làn đường** đặt biển. | Áp dụng cho **toàn bộ mạng lưới đường trong khu vực** (vùng). |\n| **Qua nút giao nhau** | **Hết hiệu lực** sau nút giao (nếu không được cắm lặp lại). | **Vẫn giữ nguyên hiệu lực** khi đi qua các nút giao. |\n| **Cách hủy bỏ** | Hết hiệu lực bởi biển DP.134, DP.135, hoặc nút giao. | Chỉ hết hiệu lực khi gặp biển **P.127b** *\"Hết tốc độ tối đa cho phép theo vùng\"*. |\n\n---\n\n### 💡 Lời khuyên cho người tham gia giao thông\nKhi di chuyển qua các ngã ba, ngã tư"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-10-18T18:13:28.348811+07:00",
+        "updated_at": "2026-10-18T18:13:40.716773+07:00"
+      }
+    },
     "remembered_devices": [
       "871c408a-062c-46c7-ae9b-0b8410aafd06",
       "834f7f4e-019e-4d13-a032-32f235b425f0",
