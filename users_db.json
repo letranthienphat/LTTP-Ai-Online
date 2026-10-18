@@ -13,6 +13,14 @@
           {
             "role": "assistant",
             "content": "Theo Quy chuẩn kỹ thuật quốc gia về báo hiệu đường bộ (**QCVN 41:2019/BGTVT**), biển báo tốc độ không có chữ \"ZONE\" là biển báo **P.127 \"Tốc độ tối đa cho phép\"**. \n\nHiệu lực của loại biển báo này được quy định cụ thể như sau:\n\n---\n\n### 1. Vị trí bắt đầu có hiệu lực\n* Biển có hiệu lực **bắt đầu từ vị trí đặt biển** trở đi theo chiều di chuyển của phương tiện.\n\n---\n\n### 2. Vị trí hết hiệu lực\nHiệu lực của biển P.127 (không có chữ ZONE) sẽ **kết thúc** khi gặp một trong các trường hợp sau:\n\n1. **Gặp biển báo hủy bỏ lệnh cấm:**\n   * Biển **DP.134** *\"Hết tốc độ tối đa cho phép\"*.\n   * Biển **DP.135** *\"Hết tất cả các lệnh cấm\"*.\n\n2. **Gặp biển báo tốc độ mới:**\n   * Gặp biển P.127 tiếp theo quy định một mức tốc độ tối đa khác.\n\n3. **Đến nút giao nhau (Ngã ba, ngã tư...):**\n   * Hiệu lực của biển P.127 **sẽ hết tác dụng khi đi qua nút giao tiếp theo** (nếu sau nút giao không có biển lặp lại).\n   * **Lưu ý ngoại lệ:** Nếu biển P.127 được đặt kèm **Biển phụ S.501** *\"Phạm vi tác dụng của biển\"* (ghi khoảng cách, ví dụ: \"500m\"), thì hiệu lực của biển kéo dài đúng khoảng cách ghi trên biển phụ, kể cả khi qua các nút giao nhau (trừ khi có biển báo khác thay thế).\n\n4. **Gặp biển báo \"Bắt đầu khu đông dân cư\" (R.420) hoặc \"Hết khu đông dân cư\" (R.421):**\n   * Trong một số trường hợp, việc ra/vào khu đông dân cư sẽ thay đổi quy định tốc độ áp dụng cho tuyến đường.\n\n---\n\n### 3. Điểm khác biệt quan trọng với Biển có chữ \"ZONE\" (P.127a)\n\n| Đặc điểm | Biển P.127 (Không có ZONE) | Biển P.127a (Có chữ ZONE) |\n| :--- | :--- | :--- |\n| **Phạm vi áp dụng** | Chỉ áp dụng trên **đoạn đường/làn đường** đặt biển. | Áp dụng cho **toàn bộ mạng lưới đường trong khu vực** (vùng). |\n| **Qua nút giao nhau** | **Hết hiệu lực** sau nút giao (nếu không được cắm lặp lại). | **Vẫn giữ nguyên hiệu lực** khi đi qua các nút giao. |\n| **Cách hủy bỏ** | Hết hiệu lực bởi biển DP.134, DP.135, hoặc nút giao. | Chỉ hết hiệu lực khi gặp biển **P.127b** *\"Hết tốc độ tối đa cho phép theo vùng\"*. |\n\n---\n\n### 💡 Lời khuyên cho người tham gia giao thông\nKhi di chuyển qua các ngã ba, ngã tư"
+          },
+          {
+            "role": "user",
+            "content": "Vậy thì nếu chỉ gặp các con hẻm nhỏ (đường chính giao nhau với hẻm) thì vẫn tính là ngã 3 và hết hiệu lực?"
+          },
+          {
+            "role": "assistant",
+            "content": "Theo Quy chuẩn kỹ thuật quốc gia về báo hiệu đường bộ (**QCVN 41:2019/BGTVT**), câu trả lời là **KHÔNG**. \n\nViệc đi qua các con hẻm nhỏ, ngõ ngách hoặc lối ra vào nhà dân **KHÔNG làm mất hiệu lực** của biển báo tốc độ P.127.\n\nChi tiết quy định như sau:\n\n---\n\n### 1. Giải thích theo quy định pháp luật\n* **Không tính là nút giao nhau hủy bỏ hiệu lực biển:** Trong quy chuẩn giao thông, các giao cắt với đường hẻm nhỏ, ngõ ngách, lối đi nội bộ, lối ra vào cơ quan hoặc nhà dân **không được coi là ngã ba, ngã tư (nút giao nhau) chính thức** để chấm dứt hiệu lực của biển báo cấm.\n* **Mục đích của việc cắm biển lặp lại:** Biển báo cấm (P.127) chỉ hết hiệu lực tại **nút giao nhau chính thức** (nơi đường chính giao với đường nhánh/đường công cộng khác) vì tại đó có luồng phương tiện mới rẽ vào đường chính. Ngược lại, các hẻm nhỏ không thuộc phạm vi này, nên người tham gia giao thông trên đường chính **vẫn phải tiếp tục tuân thủ biển báo đã cắm trước đó**.\n\n---\n\n### 2. Khi nào biển P.127 mới thực sự hết hiệu lực?\nHiệu lực của biển P.127 trên đường chính chỉ dừng lại khi bạn gặp một trong các trường hợp:\n1. **Ngã ba, ngã tư chính thức:** Đỉnh giao cắt giữa các tuyến đường giao thông công cộng chính (không phải ngõ/hẻm).\n2. **Biển DP.134:** *\"Hết tốc độ tối đa\n cho phép\"*.\n3. **Biển DP.135:** *\"Hết tất cả các lệnh cấm\"*.\n4. **Biển P.127 mới:** Quy định một mức tốc độ khác.\n\n---\n\n### 💡 Tóm lại\nNếu bạn đang đi trên đường chính và chỉ gặp các **con hẻm nhỏ, ngõ ngách, lối ra vào nhà dân** rẽ ra đường chính, bạn **vẫn phải giữ nguyên tốc độ** theo biển P.127 trước đó cho đến khi gặp ngã ba/ngã tư lớn tiếp theo hoặc gặp biển hết lệnh cấm."
           }
         ],
         "summary": "",
@@ -20,7 +28,7 @@
         "summary_token_count": 0,
         "is_quick_lookup": false,
         "created_at": "2026-10-18T18:13:28.348811+07:00",
-        "updated_at": "2026-10-18T18:13:40.716773+07:00"
+        "updated_at": "2026-10-18T18:15:32.779665+07:00"
       }
     },
     "remembered_devices": [
