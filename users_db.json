@@ -101,10 +101,10 @@
     "maintenance_mode": false,
     "maintenance_note": "I'm test for new features, come back in 5 minutes.",
     "announcement": {
-      "enabled": true,
-      "title": "Privacy Policy Notice",
-      "body": "1. Phần mềm cam kết không chia sẻ dữ liệu cá nhân với bất kỳ bên thứ ba nào; mọi dữ liệu đều được xử lý một cách cẩn trọng.\n2. Phần mềm sử dụng một số cookie nhất định (cụ thể là các cookie dùng để ghi nhớ phiên đăng nhập).\n3. Lưu ý quan trọng: Vui lòng kiểm chứng thông tin do AI tạo ra trước khi chia sẻ.\n4. Nghiêm cấm mọi hành vi sao chép phần mềm dưới bất kỳ hình thức nào mà không được phép. Tìm hiểu thêm về các quy định pháp lý liên quan đến bản quyền tại: https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md\nPhiên bản: 1.40.0\nNgày phát hành: 24/09/2026\nCập nhật lần cuối: 03/10/2026",
-      "updated_at": "2026-11-03 17:38:35"
+      "enabled": false,
+      "title": "",
+      "body": "",
+      "updated_at": "2026-11-03 20:23:47"
     }
   },
   "__traffic_log__": {
