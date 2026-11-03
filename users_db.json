@@ -107,210 +107,6 @@
     }
   },
   "__traffic_log__": {
-    "2026-09-24": {
-      "visits": [
-        {
-          "time": "2026-09-24 17:02:13",
-          "label": "Admin",
-          "role": "admin",
-          "device": "715bb629-91d0-4fb0-b709-d5f30d20d4f3"
-        },
-        {
-          "time": "2026-09-24 17:11:55",
-          "label": "phát",
-          "role": "user",
-          "device": "8d50106a-35b0-4672-9173-32d186735ff4"
-        },
-        {
-          "time": "2026-09-24 19:48:19",
-          "label": "phát",
-          "role": "user",
-          "device": "b6cd81af-8fd5-4532-aa25-84e116fcd42d"
-        },
-        {
-          "time": "2026-09-24 20:00:11",
-          "label": "Admin",
-          "role": "admin",
-          "device": "9a65407c-4916-4dcf-8418-8b0c0d245a2a"
-        },
-        {
-          "time": "2026-09-24 20:01:33",
-          "label": "Admin",
-          "role": "admin",
-          "device": "fb637a7f-66cd-42fb-b375-c5ec3f352607"
-        },
-        {
-          "time": "2026-09-24 20:48:07",
-          "label": "phát",
-          "role": "user",
-          "device": "fb637a7f-66cd-42fb-b375-c5ec3f352607"
-        },
-        {
-          "time": "2026-09-24 20:53:38",
-          "label": "Admin",
-          "role": "admin",
-          "device": "1e30d854-239f-4b47-917d-6baa11cc2ef5"
-        },
-        {
-          "time": "2026-09-24 20:55:04",
-          "label": "Admin",
-          "role": "admin",
-          "device": "fdb344f8-8218-4f21-bf93-b0dfbd05b826"
-        }
-      ]
-    },
-    "2026-09-25": {
-      "visits": [
-        {
-          "time": "2026-09-25 18:19:09",
-          "label": "Admin",
-          "role": "admin",
-          "device": "e4559896-94b8-4036-bce9-5b12af78f40a"
-        },
-        {
-          "time": "2026-09-25 18:22:04",
-          "label": "phát",
-          "role": "user",
-          "device": "e932d83a-215f-42a9-8c3f-60838e3f4575"
-        },
-        {
-          "time": "2026-09-25 21:34:50",
-          "label": "phát",
-          "role": "user",
-          "device": "1b3b60bd-aa88-49b6-a9a8-f24b2bb64fd1"
-        }
-      ]
-    },
-    "2026-09-27": {
-      "visits": [
-        {
-          "time": "2026-09-27 09:21:25",
-          "label": "Admin",
-          "role": "admin",
-          "device": "8e4b466f-6f22-4f36-b965-9f5a26b48eed"
-        },
-        {
-          "time": "2026-09-27 09:22:35",
-          "label": "phát",
-          "role": "user",
-          "device": "d8482d8f-1369-4497-925c-289a26588911"
-        }
-      ]
-    },
-    "2026-10-01": {
-      "visits": [
-        {
-          "time": "2026-10-01 19:27:46",
-          "label": "phát",
-          "role": "user",
-          "device": "d8482d8f-1369-4497-925c-289a26588911"
-        },
-        {
-          "time": "2026-10-01 19:39:04",
-          "label": "Admin",
-          "role": "admin",
-          "device": "d8482d8f-1369-4497-925c-289a26588911"
-        }
-      ]
-    },
-    "2026-10-02": {
-      "visits": [
-        {
-          "time": "2026-10-02 17:02:38",
-          "label": "phát",
-          "role": "user",
-          "device": "2b92f9f6-1682-47b7-ae13-1432fed2e9e9"
-        },
-        {
-          "time": "2026-10-02 17:11:14",
-          "label": "phát",
-          "role": "user",
-          "device": "4c4389e2-0cc6-48ab-b309-fc7168e8f5b9"
-        },
-        {
-          "time": "2026-10-02 17:22:36",
-          "label": "phát",
-          "role": "user",
-          "device": "7732ac2a-f103-49fe-8970-ba566d952bdd"
-        },
-        {
-          "time": "2026-10-02 17:27:41",
-          "label": "phát",
-          "role": "user",
-          "device": "8675c7aa-b1ed-4c68-88c8-166bac5a945b"
-        },
-        {
-          "time": "2026-10-02 17:30:44",
-          "label": "phát",
-          "role": "user",
-          "device": "bd233c8f-8d83-4b0a-a4f6-8719f0507491"
-        },
-        {
-          "time": "2026-10-02 17:36:51",
-          "label": "phát",
-          "role": "user",
-          "device": "022fbc27-4d23-4e72-a758-9141b0ac9d23"
-        },
-        {
-          "time": "2026-10-02 20:26:02",
-          "label": "phát",
-          "role": "user",
-          "device": "279afe77-f475-498f-8800-82d525e5abc9"
-        },
-        {
-          "time": "2026-10-02 21:34:46",
-          "label": "Admin",
-          "role": "admin",
-          "device": "022fbc27-4d23-4e72-a758-9141b0ac9d23"
-        }
-      ]
-    },
-    "2026-10-03": {
-      "visits": [
-        {
-          "time": "2026-10-03 11:40:51",
-          "label": "phát",
-          "role": "user",
-          "device": "279afe77-f475-498f-8800-82d525e5abc9"
-        },
-        {
-          "time": "2026-10-03 17:43:41",
-          "label": "phát",
-          "role": "user",
-          "device": "022fbc27-4d23-4e72-a758-9141b0ac9d23"
-        },
-        {
-          "time": "2026-10-03 19:47:41",
-          "label": "phát",
-          "role": "user",
-          "device": "f09045e4-ffa0-4bd9-8207-b322f0a426ae"
-        },
-        {
-          "time": "2026-10-03 20:53:34",
-          "label": "Admin",
-          "role": "admin",
-          "device": "f09045e4-ffa0-4bd9-8207-b322f0a426ae"
-        },
-        {
-          "time": "2026-10-03 20:54:05",
-          "label": "Admin",
-          "role": "admin",
-          "device": "f09045e4-ffa0-4bd9-8207-b322f0a426ae"
-        },
-        {
-          "time": "2026-10-03 21:05:33",
-          "label": "phát",
-          "role": "user",
-          "device": "d45689d0-a40c-459c-a663-a0dd8cacb959"
-        },
-        {
-          "time": "2026-10-03 21:43:18",
-          "label": "phát",
-          "role": "user",
-          "device": "f2ef49a0-3747-49c1-a605-c36a8de0f812"
-        }
-      ]
-    },
     "2026-10-06": {
       "visits": [
         {
@@ -338,6 +134,16 @@
           "label": "phát",
           "role": "user",
           "device": "6ab077b7-fc07-4faa-82b1-ebda997d2084"
+        }
+      ]
+    },
+    "2026-11-03": {
+      "visits": [
+        {
+          "time": "2026-11-03 17:37:52",
+          "label": "Admin",
+          "role": "admin",
+          "device": "d04f3bd4-6afa-458d-bb46-a3c6fb46f0f7"
         }
       ]
     }
