@@ -27,7 +27,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.40.0"
+APP_VERSION = "1.40.1"  # Tăng version để user biết có fix
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -73,19 +73,15 @@ DEFAULT_TYPING_CPS = 30
 COOKIE_STOP_FLAG = "LTTP_stop_flag"
 QL_MODE_COOKIE = "LTTP_ql_mode"
 
-# Performance tuning
 SUMMARY_TRIGGER_RATIO = 0.85
 GEMINI_REQUEST_TIMEOUT = 12
 MODEL_LIST_CACHE_SECONDS = 300
 
-# Changelog
 CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
 CHANGELOG_CACHE_SECONDS = 600
 
-# Privacy Policy
 PRIVACY_POLICY_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md"
 
-# Guest quota
 GUEST_DAILY_MSG_LIMIT_HIGH = 150
 GUEST_DAILY_MSG_LIMIT_NORMAL = 100
 HIGH_FREQ_MSG_THRESHOLD = 100
@@ -575,7 +571,6 @@ st.markdown("""
         pointer-events: none !important;
     }
 
-    /* ===== RESPONSIVE (v1.40.0) ===== */
     @media (max-width: 768px) {
         .main-header { font-size: 1.6rem !important; }
         .stButton button {
@@ -740,7 +735,7 @@ def fetch_changelog_cached() -> tuple:
         resp = requests.get(
             CHANGELOG_URL,
             timeout=8,
-            headers={"User-Agent": "LTTP-AI-Online/1.40.0"}
+            headers={"User-Agent": "LTTP-AI-Online/1.40.1"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -3591,7 +3586,6 @@ with st.sidebar:
                 st.session_state.language = lc
                 st.rerun()
 
-    # User card
     if is_test:
         st.markdown(f"""
         <div class="user-card">
@@ -3670,14 +3664,12 @@ with st.sidebar:
 
     st.divider()
 
-    # NEW CHAT BUTTON
     if st.button(t("new_chat_btn", lang), type="primary", use_container_width=True, key="new_chat_btn"):
         if enforce_rate_limit("new_chat", "New chat"):
             st.session_state.current_chat_id = None
             st.session_state.messages = []
             st.rerun()
 
-    # CHAT LIST
     st.subheader(t("chat_list", lang))
     if not user_chats:
         st.caption(t("no_chats", lang))
@@ -3714,7 +3706,7 @@ with st.sidebar:
                         time.sleep(0.3)
                         st.rerun()
 
-    # ============ QUICK LOOKUP TOGGLE ============
+    # QUICK LOOKUP TOGGLE
     ql_on = is_quick_lookup_mode()
     if ql_on:
         toggle_btn_label = "🔍 Quick Lookup: BẬT" if lang == "vi" else "🔍 Quick Lookup: ON"
@@ -3742,22 +3734,12 @@ with st.sidebar:
             padding: 10px 14px !important;
             border-radius: 10px !important;
             box-shadow: 0 4px 12px rgba(249, 115, 22, 0.35) !important;
-            transition: all 0.2s ease !important;
-        }
-        div[data-testid="stSidebar"] .ql-toggle-on button:hover {
-            transform: translateY(-1px) !important;
-            box-shadow: 0 6px 16px rgba(249, 115, 22, 0.5) !important;
         }
         </style>
         <div class="ql-toggle-on"></div>
         """, unsafe_allow_html=True)
 
-    if st.button(
-        toggle_btn_label,
-        use_container_width=True,
-        key="ql_toggle_main_btn",
-        help=toggle_help
-    ):
+    if st.button(toggle_btn_label, use_container_width=True, key="ql_toggle_main_btn", help=toggle_help):
         new_state = not ql_on
         set_quick_lookup_mode(new_state)
         st.toast(
@@ -3768,20 +3750,11 @@ with st.sidebar:
         st.rerun()
 
     if ql_on:
-        st.caption(
-            "⚠️ Đang BẬT — AI sẽ không nhớ ngữ cảnh trước đó."
-            if lang == "vi" else
-            "⚠️ Currently ON — AI won't remember prior context."
-        )
+        st.caption("⚠️ Đang BẬT — AI sẽ không nhớ ngữ cảnh trước đó." if lang == "vi" else "⚠️ Currently ON — AI won't remember prior context.")
     else:
-        st.caption(
-            "✅ Đang TẮT — AI nhớ ngữ cảnh bình thường."
-            if lang == "vi" else
-            "✅ Currently OFF — AI remembers context normally."
-        )
+        st.caption("✅ Đang TẮT — AI nhớ ngữ cảnh bình thường." if lang == "vi" else "✅ Currently OFF — AI remembers context normally.")
     st.divider()
 
-    # SETTINGS
     with st.expander(t("settings_title", lang), expanded=False):
         col_lbl, col_help = st.columns([0.85, 0.15])
         with col_lbl:
@@ -3862,7 +3835,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ===== CONTEXT INFO (RÚT GỌN) =====
     with st.expander(t("context_title", lang), expanded=False):
         ctx_budget = get_context_budget(sel_model)
         cur_msgs = st.session_state.messages
@@ -3880,46 +3852,31 @@ with st.sidebar:
 
     st.divider()
 
-    # ===== CHANGELOG =====
     with st.expander(t("changelog_title", lang), expanded=False):
         cl_content, cl_time, cl_ok = fetch_changelog_cached()
         if cl_ok:
-            st.caption(
-                f"🕐 {('Cập nhật lúc' if lang == 'vi' else 'Fetched at')}: {cl_time}"
-            )
-            safe_cl = (cl_content
-                       .replace("&", "&amp;")
-                       .replace("<", "&lt;")
-                       .replace(">", "&gt;"))
+            st.caption(f"🕐 {('Cập nhật lúc' if lang == 'vi' else 'Fetched at')}: {cl_time}")
+            safe_cl = (cl_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
             st.markdown(f'<div class="changelog-view">{safe_cl}</div>', unsafe_allow_html=True)
-            if st.button(
-                t("changelog_refresh", lang),
-                use_container_width=True,
-                key="changelog_refresh_btn"
-            ):
+            if st.button(t("changelog_refresh", lang), use_container_width=True, key="changelog_refresh_btn"):
                 st.session_state._changelog_cache = None
                 st.session_state._changelog_cache_time = 0
                 st.rerun()
         else:
             st.caption(cl_content)
-            if st.button(
-                t("changelog_retry", lang),
-                use_container_width=True,
-                key="changelog_retry_btn"
-            ):
+            if st.button(t("changelog_retry", lang), use_container_width=True, key="changelog_retry_btn"):
                 st.session_state._changelog_cache = None
                 st.session_state._changelog_cache_time = 0
                 st.rerun()
 
     st.divider()
 
-    # ===== PRIVACY POLICY =====
+    # PRIVACY POLICY
     with st.expander(t("privacy_btn", lang), expanded=False):
         st.markdown(PRIVACY_POLICY_HTML, unsafe_allow_html=True)
 
     st.divider()
 
-    # MEMORY
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         mem = st.text_area("Memory:", value=user_data.get("custom_instructions", ""),
@@ -4092,7 +4049,6 @@ if not SECRET_API_KEYS:
 
 if is_guest:
     st.markdown(f'<div class="guest-banner">👤 {t("guest_banner", lang)}</div>', unsafe_allow_html=True)
-    # Guest quota indicator
     db_q = GitHubStorage.load_db()
     g_used_now = get_guest_quota_used(db_q, device_id)
     g_limit_now = get_guest_daily_limit(db_q)
@@ -4355,6 +4311,7 @@ def _process_prompt(user_prompt):
         typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
         typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
 
+        # Gọi AI và stream kết quả
         for text_so_far, done, err in stream_gemini_with_failover(
             prompt_inputs=content_inputs,
             api_keys=SECRET_API_KEYS,
@@ -4433,6 +4390,7 @@ def _process_prompt(user_prompt):
     if final_text and final_err not in ("stopped",):
         _run_deferred_tasks(chat_data, user_prompt, lang)
 
+    # QUAN TRỌNG: Dùng st.rerun() để render lại chat với tin nhắn mới
     st.rerun()
 
 
