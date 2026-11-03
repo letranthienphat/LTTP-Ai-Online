@@ -2,7 +2,27 @@
   "phát": {
     "password": "aed6d8fac62b43b59f48d7450ec1011358d198a2a9533211d46322c1ba6eafc1",
     "custom_instructions": "",
-    "chats": {},
+    "chats": {
+      "93539f06-f55d-47d9-a43e-7c571771f2e1": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Thông tin về bạn?"
+          },
+          {
+            "role": "assistant",
+            "content": "Xin chào! Tôi là **LTTP AI Online** — một trợ lý AI độc lập do tác giả LTTP phát triển.\n\nTôi được tạo ra để hỗ trợ bạn trong nhiều tác vụ khác nhau như:\n* Trả lời các câu hỏi và cung cấp thông tin.\n* Soạn thảo văn bản, viết lách, tóm tắt nội dung.\n* Hỗ trợ học tập, nghiên cứu và giải quyết vấn đề.\n* Lập trình và xử lý công việc văn phòng.\n\nHôm nay tôi có thể giúp gì cho bạn?"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-11-03T21:57:42.308084+07:00",
+        "updated_at": "2026-11-03T21:58:15.966346+07:00"
+      }
+    },
     "remembered_devices": [
       "871c408a-062c-46c7-ae9b-0b8410aafd06",
       "834f7f4e-019e-4d13-a032-32f235b425f0",
