@@ -82,6 +82,9 @@ MODEL_LIST_CACHE_SECONDS = 300
 CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
 CHANGELOG_CACHE_SECONDS = 600
 
+# Privacy Policy
+PRIVACY_POLICY_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md"
+
 # Guest quota
 GUEST_DAILY_MSG_LIMIT_HIGH = 150
 GUEST_DAILY_MSG_LIMIT_NORMAL = 100
@@ -2134,10 +2137,7 @@ TRANSLATIONS = {
         "memory_placeholder": "Example: You are a professional Python assistant.",
         "save_memory_btn": "💾 Save Memory",
         "memory_saved": "Memory saved!",
-        "api_title": "🔑 API Keys & Model",
-        "api_from_secrets": "API Keys are loaded from Streamlit Secrets",
-        "api_status_ready": "Ready", "api_status_missing": "Missing",
-        "model_select": "Select AI model:",
+        "model_select": "Choose A.I model:",
         "gen_config": "🎨 How A.I responds",
         "temperature": "Creativity level",
         "temperature_help": "**Creativity level** — how imaginative the A.I is.",
@@ -2160,7 +2160,7 @@ TRANSLATIONS = {
         "chat_placeholder": "Ask LTTP AI anything...",
         "current_chat": "Currently in", "model_label": "Model",
         "new_chat": "New Conversation",
-        "no_api_key": "⚠️ No Gemini API Keys found in Secrets!",
+        "no_api_key": "⚠️ No A.I service is available right now!",
         "ai_thinking": "LTTP AI is thinking...",
         "ai_typing": "LTTP AI is typing...",
         "ai_error": "❌ Could not generate AI response.",
@@ -2300,6 +2300,11 @@ TRANSLATIONS = {
         "changelog_title": "📢 What's New",
         "changelog_refresh": "🔄 Refresh",
         "changelog_retry": "🔄 Retry",
+        "privacy_title": "🔒 Privacy Policy & Data Processing",
+        "privacy_desc": "Please read carefully how we handle your data.",
+        "privacy_link_label": "Read full legal notice:",
+        "privacy_btn": "📜 View Privacy Policy",
+        "privacy_accepted_note": "By using this software, you agree to the Privacy Policy.",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -2328,10 +2333,7 @@ TRANSLATIONS = {
         "memory_placeholder": "Ví dụ: Bạn là trợ lý lập trình Python chuyên nghiệp.",
         "save_memory_btn": "💾 Lưu ghi nhớ cố định",
         "memory_saved": "Đã ghi nhớ thông tin!",
-        "api_title": "🔑 API Keys & Model",
-        "api_from_secrets": "API Keys được nạp từ Streamlit Secrets",
-        "api_status_ready": "Sẵn sàng", "api_status_missing": "Thiếu",
-        "model_select": "Chọn mô hình AI:",
+        "model_select": "Chọn trí tuệ nhân tạo:",
         "gen_config": "🎨 Cách A.I trả lời",
         "temperature": "Mức độ sáng tạo",
         "temperature_help": "**Mức độ sáng tạo** — A.I bay bổng đến mức nào.",
@@ -2354,7 +2356,7 @@ TRANSLATIONS = {
         "chat_placeholder": "Hỏi LTTP AI bất cứ điều gì...",
         "current_chat": "Đang trò chuyện trong", "model_label": "Mô hình",
         "new_chat": "Cuộc trò chuyện mới",
-        "no_api_key": "⚠️ Không tìm thấy Gemini API Key trong Secrets!",
+        "no_api_key": "⚠️ Hiện chưa có dịch vụ A.I nào khả dụng!",
         "ai_thinking": "LTTP AI đang suy nghĩ...",
         "ai_typing": "LTTP AI đang gõ...",
         "ai_error": "❌ Không thể tạo phản hồi từ AI.",
@@ -2494,11 +2496,30 @@ TRANSLATIONS = {
         "changelog_title": "📢 Có gì mới",
         "changelog_refresh": "🔄 Tải lại",
         "changelog_retry": "🔄 Thử lại",
+        "privacy_title": "🔒 Tuyên bố Quyền riêng tư & Xử lý dữ liệu",
+        "privacy_desc": "Vui lòng đọc kỹ cách chúng tôi xử lý dữ liệu của bạn.",
+        "privacy_link_label": "Đọc toàn bộ thông báo pháp lý:",
+        "privacy_btn": "📜 Xem Chính sách Quyền riêng tư",
+        "privacy_accepted_note": "Khi sử dụng phần mềm này, bạn đồng ý với Chính sách Quyền riêng tư.",
     }
 }
 
 def t(key: str, lang: str = "en") -> str:
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
+
+PRIVACY_POLICY_HTML = """
+<div style="max-height: 450px; overflow-y: auto; padding: 16px; background: rgba(102,126,234,0.06); border-radius: 10px; font-size: 0.92rem; line-height: 1.7;">
+<h3>🔒 TUYÊN BỐ VỀ QUYỀN RIÊNG TƯ VÀ CÁCH XỬ LÝ DỮ LIỆU</h3>
+<ol style="padding-left: 20px;">
+<li><b>Phần mềm cam kết không chia sẻ dữ liệu cá nhân với bất kỳ bên thứ ba nào; mọi dữ liệu đều được xử lý một cách cẩn trọng.</b></li>
+<li>Phần mềm sử dụng một số cookie nhất định (cụ thể là các cookie dùng để ghi nhớ phiên đăng nhập).</li>
+<li><b style="color: #fbbf24;">Lưu ý quan trọng:</b> Vui lòng kiểm chứng thông tin do AI tạo ra trước khi chia sẻ.</li>
+<li>Nghiêm cấm mọi hành vi sao chép phần mềm dưới bất kỳ hình thức nào mà không được phép. Tìm hiểu thêm về các quy định pháp lý liên quan đến bản quyền tại:
+   <a href="https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md" target="_blank" style="color: #667eea;">https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md</a>
+</li>
+</ol>
+</div>
+"""
 
 TERMS_OF_USE_HTML = """
 <div style="max-height: 400px; overflow-y: auto; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; font-size: 0.9rem; line-height: 1.6;">
@@ -2921,6 +2942,10 @@ def render_auth_ui():
                 with st.expander(t("terms_show_btn", lang), expanded=False):
                     st.markdown(TERMS_OF_USE_HTML, unsafe_allow_html=True)
                 terms_agree = st.checkbox(t("terms_accept_checkbox", lang), value=False, key="terms_agree_chk")
+
+                st.markdown(f"**{t('privacy_title', lang)}**")
+                with st.expander(t("privacy_btn", lang), expanded=False):
+                    st.markdown(PRIVACY_POLICY_HTML, unsafe_allow_html=True)
 
                 if st.form_submit_button(t("register_btn", lang), use_container_width=True):
                     if not enforce_rate_limit("register_attempt", "Register"):
@@ -3652,7 +3677,7 @@ with st.sidebar:
             st.session_state.messages = []
             st.rerun()
 
-    # CHAT LIST (không còn nút QL cạnh từng chat)
+    # CHAT LIST
     st.subheader(t("chat_list", lang))
     if not user_chats:
         st.caption(t("no_chats", lang))
@@ -3689,10 +3714,9 @@ with st.sidebar:
                         time.sleep(0.3)
                         st.rerun()
 
-    # ============ QUICK LOOKUP TOGGLE (dưới chat list) ============
+    # ============ QUICK LOOKUP TOGGLE ============
     ql_on = is_quick_lookup_mode()
     if ql_on:
-        # Trạng thái BẬT — nút màu vàng cam
         toggle_btn_label = "🔍 Quick Lookup: BẬT" if lang == "vi" else "🔍 Quick Lookup: ON"
         toggle_help = (
             "Nhấn để TẮT Quick Lookup — AI sẽ nhớ ngữ cảnh bình thường"
@@ -3700,7 +3724,6 @@ with st.sidebar:
             "Click to DISABLE Quick Lookup — AI will remember context normally"
         )
     else:
-        # Trạng thái TẮT — nút màu xám
         toggle_btn_label = "🔍 Quick Lookup: TẮT" if lang == "vi" else "🔍 Quick Lookup: OFF"
         toggle_help = (
             "Nhấn để BẬT Quick Lookup — AI sẽ KHÔNG nhớ ngữ cảnh, chỉ trả lời câu hỏi mới nhất"
@@ -3708,7 +3731,6 @@ with st.sidebar:
             "Click to ENABLE Quick Lookup — AI will NOT remember context, only answers latest question"
         )
 
-    # Hiển thị nút toggle lớn với màu sắc thay đổi theo trạng thái
     if ql_on:
         st.markdown("""
         <style>
@@ -3745,7 +3767,6 @@ with st.sidebar:
         time.sleep(0.3)
         st.rerun()
 
-    # Caption mô tả ngắn dưới nút
     if ql_on:
         st.caption(
             "⚠️ Đang BẬT — AI sẽ không nhớ ngữ cảnh trước đó."
@@ -3841,7 +3862,7 @@ with st.sidebar:
 
     st.divider()
 
-    # ===== CONTEXT INFO (RÚT GỌN in v1.40.0) =====
+    # ===== CONTEXT INFO (RÚT GỌN) =====
     with st.expander(t("context_title", lang), expanded=False):
         ctx_budget = get_context_budget(sel_model)
         cur_msgs = st.session_state.messages
@@ -3859,11 +3880,8 @@ with st.sidebar:
 
     st.divider()
 
-    # ===== CHANGELOG (NEW in v1.40.0) =====
-    with st.expander(
-        t("changelog_title", lang),
-        expanded=False
-    ):
+    # ===== CHANGELOG =====
+    with st.expander(t("changelog_title", lang), expanded=False):
         cl_content, cl_time, cl_ok = fetch_changelog_cached()
         if cl_ok:
             st.caption(
@@ -3895,6 +3913,12 @@ with st.sidebar:
 
     st.divider()
 
+    # ===== PRIVACY POLICY =====
+    with st.expander(t("privacy_btn", lang), expanded=False):
+        st.markdown(PRIVACY_POLICY_HTML, unsafe_allow_html=True)
+
+    st.divider()
+
     # MEMORY
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
@@ -3916,14 +3940,7 @@ with st.sidebar:
                 st.toast(t("memory_saved", lang), icon="🧠")
                 time.sleep(0.3); st.rerun()
 
-    st.subheader(t("api_title", lang))
-    st.caption(t("api_from_secrets", lang))
-    for i, key in enumerate([API_KEY_1, API_KEY_2], start=1):
-        if key:
-            masked = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "••••••••"
-            st.markdown(f"**Key {i}:** `{masked}` <span class='status-badge badge-ready'>{t('api_status_ready', lang)}</span>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"**Key {i}:** *Not configured* <span class='status-badge badge-missing'>{t('api_status_missing', lang)}</span>", unsafe_allow_html=True)
+    st.subheader(t("model_select", lang))
 
     available_models = get_available_models_cached()
 
@@ -4151,9 +4168,7 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
     try:
         all_messages = st.session_state.messages
 
-        # Không tóm tắt khi ở QL mode
         if is_quick_lookup_mode():
-            # Chỉ đặt title nếu cần
             if not chat_data.get("title") or chat_data.get("title") in (t("new_chat", lang), "Quick Lookup"):
                 chat_data["title"] = "Quick Lookup"
             if st.session_state.current_chat_id:
@@ -4168,7 +4183,6 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
                     safe_save_db(db_data)
             return
 
-        # Đặt title nếu chưa có
         if not chat_data.get("title") or chat_data.get("title") == t("new_chat", lang):
             try:
                 title = generate_chat_title(user_prompt, SECRET_API_KEYS, sel_model, lang)
@@ -4176,7 +4190,6 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
             except Exception:
                 pass
 
-        # Tóm tắt nếu cần (chỉ khi vượt 85% ngưỡng)
         context_budget = get_context_budget(sel_model)
         history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
         trigger_tokens = int(context_budget * SUMMARY_TRIGGER_RATIO)
@@ -4223,14 +4236,12 @@ def _process_prompt(user_prompt):
     if not enforce_message_content(user_prompt):
         return
 
-    # Guest quota check
     if is_guest:
         db_q = GitHubStorage.load_db(force_refresh=True)
         allowed, used_now, limit_now = check_guest_quota(db_q)
         if not allowed:
             st.error(t("guest_quota_exceeded", lang))
             st.stop()
-        # Increment quota
         increment_guest_quota(db_q, device_id)
         try:
             GitHubStorage.save_db(db_q)
@@ -4266,7 +4277,6 @@ def _process_prompt(user_prompt):
     context_budget = get_context_budget(sel_model)
     history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
 
-    # Build system prompt
     copyright_guard = COPYRIGHT_GUARD_PROMPT_VI if lang == "vi" else COPYRIGHT_GUARD_PROMPT_EN
     user_memory = user_data.get("custom_instructions", "").strip()
     system_parts = [copyright_guard]
@@ -4287,7 +4297,7 @@ def _process_prompt(user_prompt):
 
     all_messages = st.session_state.messages
     if ql_active:
-        recent_window = []  # QL: không có context
+        recent_window = []
     else:
         recent_window = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
         if recent_window and recent_window[-1].get("content") == user_prompt:
