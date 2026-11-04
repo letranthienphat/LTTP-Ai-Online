@@ -2,7 +2,27 @@
   "phát": {
     "password": "aed6d8fac62b43b59f48d7450ec1011358d198a2a9533211d46322c1ba6eafc1",
     "custom_instructions": "",
-    "chats": {},
+    "chats": {
+      "1717b9ff-ab23-49a4-9e52-d72d98700bbf": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Những quảng cáo thú vị mà samsung, apples và các hãng lớn trên thế giới đã cà khịa nhau?"
+          },
+          {
+            "role": "assistant",
+            "content": "Cuộc chiến quảng cáo \"cà khịa\" (dunking/roasting) giữa các tập đoàn lớn trên thế giới luôn là một món ăn tinh thần thú vị cho người tiêu dùng. Nó không chỉ thể hiện sự sáng tạo đỉnh cao của các agency tiếp thị mà còn cho thấy sự cạnh tranh nảy lửa giữa các thương hiệu. \n\nDưới đây là những chiến dịch quảng cáo \"cà khịa\" điền hình và nổi tiếng nhất giữa Samsung, Apple và các hãng lớn khác:\n\n---\n\n### 1. Samsung \"cà khịa\" Apple: Trận chiến kinh điển\n\nSamsung là thương hiệu \"chăm\" đá xoáy Apple nhất với hàng loạt chiến dịch để đời.\n\n*   **Chiến dịch \"Growing Up\" (2017):**\n    *   **Nội dung:** Quảng cáo kể về một anh chàng là \"fan cứng\" của iPhone từ năm 2007 đến 2017. Qua từng năm, anh luôn gặp rắc rối với iPhone: hết"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-11-04T22:23:08.146098+07:00",
+        "updated_at": "2026-11-04T22:23:32.624290+07:00"
+      }
+    },
     "remembered_devices": [
       "871c408a-062c-46c7-ae9b-0b8410aafd06",
       "834f7f4e-019e-4d13-a032-32f235b425f0",
