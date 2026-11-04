@@ -2,7 +2,27 @@
   "phát": {
     "password": "aed6d8fac62b43b59f48d7450ec1011358d198a2a9533211d46322c1ba6eafc1",
     "custom_instructions": "",
-    "chats": {},
+    "chats": {
+      "e6b698e7-1d2d-44e7-9f90-876dd6d9bf32": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Nên ngủ khoảng mấy tiếng để dù dậy sớm vẫn tỉnh táo và khỏe hơn dậy trễ?"
+          },
+          {
+            "role": "assistant",
+            "content": "Để cơ thể tỉnh táo, khỏe khoắn khi dậy sớm mà không cảm thấy mệt mỏi hay uể oải (hiện tượng \"nặng đầu\" hay quán tính giấc ngủ), chìa khóa không chỉ nằm ở **số lượng giờ ngủ** mà còn ở **chu kỳ giấc ngủ**.\n\nMỗi chu kỳ giấc ngủ của con người kéo dài khoảng **90 phút** (bao gồm các giai đoạn từ ngủ nông đến ngủ sâu và ngủ mơ REM). Một người trưởng thành thường cần từ **4 đến 6 chu kỳ** mỗi đêm.\n\nDưới đây là thời gian ngủ lý tưởng để bạn vừa dậy sớm vừa cảm thấy sảng khoái:\n\n### 1. Các mốc thời gian ngủ tối ưu (tính theo chu kỳ 90 phút)\nNếu bạn cần thức dậy sớm, hãy nhắm đến các mốc tổng thời gian ngủ sau (đã tính thêm khoảng 10-15 phút để bạn chìm vào giấc ngủ):\n\n*   **6 tiếng (4 chu kỳ):** Phù hợp tối thiểu cho người bận rộn. Bạn vẫn đủ tỉnh táo nhưng không nên duy trì liên tục nhiều ngày.\n*   **7 tiếng rưỡi (5 chu kỳ):** Đây là **mốc lý tưởng nhất** cho đại đa số người trưởng thành, đảm bảo cơ thể được phục hồi toàn diện.\n*   **9 tiếng (6 chu kỳ):** Dành cho những ngày bạn cần nghỉ ngơi sâu hoặc cơ thể đang cần hồi phục sau khi vận động nặng/ốm dậy.\n\n*Ví dụ:* Nếu bạn muốn dậy lúc **6:00 sáng**, thay vì ngủ 8 tiếng (dậy lúc 4:00 sáng - thấy khó chịu), bạn nên nhắm đến việc ngủ đủ 5 chu kỳ, tức là lên giường và cố gắng ngủ từ **10:15 tối** hôm trước.\n\n### 2. Tại sao ngủ ít hơn (nhưng đúng chu kỳ) lại khỏe hơn ngủ trễ?\n*   **Tránh bị đánh thức giữa giấc ngủ sâu:** Nếu bạn ngủ 8 tiếng rưỡi (lỡ cắt ngang một chu kỳ), bạn sẽ bị đánh thức khi đang ở giai đoạn ngủ sâu. Lúc này cơ thể sẽ bị \"quán tính giấc ngủ\", khiến bạn cảm thấy cực kỳ mệt mỏi, đầu óc mơ màng dù thời gian ngủ dài hơn.\n*   **Thức dậy ở pha ngủ nông:** Nếu bạn dậy vào cuối một chu kỳ (ví dụ sau 6 tiếng hoặc 7 tiếng rưỡi), bạn đang ở pha ngủ nông, cơ thể sẽ dễ dàng bật dậy và tỉnh táo ngay lập tức.\n\n### 3. Bí quyết để dậy sớm mà vẫn khỏe mạnh:\n*   **Cố định giờ thức dậy:** Hãy duy trì giờ thức dậy cố định mỗi ngày (cả cuối tuần). Điều này giúp đồng hồ sinh học của cơ thể quen với nhịp điệu tự nhiên.\n*   **Hạn chế ánh sáng xanh:** Tắt điện thoại, máy tính ít nhất 30 phút trước khi ngủ để não bộ sản xuất hormone melatonin (hormone giúp ngủ ngon).\n*   **Đón ánh sáng mặt trời ngay khi dậy:** Khi chuông reo, hãy mở rèm cửa hoặc bước ra ánh sáng tự nhiên. Ánh sáng sẽ phát tín hiệu cho não dừng sản xuất melatonin và giúp bạn tỉnh táo hoàn toàn.\n*   **Uống một cốc nước ấm:** Sau một đêm ngủ dài, cơ thể thường mất nước nhẹ"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-11-04T19:48:24.972418+07:00",
+        "updated_at": "2026-11-04T19:48:49.128740+07:00"
+      }
+    },
     "remembered_devices": [
       "871c408a-062c-46c7-ae9b-0b8410aafd06",
       "834f7f4e-019e-4d13-a032-32f235b425f0",
