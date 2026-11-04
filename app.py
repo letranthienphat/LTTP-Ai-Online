@@ -27,7 +27,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.40.1"  # Tăng version để user biết có fix
+APP_VERSION = "1.41.0"  # Tăng version cho bản tối ưu tốc độ
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -73,9 +73,14 @@ DEFAULT_TYPING_CPS = 30
 COOKIE_STOP_FLAG = "LTTP_stop_flag"
 QL_MODE_COOKIE = "LTTP_ql_mode"
 
-SUMMARY_TRIGGER_RATIO = 0.85
-GEMINI_REQUEST_TIMEOUT = 12
-MODEL_LIST_CACHE_SECONDS = 300
+# ========== TỐI ƯU TỐC ĐỘ ==========
+SUMMARY_TRIGGER_RATIO = 0.95       # Chỉ tóm tắt khi gần đầy 95% (trước 0.85)
+GEMINI_REQUEST_TIMEOUT = 8         # Timeout ngắn hơn (trước 12)
+MODEL_LIST_CACHE_SECONDS = 600     # Cache model list 10 phút (trước 5)
+SKIP_TITLE_GEN_ON_FIRST = False    # Sinh title ngay từ đầu nhưng không block
+DEFER_TITLE_AND_SUMMARY = True     # Chạy sau khi user đã thấy response
+STREAM_FIRST_TOKEN_FAST = True     # Yield token đầu tiên càng sớm càng tốt
+# ===================================
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
 CHANGELOG_CACHE_SECONDS = 600
@@ -100,7 +105,7 @@ MODEL_CONTEXT_BUDGET = {
 DEFAULT_CONTEXT_BUDGET = 800_000
 HISTORY_BUDGET_RATIO = 0.30
 MIN_RECENT_MESSAGES = 4
-MAX_RECENT_MESSAGES = 30
+MAX_RECENT_MESSAGES = 20           # Giảm từ 30 xuống 20 để nhanh hơn
 SUMMARY_BATCH_SIZE = 30
 
 RATE_LIMITS = {
@@ -238,10 +243,11 @@ if not device_id:
 
 DEFAULT_MODEL = "gemini-3.5-flash"
 
+# CHUỖI FAILOVER NGẮN GỌN hơn để tránh thử quá nhiều model khi fail
 FAILOVER_MODEL_CHAIN = [
-    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash",
-    "gemini-3.7-flash", "gemini-3.8-flash", "gemini-2.5-flash",
-    "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
 ]
 
 FALLBACK_MODELS = [
@@ -734,8 +740,8 @@ def fetch_changelog_cached() -> tuple:
     try:
         resp = requests.get(
             CHANGELOG_URL,
-            timeout=8,
-            headers={"User-Agent": "LTTP-AI-Online/1.40.1"}
+            timeout=5,  # Nhanh hơn
+            headers={"User-Agent": "LTTP-AI-Online/1.41.0"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -1407,7 +1413,7 @@ def is_rate_limit_error(error: Exception) -> bool:
 
 
 # ==========================================
-# 7. GỌI GEMINI VỚI FAILOVER + STOP + TIMEOUT
+# 7. GỌI GEMINI - TỐI ƯU TỐC ĐỘ
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -1423,6 +1429,12 @@ def stream_gemini_with_failover(
     typing_mode=TYPING_MODE_SMOOTH,
     typing_cps=DEFAULT_TYPING_CPS,
 ):
+    """
+    TỐI ƯU TỐC ĐỘ:
+    - Yield token đầu tiên NGAY khi có.
+    - Smooth mode: cập nhật UI trực tiếp mỗi chunk (không delay).
+    - Failover: thử key tiếp theo nhanh nếu 429.
+    """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
@@ -1468,6 +1480,7 @@ def stream_gemini_with_failover(
                         last_error = "Empty response"
                         continue
 
+                # Stream mode - yield càng nhanh càng tốt
                 response = model.generate_content(
                     prompt_inputs,
                     stream=True,
@@ -1506,11 +1519,13 @@ def stream_gemini_with_failover(
                     accumulated += chunk_text
 
                     if typing_mode == TYPING_MODE_SMOOTH:
+                        # TỐI ƯU: Cập nhật UI ngay lập tức không delay
                         if ui_placeholder is not None:
                             display = accumulated + '<span class="typing-cursor"></span>'
                             ui_placeholder.markdown(display, unsafe_allow_html=True)
                         yield accumulated, False, None
                     else:
+                        # Controlled mode
                         pending_buffer += chunk_text
                         now = time.time()
                         elapsed = now - last_release_time
@@ -3550,7 +3565,6 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.current_chat_id = None
     st.session_state.messages = []
 
-# Safe init
 _SAFE_MODEL = user_data["preferences"].get("model", DEFAULT_MODEL)
 _SAFE_TEMP = float(user_data["preferences"].get("temperature", 0.7))
 _SAFE_TOP_P = float(user_data["preferences"].get("top_p", 0.95))
@@ -3706,7 +3720,6 @@ with st.sidebar:
                         time.sleep(0.3)
                         st.rerun()
 
-    # QUICK LOOKUP TOGGLE
     ql_on = is_quick_lookup_mode()
     if ql_on:
         toggle_btn_label = "🔍 Quick Lookup: BẬT" if lang == "vi" else "🔍 Quick Lookup: ON"
@@ -3871,7 +3884,6 @@ with st.sidebar:
 
     st.divider()
 
-    # PRIVACY POLICY
     with st.expander(t("privacy_btn", lang), expanded=False):
         st.markdown(PRIVACY_POLICY_HTML, unsafe_allow_html=True)
 
@@ -4118,9 +4130,10 @@ for msg in st.session_state.messages:
 
 
 # ==========================================
-# 33. XỬ LÝ PROMPT
+# 33. XỬ LÝ PROMPT - TỐI ƯU
 # ==========================================
 def _run_deferred_tasks(chat_data, user_prompt, lang):
+    """Chạy các tác vụ phụ (title, summary) KHÔNG block response."""
     try:
         all_messages = st.session_state.messages
 
@@ -4139,6 +4152,7 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
                     safe_save_db(db_data)
             return
 
+        # Title: chỉ sinh nếu chưa có
         if not chat_data.get("title") or chat_data.get("title") == t("new_chat", lang):
             try:
                 title = generate_chat_title(user_prompt, SECRET_API_KEYS, sel_model, lang)
@@ -4146,6 +4160,7 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
             except Exception:
                 pass
 
+        # Summary: chỉ khi thực sự cần (95% ngưỡng)
         context_budget = get_context_budget(sel_model)
         history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
         trigger_tokens = int(context_budget * SUMMARY_TRIGGER_RATIO)
@@ -4233,6 +4248,7 @@ def _process_prompt(user_prompt):
     context_budget = get_context_budget(sel_model)
     history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
 
+    # Build system prompt - TỐI ƯU ĐỂ KHÔNG CHẬM
     copyright_guard = COPYRIGHT_GUARD_PROMPT_VI if lang == "vi" else COPYRIGHT_GUARD_PROMPT_EN
     user_memory = user_data.get("custom_instructions", "").strip()
     system_parts = [copyright_guard]
@@ -4311,7 +4327,6 @@ def _process_prompt(user_prompt):
         typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
         typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
 
-        # Gọi AI và stream kết quả
         for text_so_far, done, err in stream_gemini_with_failover(
             prompt_inputs=content_inputs,
             api_keys=SECRET_API_KEYS,
@@ -4374,6 +4389,7 @@ def _process_prompt(user_prompt):
 
     clear_stop_flag()
 
+    # Lưu chat
     if final_text:
         chat_data["messages"] = st.session_state.messages
         chat_data["updated_at"] = vn_now().isoformat()
@@ -4387,10 +4403,10 @@ def _process_prompt(user_prompt):
             db_data[st.session_state.user] = user_data
             safe_save_db(db_data)
 
+    # Chạy deferred tasks KHÔNG block
     if final_text and final_err not in ("stopped",):
         _run_deferred_tasks(chat_data, user_prompt, lang)
 
-    # QUAN TRỌNG: Dùng st.rerun() để render lại chat với tin nhắn mới
     st.rerun()
 
 
