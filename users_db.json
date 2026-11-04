@@ -2,27 +2,7 @@
   "phát": {
     "password": "aed6d8fac62b43b59f48d7450ec1011358d198a2a9533211d46322c1ba6eafc1",
     "custom_instructions": "",
-    "chats": {
-      "e1bc9258-1fb9-4a3a-ae87-e9a589ba7436": {
-        "title": "Những quảng cáo thú vị mà...",
-        "messages": [
-          {
-            "role": "user",
-            "content": "Những quảng cáo thú vị mà samsung, apples và các hãng lớn trên thế giới đã cà khịa nhau?"
-          },
-          {
-            "role": "assistant",
-            "content": "Cuộc chiến quảng cáo (Brand Wars) giữa các ông lớn công nghệ và các thương hiệu toàn cầu luôn là đề tài vô cùng thú vị. Những màn \"cà khịa\" đỉnh cao này không chỉ thể hiện sự thông minh, sáng tạo mà còn đem lại tiếng cười khoái chí cho người xem.\n\nDưới đây là những chiến dịch quảng cáo \"cà khịa\" đi vào lịch sử của Samsung, Apple và các hãng lớn trên thế giới:\n\n---\n\n### 1. Samsung vs. Apple: \"Cuộc chiến không hồi kết\"\n\nSamsung có lẽ là thương hiệu chăm \"cà khịa\" Apple nhất trên thị trường smartphone.\n\n*   **Chuỗi quảng cáo \"Ingenius\" (2018):**\n    Samsung đặt bối cảnh tại một cửa hàng Apple Store. Khách hàng liên tục hỏi nhân viên Apple những câu \"hóc hóc\" như: *Tại sao iPhone không có sạc nhanh đi kèm? Tại sao camera không chụp"
-          }
-        ],
-        "summary": "",
-        "summary_updated_at": "",
-        "summary_token_count": 0,
-        "is_quick_lookup": false,
-        "created_at": "2026-11-04T22:21:21.155992+07:00",
-        "updated_at": "2026-11-04T22:21:45.664668+07:00"
-      }
-    },
+    "chats": {},
     "remembered_devices": [
       "871c408a-062c-46c7-ae9b-0b8410aafd06",
       "834f7f4e-019e-4d13-a032-32f235b425f0",
