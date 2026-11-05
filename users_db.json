@@ -91,6 +91,14 @@
           {
             "role": "assistant",
             "content": "Xin chào! Tôi là LTTP AI Online. Tôi có thể giúp gì cho bạn hôm nay?"
+          },
+          {
+            "role": "user",
+            "content": "bạn có thể làm gì?"
+          },
+          {
+            "role": "assistant",
+            "content": "Tôi là LTTP AI Online, một trợ lý AI thông minh có thể hỗ trợ bạn trong nhiều công việc khác nhau, chẳng hạn như:\n\n1. **Giải đáp thắc mắc:** Trả lời các câu hỏi về nhiều lĩnh vực như kiến thức chung, khoa học, lịch sử, văn hóa, đời sống...\n2. **Viết lách & Sáng tạo nội dung:** Hỗ trợ soạn thảo email, bài viết, tóm tắt văn bản, sáng tạo kịch bản, viết thơ, lên ý tưởng...\n3. **Dịch thuật & Ngôn ngữ:** Dịch thuật giữa các ngôn ngữ, kiểm tra ngữ pháp, hỗ trợ học ngoại ngữ.\n4. **Hỗ trợ học tập & Lập trình:** Giải các bài toán, giải thích khái niệm phức tạp, hỗ trợ viết code, tìm và sửa lỗi lập trình.\n5. **Lên kế hoạch & Tư vấn:** Hỗ trợ lập kế hoạch công việc, học tập, quản lý thời gian, tư vấn giải pháp cho các vấn đề thường nhật.\n\nBạn đang cần tôi hỗ trợ công việc hoặc giải đáp thắc mắc cụ thể nào không?"
           }
         ],
         "summary": "",
@@ -98,7 +106,7 @@
         "summary_token_count": 0,
         "is_quick_lookup": false,
         "created_at": "2026-11-05T18:39:54.685759+07:00",
-        "updated_at": "2026-11-05T18:39:57.193098+07:00"
+        "updated_at": "2026-11-05T18:40:10.241250+07:00"
       }
     },
     "remembered_devices": [
