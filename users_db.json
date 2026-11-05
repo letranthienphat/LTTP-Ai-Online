@@ -27,7 +27,55 @@
   "__blocklist__": {},
   "__guest_quotas__": {},
   "__lttp_security__": {
-    "history": []
+    "history": [
+      {
+        "id": "181b57db-5e96-42af-a1ee-88918a8a89f6",
+        "ts": "2026-11-05 18:39:35",
+        "user": "phát",
+        "device": "6ef354...6775",
+        "findings": {
+          "layers": [
+            {
+              "name": "AES-256-GCM",
+              "status": "active",
+              "desc": "Hardware-accelerated encryption"
+            },
+            {
+              "name": "LTTP-Cipher",
+              "status": "active",
+              "desc": "Backup encryption for legacy devices"
+            },
+            {
+              "name": "HMAC-SHA256",
+              "status": "active",
+              "desc": "Integrity verification"
+            },
+            {
+              "name": "Payload Obfuscation",
+              "status": "active",
+              "desc": "Anti-reverse-engineering"
+            },
+            {
+              "name": "Replay Prevention",
+              "status": "active",
+              "desc": "Nonce + timestamp"
+            },
+            {
+              "name": "Entropy Detection",
+              "status": "active",
+              "desc": "Anomaly detection"
+            }
+          ],
+          "issues": [
+            {
+              "severity": "high",
+              "msg": "Encryption roundtrip failed"
+            }
+          ],
+          "score": 80
+        }
+      }
+    ]
   },
   "phát": {
     "password": "9ba596ae1c18c2b922dbd9cb93a0dea859f575ae5af7220547b97d534d70241a",
