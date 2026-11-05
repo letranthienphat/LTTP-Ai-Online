@@ -97,6 +97,14 @@
           {
             "role": "assistant",
             "content": "Đối với người trưởng thành, thời gian ngủ lý tưởng để cơ thể phục hồi hoàn toàn và thức dậy với sự tỉnh táo là từ **7 đến 9 tiếng mỗi đêm**. \n\nTuy nhiên, thời gian ngủ không chỉ tính bằng số giờ mà còn phụ thuộc vào **chu kỳ giấc ngủ**. Một chu kỳ ngủ của con người kéo dài khoảng **90 phút** (1,5 tiếng), bao gồm các giai đoạn từ ngủ nông, ngủ sâu cho đến ngủ mơ (REM). \n\nĐể thức dậy mà không bị mệt mỏi hay ngái ngủ (hiện tượng *sleep inertia*), bạn nên tính toán thời gian ngủ sao cho hoàn thành trọn vẹn các chu kỳ. Ví dụ:\n* **5 chu kỳ** = 7,5 tiếng\n* **6 chu kỳ** = 9 tiếng\n\nDưới đây là một số mẹo giúp bạn thức dậy tỉnh táo hơn:\n1. **Duy trì giờ giấc ổn định:** Đi ngủ và thức dậy vào cùng một khung giờ mỗi ngày (cả cuối tuần) để đồng hồ sinh học hoạt động tốt nhất.\n2. **Tránh ánh sáng xanh trước khi ngủ:** Tắt điện thoại, máy tính ít nhất 30 phút trước khi ngủ để cơ thể sản xuất hormone melatonin (hormone gây buồn ngủ).\n3. **Uống đủ nước và vận động nhẹ:** Ngay khi thức dậy, hãy uống một cốc nước ấm và tiếp xúc với ánh sáng tự nhiên để báo hiệu cho cơ thể biết ngày mới đã bắt đầu.\n\nNếu bạn cần tư vấn thêm về cách cải thiện chất lượng giấc ngủ, cứ cho tôi biết nhé!"
+          },
+          {
+            "role": "user",
+            "content": "vậy còn 3 và 4 chu kỳ thì mấy giờ?"
+          },
+          {
+            "role": "assistant",
+            "content": "Nếu tính theo chu kỳ giấc ngủ (mỗi chu kỳ khoảng 90 phút), thời gian ngủ cho 3 và 4 chu kỳ sẽ như sau (tính từ thời điểm bạn bắt đầu chìm vào giấc ngủ, thường mất khoảng 10-15 phút để ngủ):\n\n* **3 chu kỳ (4,5 tiếng):** Phù hợp cho một giấc ngủ ngắn hoặc khi bạn có lịch trình quá bận rộn"
           }
         ],
         "summary": "",
@@ -104,7 +112,7 @@
         "summary_token_count": 0,
         "is_quick_lookup": false,
         "created_at": "2026-11-05T20:42:37.603749+07:00",
-        "updated_at": "2026-11-05T20:42:51.952819+07:00"
+        "updated_at": "2026-11-05T20:43:45.286813+07:00"
       }
     },
     "remembered_devices": [
