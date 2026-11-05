@@ -9,7 +9,18 @@
       "updated_at": ""
     }
   },
-  "__traffic_log__": {},
+  "__traffic_log__": {
+    "2026-11-05": {
+      "visits": [
+        {
+          "time": "2026-11-05 18:39:14",
+          "label": "phát",
+          "role": "user",
+          "device": "6ef354b0-ed60-41b8-9caa-8dd448186775"
+        }
+      ]
+    }
+  },
   "__bug_reports__": [],
   "__security_log__": [],
   "__security_alerts__": [],
