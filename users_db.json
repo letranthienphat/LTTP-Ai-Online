@@ -80,7 +80,27 @@
   "phát": {
     "password": "9ba596ae1c18c2b922dbd9cb93a0dea859f575ae5af7220547b97d534d70241a",
     "custom_instructions": "",
-    "chats": {},
+    "chats": {
+      "4b8b1218-adfc-483f-82b2-e92c7c076c8e": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "chào"
+          },
+          {
+            "role": "assistant",
+            "content": "Xin chào! Tôi là LTTP AI Online. Tôi có thể giúp gì cho bạn hôm nay?"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-11-05T18:39:54.685759+07:00",
+        "updated_at": "2026-11-05T18:39:57.193098+07:00"
+      }
+    },
     "remembered_devices": [
       "6ef354b0-ed60-41b8-9caa-8dd448186775"
     ],
