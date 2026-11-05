@@ -86,7 +86,27 @@
   "phát": {
     "password": "9ba596ae1c18c2b922dbd9cb93a0dea859f575ae5af7220547b97d534d70241a",
     "custom_instructions": "",
-    "chats": {},
+    "chats": {
+      "cae395c5-fe05-4d61-a19a-1a30edb2bc9c": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Những quảng cáo thú vị mà samsung, apples và các hãng lớn trên thế giới đã cà khịa nhau?"
+          },
+          {
+            "role": "assistant",
+            "content": "Cuộc chiến quảng cáo giữa các ông lớn công nghệ — đặc biệt là **Apple và Samsung** — luôn là một trong những \"đặc sản\" thú vị nhất của giới marketing. Thay vì chỉ nói về tính năng sản phẩm, họ thường xuyên \"cà khịa\", châm chọc đối thủ bằng những chiến dịch cực kỳ thông minh, hài hước và đôi khi là cay đắng. \n\nDưới đây là những màn \"cà khịa\" đỉnh cao và nổi tiếng nhất giữa Apple, Samsung và một số hãng lớn khác:\n\n---\n\n### 1. Apple vs. Samsung: Cuộc chiến không có hồi kết\n\nCặp đôi này đóng góp nhiều màn \"đấu đá\" nhất trong lịch sử quảng cáo công nghệ.\n\n* **\"I'm a Mac, and"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-11-05T20:46:48.654362+07:00",
+        "updated_at": "2026-11-05T20:46:58.845148+07:00"
+      }
+    },
     "remembered_devices": [
       "6ef354b0-ed60-41b8-9caa-8dd448186775",
       "a158f83d-6e10-43b7-80e2-f420da79268d"
