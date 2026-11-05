@@ -32,7 +32,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.44.0"
+APP_VERSION = "1.45.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -58,7 +58,6 @@ SECURITY_ALERTS_MAX = 200
 LTTP_SECURITY_LOG_MAX = 500
 
 VN_TZ = timezone(timedelta(hours=7))
-VERSION_SCAN_INTERVAL = 60
 
 SMART_DRAFT_MIN_WORDS = 20
 SMART_DRAFT_INTERVAL_SEC = 5
@@ -80,15 +79,17 @@ DEFAULT_TYPING_CPS = 30
 COOKIE_STOP_FLAG = "LTTP_stop_flag"
 QL_MODE_COOKIE = "LTTP_ql_mode"
 LTTP_SECURITY_ENABLED_COOKIE = "LTTP_sec_enabled"
-LTTP_FEEDBACK_OPEN_COOKIE = "LTTP_fb_open"
 
-# ========== TỐI ƯU TỐC ĐỘ ==========
+# ========== TỐI ƯU TỐC ĐỘ & CHỐNG NGẮT ==========
 SUMMARY_TRIGGER_RATIO = 0.95
-GEMINI_REQUEST_TIMEOUT = 8
+GEMINI_REQUEST_TIMEOUT = 45          # Tăng mạnh từ 8 → 45s để tránh cắt giữa chừng
+GEMINI_STREAM_MAX_RETRIES = 2        # Retry stream nếu bị đứt giữa chừng
+GEMINI_RETRY_BACKOFF = 1.5           # Backoff giữa retry
 MODEL_LIST_CACHE_SECONDS = 600
 DEFER_TITLE_AND_SUMMARY = True
 STREAM_FIRST_TOKEN_FAST = True
-# ===================================
+STREAM_INACTIVITY_TIMEOUT = 30       # Nếu 30s không có token mới → coi như stream chết
+# ===================================================
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
 CHANGELOG_CACHE_SECONDS = 600
@@ -111,9 +112,9 @@ MODEL_CONTEXT_BUDGET = {
     "gemini-1.5-pro": 1_500_000,
 }
 DEFAULT_CONTEXT_BUDGET = 800_000
-HISTORY_BUDGET_RATIO = 0.30
-MIN_RECENT_MESSAGES = 4
-MAX_RECENT_MESSAGES = 20
+HISTORY_BUDGET_RATIO = 0.40          # Tăng từ 0.30 → 0.40 để giữ history lâu hơn
+MIN_RECENT_MESSAGES = 6              # Tăng từ 4 → 6
+MAX_RECENT_MESSAGES = 40             # Tăng từ 20 → 40 để AI nhớ lâu hơn
 SUMMARY_BATCH_SIZE = 30
 
 RATE_LIMITS = {
@@ -171,21 +172,6 @@ DISCLAIMER = {
 UPDATE_NOTICE = {
     "vi": "🔄 Phần mềm vừa được cập nhật",
     "en": "🔄 Software just got updated",
-}
-
-REBOOT_NOTICE = {
-    "vi": {
-        "title": "Đã có phiên bản mới!",
-        "desc": "Vui lòng tải lại trang (F5 hoặc Ctrl+R) để cập nhật.",
-        "button": "Tải lại ngay",
-        "later": "Để sau",
-    },
-    "en": {
-        "title": "New version available!",
-        "desc": "Please reload the page (F5 or Ctrl+R) to update.",
-        "button": "Reload now",
-        "later": "Later",
-    },
 }
 
 COPYRIGHT_GUARD_PROMPT_VI = (
@@ -429,11 +415,10 @@ lttp_security = LTTPSecurity()
 
 
 # ==========================================
-# 2b. CUSTOM CSS + RESPONSIVE + ANIMATED TITLE
+# 2b. CUSTOM CSS
 # ==========================================
 st.markdown("""
 <style>
-    /* ===== ANIMATED GRADIENT TITLE ===== */
     .main-header {
         background: linear-gradient(90deg, #667eea, #764ba2, #f093fb, #f5576c, #4facfe, #00f2fe, #667eea);
         background-size: 400% 400%;
@@ -528,14 +513,6 @@ st.markdown("""
         font-weight: 600; color:#667eea;
         text-align: center; margin-bottom: 10px;
     }
-    .reboot-banner {
-        padding: 14px 20px;
-        background: linear-gradient(90deg,#f59e0b,#f97316);
-        color:#fff; border-radius:12px; margin-bottom:14px;
-        box-shadow: 0 4px 16px rgba(249,115,22,0.35);
-    }
-    .reboot-banner-title { font-size:1.05rem; font-weight:800; margin-bottom:4px; }
-    .reboot-banner-desc { font-size:0.9rem; opacity:0.95; }
 
     .announcement-banner {
         padding: 16px 20px;
@@ -713,7 +690,6 @@ st.markdown("""
         border-color: rgba(239,68,68,0.7) !important;
     }
 
-    /* ===== HIDE FILE UPLOAD ===== */
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -731,7 +707,6 @@ st.markdown("""
         pointer-events: none !important;
     }
 
-    /* ===== RESPONSIVE MOBILE ===== */
     @media (max-width: 768px) {
         .main-header { font-size: 1.5rem !important; }
         .stButton button {
@@ -756,13 +731,13 @@ st.markdown("""
             padding-left: 0.6rem !important;
             padding-right: 0.6rem !important;
             padding-top: 1rem !important;
-            padding-bottom: 90px !important;
+            padding-bottom: 60px !important;
         }
     }
     @media (min-width: 769px) {
         section.main .block-container {
             padding-top: 1.5rem !important;
-            padding-bottom: 80px !important;
+            padding-bottom: 60px !important;
         }
     }
     img { max-width: 100% !important; height: auto !important; }
@@ -853,8 +828,16 @@ def get_available_models_cached() -> list:
 def smart_sliding_window(messages: list, budget_tokens: int,
                           min_msgs: int = MIN_RECENT_MESSAGES,
                           max_msgs: int = MAX_RECENT_MESSAGES) -> list:
+    """
+    FIX: Nếu không có message nào vượt budget thì lấy TOÀN BỘ (không cắt oan).
+    Chỉ cắt khi thực sự cần thiết.
+    """
     if not messages:
         return []
+    total_tokens = sum(estimate_tokens(m.get("content", "")) + 4 for m in messages)
+    if total_tokens <= budget_tokens and len(messages) <= max_msgs:
+        return messages[:]
+    
     selected = []
     accumulated = 0
     for m in reversed(messages):
@@ -872,6 +855,9 @@ def smart_sliding_window(messages: list, budget_tokens: int,
 
 
 def truncate_message_smart(content: str, max_tokens: int) -> str:
+    """
+    FIX: Cắt theo ranh giới từ, không cắt giữa câu → tránh AI hiểu lơ mơ.
+    """
     if not content:
         return content
     cur_tokens = estimate_tokens(content)
@@ -882,6 +868,11 @@ def truncate_message_smart(content: str, max_tokens: int) -> str:
     tail_chars = max_chars - head_chars
     head = content[:head_chars]
     tail = content[-tail_chars:] if tail_chars > 0 else ""
+    # Cắt về ranh giới từ gần nhất
+    if head and " " in head:
+        head = head.rsplit(" ", 1)[0]
+    if tail and " " in tail:
+        tail = tail.split(" ", 1)[-1]
     return head + "\n\n[... nội dung giữa đã lược bớt ...]\n\n" + tail
 
 
@@ -898,7 +889,7 @@ def fetch_changelog_cached() -> tuple:
         resp = requests.get(
             CHANGELOG_URL,
             timeout=5,
-            headers={"User-Agent": "LTTP-AI-Online/1.44.0"}
+            headers={"User-Agent": "LTTP-AI-Online/1.45.0"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -1341,7 +1332,7 @@ def enforce_message_content(text: str) -> bool:
 
 
 # ==========================================
-# 5. JAVASCRIPT INJECTION
+# 5. JAVASCRIPT INJECTION (đã bỏ version scanner)
 # ==========================================
 def inject_js(js_code: str):
     wrapped = "<script>\n(function() {\n" + js_code + "\n})();\n</script>"
@@ -1360,39 +1351,6 @@ def inject_js(js_code: str):
             _legacy_html(html_template, height=0, scrolling=False)
         except Exception:
             pass
-
-
-def inject_version_scanner():
-    js = (
-        'if (window.__lttp_version_scanner_installed) return;\n'
-        'window.__lttp_version_scanner_installed = true;\n'
-        'const CURRENT_VERSION = "' + APP_VERSION + '";\n'
-        'const SCAN_INTERVAL_MS = ' + str(VERSION_SCAN_INTERVAL * 1000) + ';\n'
-        'const COOKIE_NAME = "LTTP_app_version";\n'
-        'function getCookie(name) {\n'
-        '    const value = "; " + document.cookie;\n'
-        '    const parts = value.split("; " + name + "=");\n'
-        '    if (parts.length === 2) return parts.pop().split(";").shift();\n'
-        '    return null;\n'
-        '}\n'
-        'function checkVersion() {\n'
-        '    try {\n'
-        '        const cached = getCookie(COOKIE_NAME);\n'
-        '        if (cached && cached !== CURRENT_VERSION) {\n'
-        '            if (!document.getElementById("lttp-reboot-banner-injected")) {\n'
-        '                const banner = document.createElement("div");\n'
-        '                banner.id = "lttp-reboot-banner-injected";\n'
-        '                banner.style.cssText = "position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:999999;padding:14px 24px;background:linear-gradient(90deg,#f59e0b,#f97316);color:white;border-radius:12px;box-shadow:0 6px 24px rgba(249,115,22,0.55);font-family:sans-serif;max-width:90vw;";\n'
-        '                banner.innerHTML = "<div style=\\"font-weight:800;font-size:1.05rem;margin-bottom:4px;\\">🚀 Đã có phiên bản mới!</div><div style=\\"font-size:0.9rem;margin-bottom:10px;opacity:0.95;\\">Vui lòng tải lại trang để cập nhật.</div><button onclick=\\"location.reload()\\" style=\\"background:white;color:#f97316;border:none;padding:8px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:0.9rem;\\">Tải lại ngay</button>";\n'
-        '                document.body.appendChild(banner);\n'
-        '            }\n'
-        '        }\n'
-        '    } catch (e) {}\n'
-        '}\n'
-        'setTimeout(checkVersion, 3000);\n'
-        'setInterval(checkVersion, SCAN_INTERVAL_MS);\n'
-    )
-    inject_js(js)
 
 
 def inject_scroll_guard():
@@ -1682,8 +1640,19 @@ def is_rate_limit_error(error: Exception) -> bool:
     return any(k in err_str for k in keywords)
 
 
+def is_incomplete_error(error: Exception) -> bool:
+    """Phát hiện lỗi stream bị đứt giữa chừng (không phải rate limit, không phải stop)."""
+    err_str = str(error).lower()
+    incomplete_keywords = [
+        "incomplete", "truncated", "connection", "timeout", "timed out",
+        "reset", "broken pipe", "incomplete chunk", "stream", "interrupted",
+        "server disconnected", "eof", "unexpected end"
+    ]
+    return any(k in err_str for k in incomplete_keywords)
+
+
 # ==========================================
-# 7. GỌI GEMINI
+# 7. GỌI GEMINI - SỬA LỖI NGẮT GIỮA CHỪNG
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -1693,6 +1662,78 @@ def _build_model_chain(preferred_model: str) -> list:
     return chain
 
 
+def _call_stream_single(
+    model_name, api_k, prompt_inputs, system_instruction, generation_config,
+    lang, ui_placeholder, typing_mode, typing_cps, accumulated, check_stop
+):
+    """
+    Gọi 1 lần stream. Trả về (accumulated, done_reason, err).
+    done_reason: "complete" | "stopped" | "error" | "rate_limit"
+    """
+    genai.configure(api_key=api_k)
+    model = genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=system_instruction if system_instruction else None,
+        generation_config=generation_config or {}
+    )
+    
+    response = model.generate_content(
+        prompt_inputs,
+        stream=True,
+        request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
+    )
+    
+    display_buffer = ""
+    pending_buffer = ""
+    last_release_time = time.time()
+    chars_per_sec = max(1, int(typing_cps))
+    chunk_count = 0
+    
+    for chunk in response:
+        if check_stop():
+            return accumulated, "stopped", None
+        
+        try:
+            chunk_text = getattr(chunk, "text", None)
+        except Exception:
+            chunk_text = None
+        if not chunk_text:
+            continue
+        
+        chunk_count += 1
+        accumulated += chunk_text
+        
+        if typing_mode == TYPING_MODE_SMOOTH:
+            if ui_placeholder is not None:
+                display = accumulated + '<span class="typing-cursor"></span>'
+                ui_placeholder.markdown(display, unsafe_allow_html=True)
+        else:
+            pending_buffer += chunk_text
+            now = time.time()
+            elapsed = now - last_release_time
+            chars_to_release = int(elapsed * chars_per_sec)
+            if chars_to_release > 0:
+                release = pending_buffer[:chars_to_release]
+                pending_buffer = pending_buffer[chars_to_release:]
+                display_buffer += release
+                last_release_time = now
+            if ui_placeholder is not None:
+                disp = display_buffer + '<span class="typing-cursor"></span>'
+                ui_placeholder.markdown(disp, unsafe_allow_html=True)
+    
+    # Flush pending buffer cuối
+    if typing_mode == TYPING_MODE_CONTROLLED and pending_buffer:
+        display_buffer += pending_buffer
+        pending_buffer = ""
+        if ui_placeholder is not None:
+            ui_placeholder.markdown(display_buffer, unsafe_allow_html=True)
+    
+    if chunk_count == 0:
+        return accumulated, "error", "Empty response"
+    
+    return accumulated, "complete", None
+
+
 def stream_gemini_with_failover(
     prompt_inputs, api_keys, preferred_model,
     system_instruction=None, generation_config=None, lang="en",
@@ -1700,6 +1741,12 @@ def stream_gemini_with_failover(
     typing_mode=TYPING_MODE_SMOOTH,
     typing_cps=DEFAULT_TYPING_CPS,
 ):
+    """
+    TỐI ƯU + CHỐNG NGẮT:
+    - Timeout 45s (đủ cho response dài)
+    - Retry stream nếu bị đứt giữa chừng (tối đa 2 lần)
+    - Failover model nếu fail hoàn toàn
+    """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
@@ -1717,47 +1764,31 @@ def stream_gemini_with_failover(
             if was_stopped:
                 break
 
-            accumulated = ""
-            got_first_chunk = False
-            use_stream = (typing_mode != TYPING_MODE_INSTANT)
-
-            try:
-                genai.configure(api_key=api_k)
-                model = genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=system_instruction if system_instruction else None,
-                    generation_config=generation_config or {}
-                )
-
-                if not use_stream:
-                    res = model.generate_content(
-                        prompt_inputs,
-                        request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
+            # Retry stream nếu bị đứt giữa chừng
+            for attempt in range(GEMINI_STREAM_MAX_RETRIES + 1):
+                accumulated = ""
+                try:
+                    accumulated, reason, err = _call_stream_single(
+                        model_name=model_name,
+                        api_k=api_k,
+                        prompt_inputs=prompt_inputs,
+                        system_instruction=system_instruction,
+                        generation_config=generation_config,
+                        lang=lang,
+                        ui_placeholder=ui_placeholder,
+                        typing_mode=typing_mode,
+                        typing_cps=typing_cps,
+                        accumulated="",
+                        check_stop=check_stop_flag,
                     )
-                    text = getattr(res, "text", None)
-                    if text:
+                    
+                    if reason == "complete" and accumulated:
                         if ui_placeholder is not None:
-                            ui_placeholder.markdown(text, unsafe_allow_html=True)
-                        yield text, True, None
+                            ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
+                        yield accumulated, True, None
                         return
-                    else:
-                        saw_other_error = True
-                        last_error = "Empty response"
-                        continue
-
-                response = model.generate_content(
-                    prompt_inputs,
-                    stream=True,
-                    request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
-                )
-
-                display_buffer = ""
-                pending_buffer = ""
-                last_release_time = time.time()
-                chars_per_sec = max(1, int(typing_cps))
-
-                for chunk in response:
-                    if check_stop_flag():
+                    
+                    if reason == "stopped":
                         was_stopped = True
                         if ui_placeholder is not None and accumulated:
                             stop_note = (
@@ -1771,90 +1802,33 @@ def stream_gemini_with_failover(
                         else:
                             yield "", True, "stopped"
                         return
-
-                    try:
-                        chunk_text = getattr(chunk, "text", None)
-                    except Exception:
-                        chunk_text = None
-                    if not chunk_text:
-                        continue
-
-                    got_first_chunk = True
-                    accumulated += chunk_text
-
-                    if typing_mode == TYPING_MODE_SMOOTH:
-                        if ui_placeholder is not None:
-                            display = accumulated + '<span class="typing-cursor"></span>'
-                            ui_placeholder.markdown(display, unsafe_allow_html=True)
-                        yield accumulated, False, None
-                    else:
-                        pending_buffer += chunk_text
-                        now = time.time()
-                        elapsed = now - last_release_time
-                        chars_to_release = int(elapsed * chars_per_sec)
-                        if chars_to_release > 0:
-                            release = pending_buffer[:chars_to_release]
-                            pending_buffer = pending_buffer[chars_to_release:]
-                            display_buffer += release
-                            last_release_time = now
-                            if ui_placeholder is not None:
-                                disp = display_buffer + '<span class="typing-cursor"></span>'
-                                ui_placeholder.markdown(disp, unsafe_allow_html=True)
-                            yield display_buffer, False, None
-                        else:
-                            if ui_placeholder is not None:
-                                disp = display_buffer + '<span class="typing-cursor"></span>'
-                                ui_placeholder.markdown(disp, unsafe_allow_html=True)
-                            yield display_buffer, False, None
-
-                if typing_mode == TYPING_MODE_CONTROLLED and pending_buffer:
-                    while pending_buffer:
-                        if check_stop_flag():
-                            was_stopped = True
-                            if ui_placeholder is not None and display_buffer:
-                                stop_note = "\n\n_[Đã dừng theo yêu cầu]_" if lang == "vi" else "\n\n_[Stopped by user]_"
-                                ui_placeholder.markdown(display_buffer + stop_note, unsafe_allow_html=True)
-                            yield display_buffer, True, "stopped"
-                            return
-                        now = time.time()
-                        elapsed = now - last_release_time
-                        chars_to_release = int(elapsed * chars_per_sec)
-                        if chars_to_release <= 0:
-                            time.sleep(1.0 / chars_per_sec)
+                    
+                    if reason == "error":
+                        last_error = err
+                        # Nếu là lỗi rate limit → break inner retry, thử key khác
+                        if err and is_rate_limit_error(Exception(err)):
+                            saw_rate_limit = True
+                            break
+                        # Nếu là lỗi incomplete → retry
+                        if err and is_incomplete_error(Exception(err)) and attempt < GEMINI_STREAM_MAX_RETRIES:
+                            time.sleep(GEMINI_RETRY_BACKOFF * (attempt + 1))
                             continue
-                        release = pending_buffer[:chars_to_release]
-                        pending_buffer = pending_buffer[chars_to_release:]
-                        display_buffer += release
-                        last_release_time = now
-                        if ui_placeholder is not None:
-                            disp = display_buffer + '<span class="typing-cursor"></span>'
-                            ui_placeholder.markdown(disp, unsafe_allow_html=True)
-                        yield display_buffer, False, None
-
-                if accumulated:
-                    if ui_placeholder is not None:
-                        ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
-                    yield accumulated, True, None
-                    return
-                else:
-                    saw_other_error = True
-                    last_error = "Empty response"
-                    continue
-
-            except Exception as ex:
-                last_error = str(ex)
-                if got_first_chunk and accumulated:
+                        # Lỗi khác → thử key/model khác
+                        saw_other_error = True
+                        break
+                    
+                except Exception as ex:
+                    last_error = str(ex)
                     if is_rate_limit_error(ex):
-                        yield accumulated, True, "rate_limit_partial"
-                    else:
-                        yield accumulated, True, last_error
-                    return
-                if is_rate_limit_error(ex):
-                    saw_rate_limit = True
-                    continue
-                else:
+                        saw_rate_limit = True
+                        break
+                    # Retry nếu là lỗi incomplete/timeout
+                    if is_incomplete_error(ex) and attempt < GEMINI_STREAM_MAX_RETRIES:
+                        time.sleep(GEMINI_RETRY_BACKOFF * (attempt + 1))
+                        continue
+                    # Lỗi khác → next key/model
                     saw_other_error = True
-                    continue
+                    break
 
     if was_stopped:
         yield "", True, "stopped"
@@ -3022,8 +2996,6 @@ for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
               ("guest_chats", {}), ("guest_memory", ""),
               ("test_chats", {}), ("test_memory", ""),
               ("traffic_recorded", False),
-              ("version_mismatch", False),
-              ("reboot_banner_dismissed", False),
               ("draft_last_saved_hash", ""),
               ("bug_report_open", False),
               ("bug_report_text", ""),
@@ -3037,8 +3009,7 @@ for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
               ("_ql_mode", False),
               ("_lttp_sec_enabled", True),
               ("_lttp_sec_last_scan", None),
-              ("_lttp_sec_last_scan_time", 0),
-              ("_taskbar_feedback_open", False)]:
+              ("_lttp_sec_last_scan_time", 0)]:
     if k not in st.session_state:
         st.session_state[k] = dv
 
@@ -3060,25 +3031,8 @@ if "test_prefs" not in st.session_state:
 
 
 # ==========================================
-# 14. VERSION CHECK + INJECTIONS
+# 14. INIT
 # ==========================================
-def _init_version_cookie():
-    try:
-        cached_ver = cookies.get("LTTP_app_version")
-        if not cached_ver:
-            cookies.set("LTTP_app_version", APP_VERSION, max_age=COOKIE_MAX_AGE)
-            st.session_state.version_mismatch = False
-        elif cached_ver != APP_VERSION:
-            st.session_state.version_mismatch = True
-            cookies.set("LTTP_app_version", APP_VERSION, max_age=COOKIE_MAX_AGE)
-        else:
-            st.session_state.version_mismatch = False
-    except Exception:
-        st.session_state.version_mismatch = False
-
-
-_init_version_cookie()
-inject_version_scanner()
 inject_scroll_guard()
 inject_stop_button_listener()
 load_quick_lookup_from_cookie()
@@ -3195,33 +3149,7 @@ def _show_update_notice_if_needed():
 
 
 # ==========================================
-# 19. REBOOT BANNER
-# ==========================================
-def render_reboot_banner_if_needed():
-    if not st.session_state.get("version_mismatch", False):
-        return
-    if st.session_state.get("reboot_banner_dismissed", False):
-        return
-    lang = st.session_state.get("language", "en")
-    notice = REBOOT_NOTICE.get(lang, REBOOT_NOTICE.get("en", {}))
-    st.markdown(f"""
-    <div class="reboot-banner">
-        <div class="reboot-banner-title">🚀 {notice.get('title', 'New version!')}</div>
-        <div class="reboot-banner-desc">{notice.get('desc', 'Please reload.')}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button(f"🔄 {notice.get('button', 'Reload')}", use_container_width=True, key="reboot_now_btn"):
-            inject_js("location.reload();")
-    with col2:
-        if st.button(f"⏸️ {notice.get('later', 'Later')}", use_container_width=True, key="reboot_later_btn"):
-            st.session_state.reboot_banner_dismissed = True
-            st.rerun()
-
-
-# ==========================================
-# 20. BANNERS
+# 19. BANNERS
 # ==========================================
 def render_announcement_banner():
     if not announcement.get("enabled"):
@@ -3255,7 +3183,7 @@ def render_test_banner():
 
 
 # ==========================================
-# 21. BUG REPORT DIALOG
+# 20. BUG REPORT DIALOG
 # ==========================================
 @st.dialog("🐛")
 def bug_report_dialog():
@@ -3333,13 +3261,88 @@ def bug_report_dialog():
             st.rerun()
 
 
+@st.dialog("💬")
+def feedback_dialog():
+    lang = st.session_state.get("language", "en")
+    st.markdown(f"### {t('feedback_title', lang)}")
+    st.caption(t("feedback_desc", lang))
+
+    cat_options = ["feature", "bug", "improve", "other"]
+    cat_labels = {
+        "feature": t("feedback_category_feature", lang),
+        "bug": t("feedback_category_bug", lang),
+        "improve": t("feedback_category_improve", lang),
+        "other": t("feedback_category_other", lang),
+    }
+    cur_cat = st.session_state.get("feedback_category", "feature")
+    try:
+        cur_idx = cat_options.index(cur_cat)
+    except ValueError:
+        cur_idx = 0
+
+    selected_cat = st.radio(
+        t("feedback_category_label", lang),
+        options=cat_options,
+        index=cur_idx,
+        format_func=lambda x: cat_labels.get(x, x),
+        key="feedback_cat_radio",
+        horizontal=False,
+    )
+
+    fb_text = st.text_area(
+        t("feedback_text_label", lang),
+        value=st.session_state.get("feedback_text", ""),
+        height=180,
+        placeholder=t("feedback_text_placeholder", lang),
+        key="feedback_dialog_text"
+    )
+
+    col_send, col_cancel = st.columns(2)
+    with col_send:
+        if st.button(t("feedback_submit_btn", lang), use_container_width=True, type="primary", key="feedback_submit_btn"):
+            if not enforce_rate_limit("feedback", "Feedback"):
+                return
+            if not fb_text.strip():
+                st.error(t("feedback_empty", lang))
+            else:
+                fb = {
+                    "id": str(uuid.uuid4()),
+                    "user": st.session_state.get("user") or ("guest" if st.session_state.get("is_guest") else "test"),
+                    "role": "guest" if st.session_state.get("is_guest") else ("test" if is_temporary_session() else "user"),
+                    "device": mask_device(device_id),
+                    "time": _now_vn_iso(),
+                    "category": selected_cat,
+                    "text": fb_text.strip(),
+                    "reply": "", "replied_at": "", "replied_by": "",
+                }
+                if is_temporary_session():
+                    st.session_state.setdefault("test_feedbacks", []).insert(0, fb)
+                    st.success(t("feedback_success", lang))
+                else:
+                    db = GitHubStorage.load_db(force_refresh=True)
+                    add_feedback(db, fb)
+                    ok, msg = safe_save_db(db)
+                    if ok:
+                        st.success(t("feedback_success", lang))
+                    else:
+                        st.error(t("feedback_error", lang) + f" {msg}")
+                st.session_state.feedback_open = False
+                st.session_state.feedback_text = ""
+                time.sleep(1.0)
+                st.rerun()
+
+    with col_cancel:
+        if st.button(t("feedback_cancel_btn", lang), use_container_width=True, key="feedback_cancel_btn"):
+            st.session_state.feedback_open = False
+            st.rerun()
+
+
 # ==========================================
-# 22. AUTH UI
+# 21. AUTH UI
 # ==========================================
 def render_auth_ui():
     lang = st.session_state.language
     _show_update_notice_if_needed()
-    render_reboot_banner_if_needed()
     render_announcement_banner()
 
     col_lang_left, col_lang_right = st.columns([5, 1])
@@ -3487,7 +3490,7 @@ def render_auth_ui():
 
 
 # ==========================================
-# 23. TRAFFIC ANALYTICS
+# 22. TRAFFIC ANALYTICS
 # ==========================================
 def _render_traffic_analytics(lang: str, traffic: dict):
     st.markdown(f"### {t('traffic_title', lang)}")
@@ -3574,7 +3577,7 @@ def _render_traffic_analytics(lang: str, traffic: dict):
 
 
 # ==========================================
-# 24. SECURITY PANEL
+# 23. SECURITY PANEL
 # ==========================================
 def render_security_panel(lang: str, db: dict):
     st.markdown(f"### {t('security_title', lang)}")
@@ -3683,12 +3686,11 @@ def render_security_panel(lang: str, db: dict):
 
 
 # ==========================================
-# 25. ADMIN PANEL
+# 24. ADMIN PANEL
 # ==========================================
 def render_admin_panel():
     lang = st.session_state.language
     _show_update_notice_if_needed()
-    render_reboot_banner_if_needed()
 
     st.markdown(f"<h1 class='main-header'>{t('admin_panel', lang)}</h1>", unsafe_allow_html=True)
     st.caption(f"🛡️ {t('admin_logged_in', lang)} • VN: {_now_vn_iso()}")
@@ -3985,11 +3987,10 @@ def render_admin_panel():
 
 
 # ==========================================
-# 26. MAINTENANCE SCREEN
+# 25. MAINTENANCE SCREEN
 # ==========================================
 def render_maintenance_screen():
     lang = st.session_state.language
-    render_reboot_banner_if_needed()
     db = GitHubStorage.load_db(force_refresh=True)
     cfg = db.get(SYSTEM_CONFIG_KEY, {})
     note = cfg.get("maintenance_note", "").strip()
@@ -4040,7 +4041,7 @@ def render_maintenance_screen():
 
 
 # ==========================================
-# 27. ROUTING
+# 26. ROUTING
 # ==========================================
 if st.session_state.is_admin:
     render_admin_panel()
@@ -4069,7 +4070,7 @@ if not st.session_state.user and not st.session_state.is_guest:
 
 
 # ==========================================
-# 28. LOAD USER / GUEST / TEST DATA
+# 27. LOAD USER / GUEST / TEST DATA
 # ==========================================
 is_guest = st.session_state.is_guest
 is_test = is_temporary_session()
@@ -4125,7 +4126,7 @@ top_k = _SAFE_TOP_K
 
 
 # ==========================================
-# 29. SIDEBAR
+# 28. SIDEBAR
 # ==========================================
 with st.sidebar:
     if is_test or is_guest:
@@ -4568,7 +4569,7 @@ with st.sidebar:
 
 
 # ==========================================
-# 30. SMART DRAFT
+# 29. SMART DRAFT
 # ==========================================
 smart_draft_enabled = bool(user_data["preferences"].get("smart_draft", True))
 inject_smart_draft_tracker(
@@ -4582,97 +4583,19 @@ draft_text, draft_ts = get_saved_draft()
 
 
 # ==========================================
-# 31. BUG REPORT + FEEDBACK DIALOG TRIGGERS
+# 30. DIALOG TRIGGERS
 # ==========================================
 if st.session_state.get("bug_report_open", False):
     bug_report_dialog()
-
-
-@st.dialog("💬")
-def feedback_dialog():
-    lang = st.session_state.get("language", "en")
-    st.markdown(f"### {t('feedback_title', lang)}")
-    st.caption(t("feedback_desc", lang))
-
-    cat_options = ["feature", "bug", "improve", "other"]
-    cat_labels = {
-        "feature": t("feedback_category_feature", lang),
-        "bug": t("feedback_category_bug", lang),
-        "improve": t("feedback_category_improve", lang),
-        "other": t("feedback_category_other", lang),
-    }
-    cur_cat = st.session_state.get("feedback_category", "feature")
-    try:
-        cur_idx = cat_options.index(cur_cat)
-    except ValueError:
-        cur_idx = 0
-
-    selected_cat = st.radio(
-        t("feedback_category_label", lang),
-        options=cat_options,
-        index=cur_idx,
-        format_func=lambda x: cat_labels.get(x, x),
-        key="feedback_cat_radio",
-        horizontal=False,
-    )
-
-    fb_text = st.text_area(
-        t("feedback_text_label", lang),
-        value=st.session_state.get("feedback_text", ""),
-        height=180,
-        placeholder=t("feedback_text_placeholder", lang),
-        key="feedback_dialog_text"
-    )
-
-    col_send, col_cancel = st.columns(2)
-    with col_send:
-        if st.button(t("feedback_submit_btn", lang), use_container_width=True, type="primary", key="feedback_submit_btn"):
-            if not enforce_rate_limit("feedback", "Feedback"):
-                return
-            if not fb_text.strip():
-                st.error(t("feedback_empty", lang))
-            else:
-                fb = {
-                    "id": str(uuid.uuid4()),
-                    "user": st.session_state.get("user") or ("guest" if st.session_state.get("is_guest") else "test"),
-                    "role": "guest" if st.session_state.get("is_guest") else ("test" if is_temporary_session() else "user"),
-                    "device": mask_device(device_id),
-                    "time": _now_vn_iso(),
-                    "category": selected_cat,
-                    "text": fb_text.strip(),
-                    "reply": "", "replied_at": "", "replied_by": "",
-                }
-                if is_temporary_session():
-                    st.session_state.setdefault("test_feedbacks", []).insert(0, fb)
-                    st.success(t("feedback_success", lang))
-                else:
-                    db = GitHubStorage.load_db(force_refresh=True)
-                    add_feedback(db, fb)
-                    ok, msg = safe_save_db(db)
-                    if ok:
-                        st.success(t("feedback_success", lang))
-                    else:
-                        st.error(t("feedback_error", lang) + f" {msg}")
-                st.session_state.feedback_open = False
-                st.session_state.feedback_text = ""
-                time.sleep(1.0)
-                st.rerun()
-
-    with col_cancel:
-        if st.button(t("feedback_cancel_btn", lang), use_container_width=True, key="feedback_cancel_btn"):
-            st.session_state.feedback_open = False
-            st.rerun()
-
 
 if st.session_state.get("feedback_open", False):
     feedback_dialog()
 
 
 # ==========================================
-# 32. MAIN CHAT
+# 31. MAIN CHAT
 # ==========================================
 _show_update_notice_if_needed()
-render_reboot_banner_if_needed()
 render_announcement_banner()
 render_test_banner()
 
@@ -4753,7 +4676,7 @@ for msg in st.session_state.messages:
 
 
 # ==========================================
-# 33. XỬ LÝ PROMPT
+# 32. XỬ LÝ PROMPT
 # ==========================================
 def _run_deferred_tasks(chat_data, user_prompt, lang):
     try:
@@ -5037,23 +4960,11 @@ elif user_prompt := st.chat_input(t("chat_placeholder", lang)):
 
 
 # ==========================================
-# 34. TASKBAR - PURE HTML (NO STREAMLIT WIDGETS INSIDE CHAT)
+# 33. TASKBAR - PURE HTML
 # ==========================================
 def render_taskbar_html():
-    """
-    Taskbar render 100% bằng HTML thuần qua st.components.v1.html với height=0.
-    → KHÔNG để lại bất kỳ element Streamlit nào trong khung chat.
-    → Taskbar fixed bottom qua CSS trong iframe's parent document (injected JS).
-    
-    Nội dung:
-    - Statue nhỏ: icon khiên + điểm số + ON/OFF
-    - Tên người dùng (hoặc Guest/Test/Admin)
-    - Nút chuyển đổi ngôn ngữ EN/VI
-    - Nút Feedback (mở dialog qua query param)
-    """
     sec_enabled = is_lttp_security_enabled()
-    
-    # Auto-scan trước khi render (nhẹ, không tốn nhiều)
+
     now_ts = time.time()
     last_scan_time = st.session_state.get("_lttp_sec_last_scan_time", 0)
     last_scan = st.session_state.get("_lttp_sec_last_scan")
@@ -5063,10 +4974,9 @@ def render_taskbar_html():
         st.session_state._lttp_sec_last_scan = findings
         st.session_state._lttp_sec_last_scan_time = now_ts
         last_scan = findings
-    
+
     score = last_scan.get("score", 100) if last_scan else 100
-    
-    # Xác định user label
+
     if is_test:
         user_label = f"🔧 {st.session_state.get('user', 'test')}"
         user_color = "#a855f7"
@@ -5076,40 +4986,35 @@ def render_taskbar_html():
     else:
         user_label = f"👤 {st.session_state.get('user', '?')}"
         user_color = "#667eea"
-    
-    # Score color
+
     if score >= 80:
         score_color = "#10b981"
     elif score >= 50:
         score_color = "#fbbf24"
     else:
         score_color = "#ef4444"
-    
-    # Trạng thái
+
     if sec_enabled:
         sec_status_text = "ON" if lang == "en" else "BẬT"
         sec_dot_color = "#10b981"
     else:
         sec_status_text = "OFF" if lang == "en" else "TẮT"
         sec_dot_color = "#ef4444"
-    
-    # Language buttons
+
     if lang == "en":
         lang_en_style = "background:rgba(102,126,234,0.25);color:#667eea;border:1px solid rgba(102,126,234,0.5);"
         lang_vi_style = "background:transparent;color:#94a3b8;border:1px solid rgba(148,163,184,0.2);"
     else:
         lang_en_style = "background:transparent;color:#94a3b8;border:1px solid rgba(148,163,184,0.2);"
         lang_vi_style = "background:rgba(102,126,234,0.25);color:#667eea;border:1px solid rgba(102,126,234,0.5);"
-    
+
     feedback_label = "💬 Feedback" if lang == "en" else "💬 Phản hồi"
-    
-    # Escape user label
+
     user_label_html = (user_label
                        .replace("&", "&amp;")
                        .replace("<", "&lt;")
                        .replace(">", "&gt;"))
-    
-    # HTML taskbar
+
     taskbar_html = f"""
     <style>
     #lttp-taskbar {{
@@ -5134,13 +5039,8 @@ def render_taskbar_html():
         overflow-y: hidden;
         white-space: nowrap;
     }}
-    #lttp-taskbar::-webkit-scrollbar {{
-        height: 4px;
-    }}
-    #lttp-taskbar::-webkit-scrollbar-thumb {{
-        background: rgba(16,185,129,0.3);
-        border-radius: 2px;
-    }}
+    #lttp-taskbar::-webkit-scrollbar {{ height: 4px; }}
+    #lttp-taskbar::-webkit-scrollbar-thumb {{ background: rgba(16,185,129,0.3); border-radius: 2px; }}
     #lttp-taskbar .tb-sec {{
         display: flex; align-items: center; gap: 6px;
         padding: 4px 10px;
@@ -5188,24 +5088,16 @@ def render_taskbar_html():
         display: flex; align-items: center; gap: 6px;
         flex-shrink: 0;
     }}
-    #lttp-taskbar .tb-lang-btn {{
+    #lttp-taskbar .tb-lang-btn, #lttp-taskbar .tb-lang-btn-vi {{
         padding: 4px 10px;
         border-radius: 6px;
         font-size: 0.72rem;
         font-weight: 700;
         cursor: pointer;
         transition: all 0.15s ease;
-        {lang_en_style}
     }}
-    #lttp-taskbar .tb-lang-btn-vi {{
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        {lang_vi_style}
-    }}
+    #lttp-taskbar .tb-lang-btn {{ {lang_en_style} }}
+    #lttp-taskbar .tb-lang-btn-vi {{ {lang_vi_style} }}
     #lttp-taskbar .tb-fb-btn {{
         padding: 4px 12px;
         border-radius: 6px;
@@ -5217,12 +5109,10 @@ def render_taskbar_html():
         cursor: pointer;
         transition: all 0.15s ease;
     }}
-    #lttp-taskbar .tb-fb-btn:hover {{
-        background: rgba(102,126,234,0.3);
-    }}
+    #lttp-taskbar .tb-fb-btn:hover {{ background: rgba(102,126,234,0.3); }}
     body {{ padding-bottom: 50px !important; }}
     section.main .block-container {{ padding-bottom: 60px !important; }}
-    
+
     @media (max-width: 768px) {{
         #lttp-taskbar {{
             font-size: 0.75rem;
@@ -5230,25 +5120,13 @@ def render_taskbar_html():
             gap: 8px;
             height: 38px;
         }}
-        #lttp-taskbar .tb-sec {{
-            padding: 3px 8px;
-            gap: 4px;
+        #lttp-taskbar .tb-sec {{ padding: 3px 8px; gap: 4px; }}
+        #lttp-taskbar .tb-sec-score {{ font-size: 0.8rem; }}
+        #lttp-taskbar .tb-sec-label {{ display: none; }}
+        #lttp-taskbar .tb-lang-btn, #lttp-taskbar .tb-lang-btn-vi {{
+            padding: 3px 7px; font-size: 0.68rem;
         }}
-        #lttp-taskbar .tb-sec-score {{
-            font-size: 0.8rem;
-        }}
-        #lttp-taskbar .tb-sec-label {{
-            display: none;
-        }}
-        #lttp-taskbar .tb-lang-btn,
-        #lttp-taskbar .tb-lang-btn-vi {{
-            padding: 3px 7px;
-            font-size: 0.68rem;
-        }}
-        #lttp-taskbar .tb-fb-btn {{
-            padding: 3px 9px;
-            font-size: 0.7rem;
-        }}
+        #lttp-taskbar .tb-fb-btn {{ padding: 3px 9px; font-size: 0.7rem; }}
         body {{ padding-bottom: 44px !important; }}
         section.main .block-container {{ padding-bottom: 55px !important; }}
     }}
@@ -5274,29 +5152,22 @@ def render_taskbar_html():
             const url = new URL(window.parent.location.href);
             url.searchParams.set('__lttp_lang', langCode);
             window.parent.location.href = url.toString();
-        }} catch(e) {{
-            console.warn("Cannot set lang:", e);
-        }}
+        }} catch(e) {{ console.warn("Cannot set lang:", e); }}
     }}
     function lttpOpenFeedback() {{
         try {{
             const url = new URL(window.parent.location.href);
             url.searchParams.set('__lttp_fb', '1');
             window.parent.location.href = url.toString();
-        }} catch(e) {{
-            console.warn("Cannot open feedback:", e);
-        }}
+        }} catch(e) {{ console.warn("Cannot open feedback:", e); }}
     }}
     </script>
     """
-    
-    # Render taskbar as isolated HTML in parent DOM
-    # Use components.v1.html with height=1 (minimal footprint, no visible space)
+
     try:
         from streamlit.components.v1 import html as _comp_html
         _comp_html(taskbar_html, height=1, scrolling=False)
     except Exception:
-        # Fallback: st.html with iframe-like positioning
         st.markdown(
             f'<iframe srcdoc="{taskbar_html.replace(chr(34), "&quot;")}" '
             f'style="position:fixed;left:0;right:0;bottom:0;width:100%;height:45px;border:0;z-index:999998;"></iframe>',
@@ -5304,20 +5175,18 @@ def render_taskbar_html():
         )
 
 
-# Render taskbar
 render_taskbar_html()
 
 
 # ==========================================
-# 35. HANDLE LANG / FEEDBACK QUERY PARAMS
+# 34. HANDLE LANG / FEEDBACK QUERY PARAMS
 # ==========================================
 try:
     qp = st.query_params
     _qp_lang = qp.get("__lttp_lang")
     _qp_fb = qp.get("__lttp_fb")
-    
+
     if _qp_lang in ("en", "vi") and _qp_lang != st.session_state.language:
-        # Update language
         st.session_state.language = _qp_lang
         if not is_guest and not is_test and st.session_state.user:
             try:
@@ -5326,13 +5195,12 @@ try:
                 safe_save_db(db_data)
             except Exception:
                 pass
-        # Clear query param
         try:
             del st.query_params["__lttp_lang"]
         except Exception:
             pass
         st.rerun()
-    
+
     if _qp_fb == "1":
         try:
             del st.query_params["__lttp_fb"]
