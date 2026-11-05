@@ -32,7 +32,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.42.0"
+APP_VERSION = "1.42.1"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -282,26 +282,14 @@ RATE_LIMIT_RETRY_DELAY = 60
 class LTTPSecurity:
     """
     LTTP Security - Hệ thống bảo mật đa lớp tự phát triển.
-    
-    Các lớp bảo mật:
-    - Layer 1: AES-256-GCM (mã hóa mạnh nhất, hardware-accelerated)
-    - Layer 2: LTTP-Cipher (mã hóa tự phát triển cho thiết bị cũ)
-    - Layer 3: HMAC-SHA256 integrity verification
-    - Layer 4: Payload obfuscation (chống dịch ngược)
-    - Layer 5: Replay attack prevention (nonce + timestamp)
-    - Layer 6: Entropy-based anomaly detection
-    
-    Tối ưu cho LTTP AI Online: Chỉ ~0.3-0.8ms overhead mỗi thao tác.
     """
-    
     VERSION = "1.0.0"
     NONCE_LEN = 12
     TAG_LEN = 16
-    LTTP_MAGIC = 0x4C545450  # "LTTP"
-    
+    LTTP_MAGIC = 0x4C545450
+
     @staticmethod
     def _derive_key(secret: str, salt: bytes, iterations: int = 100_000) -> bytes:
-        """PBKDF2-HMAC-SHA256 key derivation."""
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -309,39 +297,30 @@ class LTTPSecurity:
             iterations=iterations,
         )
         return kdf.derive(secret.encode('utf-8'))
-    
+
     @staticmethod
     def lttp_cipher_xor(data: bytes, key: bytes) -> bytes:
-        """
-        LTTP-Cipher: Mã hóa XOR với key rotation tự phát triển.
-        Dùng cho thiết bị cũ không hỗ trợ AES hardware acceleration.
-        Vẫn an toàn vì đi kèm HMAC verification.
-        """
         if not data:
             return data
         out = bytearray(len(data))
         key_len = len(key)
         for i, b in enumerate(data):
-            # Key rotation mỗi byte + counter mixing
             k = key[(i * 7 + (i >> 3)) % key_len]
             out[i] = b ^ k ^ ((i * 31) & 0xFF)
         return bytes(out)
-    
+
     @staticmethod
     def lttp_obfuscate(data: bytes) -> bytes:
-        """Layer 4: Payload obfuscation - xáo trộn dữ liệu chống dịch ngược."""
         if not data:
             return data
-        # Interleave bytes để phá cấu trúc
         half = len(data) // 2
         out = bytearray(len(data))
         out[0::2] = data[:half]
         out[1::2] = data[half:]
         return bytes(out)
-    
+
     @staticmethod
     def lttp_deobfuscate(data: bytes) -> bytes:
-        """Reverse Layer 4 obfuscation."""
         if not data:
             return data
         half = (len(data) + 1) // 2
@@ -349,87 +328,67 @@ class LTTPSecurity:
         out[:half] = data[0::2]
         out[half:] = data[1::2]
         return bytes(out)
-    
+
     @classmethod
     def encrypt(cls, plaintext: str, secret: str, use_aes: bool = None) -> str:
-        """
-        Mã hóa đa lớp.
-        use_aes=None: tự chọn (AES nếu có hardware support)
-        Trả về base64 string với format: [MAGIC(4) | FLAGS(1) | SALT(16) | NONCE(12) | CIPHERTEXT+TAG]
-        """
         if not plaintext:
             return ""
         try:
             plaintext_bytes = plaintext.encode('utf-8')
             salt = os.urandom(16)
             key = cls._derive_key(secret, salt)
-            
-            # Chọn mode
+
             if use_aes is None:
                 try:
-                    # Test AES support
                     _ = AESGCM(key)
                     use_aes = True
                 except Exception:
                     use_aes = False
-            
+
             if use_aes:
-                # Layer 1: AES-256-GCM
                 nonce = os.urandom(cls.NONCE_LEN)
                 aesgcm = AESGCM(key)
                 ciphertext = aesgcm.encrypt(nonce, plaintext_bytes, None)
                 flags = 0x01
             else:
-                # Layer 2: LTTP-Cipher (fallback)
                 nonce = os.urandom(cls.NONCE_LEN)
                 rotated = bytes([plaintext_bytes[i] ^ nonce[i % cls.NONCE_LEN] for i in range(len(plaintext_bytes))])
                 ciphertext = cls.lttp_cipher_xor(rotated, key)
-                # Layer 3: HMAC tag
                 tag = hmac.new(key, nonce + ciphertext, hashlib.sha256).digest()[:cls.TAG_LEN]
                 ciphertext = ciphertext + tag
                 flags = 0x02
-            
-            # Layer 4: Obfuscation
+
             payload = nonce + ciphertext
             obfuscated = cls.lttp_obfuscate(payload)
-            
-            # Header
             header = struct.pack(">IB", cls.LTTP_MAGIC, flags) + salt
-            
             return base64.urlsafe_b64encode(header + obfuscated).decode('ascii')
         except Exception:
             return ""
-    
+
     @classmethod
     def decrypt(cls, encrypted: str, secret: str) -> str:
-        """Giải mã đa lớp."""
         if not encrypted:
             return ""
         try:
             raw = base64.urlsafe_b64decode(encrypted.encode('ascii'))
             if len(raw) < 4 + 1 + 16 + 12:
                 return ""
-            
+
             magic, flags = struct.unpack(">IB", raw[:5])
             if magic != cls.LTTP_MAGIC:
                 return ""
-            
+
             salt = raw[5:21]
             payload = raw[21:]
-            
-            # Layer 4: Deobfuscation
             deobfuscated = cls.lttp_deobfuscate(payload)
             nonce = deobfuscated[:cls.NONCE_LEN]
             ciphertext = deobfuscated[cls.NONCE_LEN:]
-            
             key = cls._derive_key(secret, salt)
-            
+
             if flags == 0x01:
-                # AES-256-GCM decrypt
                 aesgcm = AESGCM(key)
                 plaintext_bytes = aesgcm.decrypt(nonce, ciphertext, None)
             elif flags == 0x02:
-                # LTTP-Cipher decrypt
                 if len(ciphertext) < cls.TAG_LEN:
                     return ""
                 tag = ciphertext[-cls.TAG_LEN:]
@@ -441,14 +400,13 @@ class LTTPSecurity:
                 plaintext_bytes = bytes([rotated[i] ^ nonce[i % cls.NONCE_LEN] for i in range(len(rotated))])
             else:
                 return ""
-            
+
             return plaintext_bytes.decode('utf-8')
         except Exception:
             return ""
-    
+
     @staticmethod
     def compute_entropy(text: str) -> float:
-        """Layer 6: Entropy analysis cho anomaly detection."""
         if not text or len(text) < 10:
             return 0.0
         freq = {}
@@ -457,24 +415,21 @@ class LTTPSecurity:
         n = len(text)
         entropy = -sum((v / n) * math.log2(v / n) for v in freq.values())
         return entropy
-    
+
     @staticmethod
     def hash_secure(text: str, salt: str = "") -> str:
-        """Secure hash với salt - dùng cho password."""
         return hashlib.pbkdf2_hmac(
             'sha256',
             (salt + text).encode('utf-8'),
             b'LTTP_SALT_v1',
             50_000
         ).hex()
-    
+
     @staticmethod
     def constant_time_compare(a: str, b: str) -> bool:
-        """So sánh constant-time chống timing attack."""
         return hmac.compare_digest(a.encode('utf-8'), b.encode('utf-8'))
 
 
-# LTTP Security Instance
 lttp_security = LTTPSecurity()
 
 
@@ -828,6 +783,13 @@ st.markdown("""
         opacity: 0.6;
     }
 
+    /* Taskbar LTTP Security badge (bottom of page) */
+    .lttp-taskbar-wrap {
+        margin-top: 30px;
+        padding-top: 12px;
+        border-top: 1px dashed rgba(16,185,129,0.3);
+    }
+
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -882,24 +844,21 @@ st.markdown("""
 
 
 # ==========================================
-# 3. HÀM TIỆN ÍCH (sử dụng LTTP Security)
+# 3. HÀM TIỆN ÍCH
 # ==========================================
 def encrypt_key(raw_key: str) -> str:
-    """Mã hóa key bằng LTTP Security (AES-256)."""
     if not raw_key:
         return ""
     return LTTPSecurity.encrypt(raw_key, MASTER_SECRET, use_aes=True)
 
 
 def decrypt_key(encrypted_key: str) -> str:
-    """Giải mã key bằng LTTP Security."""
     if not encrypted_key:
         return ""
     return LTTPSecurity.decrypt(encrypted_key, MASTER_SECRET)
 
 
 def hash_password(password: str) -> str:
-    """Hash password bằng PBKDF2 - an toàn hơn SHA256 thuần."""
     return LTTPSecurity.hash_secure(password, "LTTP_USER_PWD")
 
 
@@ -1018,7 +977,7 @@ def fetch_changelog_cached() -> tuple:
         resp = requests.get(
             CHANGELOG_URL,
             timeout=5,
-            headers={"User-Agent": "LTTP-AI-Online/1.42.0"}
+            headers={"User-Agent": "LTTP-AI-Online/1.42.1"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -1131,7 +1090,6 @@ def load_quick_lookup_from_cookie():
             st.session_state._ql_mode = False
 
 
-# LTTP Security toggle
 def is_lttp_security_enabled() -> bool:
     return bool(st.session_state.get("_lttp_sec_enabled", True))
 
@@ -1162,6 +1120,7 @@ def load_lttp_security_from_cookie():
 def _get_rl_key(action: str) -> str:
     return f"_rl_{action}"
 
+
 def check_rate_limit(action: str, device: str) -> tuple:
     if action not in RATE_LIMITS:
         return True, 0, 0
@@ -1178,6 +1137,7 @@ def check_rate_limit(action: str, device: str) -> tuple:
         return False, max(1, retry_after), len(dq)
     dq.append(now)
     return True, 0, len(dq)
+
 
 def detect_spam_content(text: str) -> tuple:
     if not text:
@@ -1197,7 +1157,6 @@ def detect_spam_content(text: str) -> tuple:
     unique_chars = len(set(t))
     if len(t) >= 20 and unique_chars < MIN_UNIQUE_CHARS:
         return True, "medium", f"Quá ít ký tự khác nhau ({unique_chars})"
-    # LTTP Security Layer 6: entropy check
     entropy = LTTPSecurity.compute_entropy(t)
     if len(t) >= 30 and entropy < 2.0:
         return True, "medium", f"Entropy thấp ({entropy:.2f})"
@@ -1208,6 +1167,7 @@ def detect_spam_content(text: str) -> tuple:
         except re.error:
             continue
     return False, "low", ""
+
 
 def get_device_block_status(db_data: dict, device: str) -> dict:
     blocklist = db_data.get(BLOCKLIST_KEY, {})
@@ -1226,6 +1186,7 @@ def get_device_block_status(db_data: dict, device: str) -> dict:
         "severity": str(entry.get("severity", "medium")),
     }
 
+
 def block_device(db_data: dict, device: str, reason: str, severity: str, duration_override: int = None):
     blocklist = db_data.get(BLOCKLIST_KEY, {})
     if not isinstance(blocklist, dict):
@@ -1240,11 +1201,13 @@ def block_device(db_data: dict, device: str, reason: str, severity: str, duratio
     }
     db_data[BLOCKLIST_KEY] = blocklist
 
+
 def unblock_device(db_data: dict, device: str):
     blocklist = db_data.get(BLOCKLIST_KEY, {})
     if isinstance(blocklist, dict) and device in blocklist:
         del blocklist[device]
         db_data[BLOCKLIST_KEY] = blocklist
+
 
 def log_security_event(db_data: dict, event_type: str, severity: str,
                         message: str, extra: dict = None):
@@ -1268,6 +1231,7 @@ def log_security_event(db_data: dict, event_type: str, severity: str,
     if len(log) > SECURITY_LOG_MAX:
         log = log[:SECURITY_LOG_MAX]
     db_data[SECURITY_LOG_KEY] = log
+
 
 def raise_security_alert(db_data: dict, severity: str, title: str,
                           detail: str, extra: dict = None):
@@ -1295,9 +1259,7 @@ def raise_security_alert(db_data: dict, severity: str, title: str,
     db_data[SECURITY_ALERTS_KEY] = alerts
 
 
-# LTTP Security scan log
 def log_lttp_security_scan(db_data: dict, findings: dict):
-    """Lưu log quét bảo mật LTTP."""
     logs = db_data.get(LTTP_SECURITY_KEY, {})
     if not isinstance(logs, dict):
         logs = {}
@@ -1322,17 +1284,12 @@ def log_lttp_security_scan(db_data: dict, findings: dict):
 
 
 def run_lttp_security_scan(db_data: dict) -> dict:
-    """
-    Quét bảo mật LTTP - chạy các lớp kiểm tra.
-    Trả về dict chứa findings + score.
-    """
     findings = {
         "layers": [],
         "issues": [],
         "score": 100,
     }
-    
-    # Layer 1: AES-256 Support
+
     try:
         _ = AESGCM(os.urandom(32))
         findings["layers"].append({"name": "AES-256-GCM", "status": "active", "desc": "Hardware-accelerated encryption"})
@@ -1340,23 +1297,13 @@ def run_lttp_security_scan(db_data: dict) -> dict:
         findings["layers"].append({"name": "AES-256-GCM", "status": "inactive", "desc": "Fallback to LTTP-Cipher"})
         findings["issues"].append({"severity": "medium", "msg": "AES-256 không khả dụng, dùng LTTP-Cipher fallback"})
         findings["score"] -= 5
-    
-    # Layer 2: LTTP-Cipher
+
     findings["layers"].append({"name": "LTTP-Cipher", "status": "active", "desc": "Backup encryption for legacy devices"})
-    
-    # Layer 3: HMAC-SHA256
     findings["layers"].append({"name": "HMAC-SHA256", "status": "active", "desc": "Integrity verification"})
-    
-    # Layer 4: Payload Obfuscation
     findings["layers"].append({"name": "Payload Obfuscation", "status": "active", "desc": "Anti-reverse-engineering"})
-    
-    # Layer 5: Replay Prevention
     findings["layers"].append({"name": "Replay Prevention", "status": "active", "desc": "Nonce + timestamp"})
-    
-    # Layer 6: Entropy Detection
     findings["layers"].append({"name": "Entropy Detection", "status": "active", "desc": "Anomaly detection"})
-    
-    # Check encryption roundtrip
+
     try:
         test_data = "LTTP_SECURITY_TEST_" + str(uuid.uuid4())
         enc = LTTPSecurity.encrypt(test_data, MASTER_SECRET)
@@ -1369,20 +1316,18 @@ def run_lttp_security_scan(db_data: dict) -> dict:
     except Exception as e:
         findings["issues"].append({"severity": "high", "msg": f"Encryption error: {str(e)[:80]}"})
         findings["score"] -= 20
-    
-    # Check blocklist
+
     blocklist = db_data.get(BLOCKLIST_KEY, {})
     blocked_count = sum(1 for e in blocklist.values() if float(e.get("until_ts", 0)) > time.time())
     if blocked_count > 0:
         findings["issues"].append({"severity": "low", "msg": f"Có {blocked_count} thiết bị đang bị chặn"})
-    
-    # Check security alerts
+
     alerts = db_data.get(SECURITY_ALERTS_KEY, [])
     active_alerts = [a for a in alerts if not a.get("acknowledged", False)]
     if len(active_alerts) > 0:
         findings["issues"].append({"severity": "medium", "msg": f"Có {len(active_alerts)} cảnh báo chưa xử lý"})
         findings["score"] -= min(len(active_alerts), 15)
-    
+
     findings["score"] = max(0, findings["score"])
     return findings
 
@@ -1431,6 +1376,7 @@ def enforce_rate_limit(action: str, human_name: str) -> bool:
         f"⚠️ You are doing this too fast. Please retry in **{retry_after}s**."
     )
     return False
+
 
 def enforce_message_content(text: str) -> bool:
     is_spam, severity, reason = detect_spam_content(text)
@@ -1494,6 +1440,7 @@ def inject_js(js_code: str):
         except Exception:
             pass
 
+
 def inject_version_scanner():
     js = (
         'if (window.__lttp_version_scanner_installed) return;\n'
@@ -1525,6 +1472,7 @@ def inject_version_scanner():
         'setInterval(checkVersion, SCAN_INTERVAL_MS);\n'
     )
     inject_js(js)
+
 
 def inject_scroll_guard():
     js = (
@@ -1562,6 +1510,7 @@ def inject_scroll_guard():
     )
     inject_js(js)
 
+
 def inject_stop_button_listener():
     js = (
         'if (window.__lttp_stop_listener_installed) return;\n'
@@ -1578,6 +1527,7 @@ def inject_stop_button_listener():
         '}, true);\n'
     )
     inject_js(js)
+
 
 def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
     if not enabled:
@@ -1655,12 +1605,14 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
     )
     inject_js(js)
 
+
 def clear_draft_cookie_via_js():
     js_clear = (
         'document.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
         'document.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
     )
     inject_js(js_clear)
+
 
 def inject_screenshot_capture(max_chunks: int):
     js = (
@@ -1716,6 +1668,7 @@ def inject_screenshot_capture(max_chunks: int):
     )
     inject_js(js)
 
+
 def read_bug_report_screenshot():
     try:
         meta = cookies.get(BR_META_COOKIE)
@@ -1738,6 +1691,7 @@ def read_bug_report_screenshot():
     except Exception:
         return None
 
+
 def clear_bug_report_cookies():
     try:
         cookies.set(BR_META_COOKIE, "", max_age=0)
@@ -1745,6 +1699,7 @@ def clear_bug_report_cookies():
             cookies.set(BR_COOKIE_PREFIX + str(i), "", max_age=0)
     except Exception:
         pass
+
 
 def get_saved_draft():
     try:
@@ -1758,6 +1713,7 @@ def get_saved_draft():
         pass
     return None, None
 
+
 def check_stop_flag() -> bool:
     try:
         v = cookies.get(COOKIE_STOP_FLAG)
@@ -1766,6 +1722,7 @@ def check_stop_flag() -> bool:
     except Exception:
         pass
     return False
+
 
 def clear_stop_flag():
     try:
@@ -1805,7 +1762,7 @@ def is_rate_limit_error(error: Exception) -> bool:
 
 
 # ==========================================
-# 7. GỌI GEMINI - TỐI ƯU TỐC ĐỘ
+# 7. GỌI GEMINI
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -1814,6 +1771,7 @@ def _build_model_chain(preferred_model: str) -> list:
             chain.append(m)
     return chain
 
+
 def stream_gemini_with_failover(
     prompt_inputs, api_keys, preferred_model,
     system_instruction=None, generation_config=None, lang="en",
@@ -1821,12 +1779,6 @@ def stream_gemini_with_failover(
     typing_mode=TYPING_MODE_SMOOTH,
     typing_cps=DEFAULT_TYPING_CPS,
 ):
-    """
-    TỐI ƯU TỐC ĐỘ:
-    - Yield token đầu tiên NGAY khi có.
-    - Smooth mode: cập nhật UI trực tiếp mỗi chunk (không delay).
-    - Failover: thử key tiếp theo nhanh nếu 429.
-    """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
@@ -1872,7 +1824,6 @@ def stream_gemini_with_failover(
                         last_error = "Empty response"
                         continue
 
-                # Stream mode - yield càng nhanh càng tốt
                 response = model.generate_content(
                     prompt_inputs,
                     stream=True,
@@ -1998,6 +1949,7 @@ def stream_gemini_with_failover(
     else:
         yield "", True, last_error or "unknown_error"
 
+
 def call_gemini_with_failover(
     prompt_inputs, api_keys, preferred_model,
     system_instruction=None, generation_config=None, lang="en",
@@ -2042,6 +1994,7 @@ def call_gemini_with_failover(
             return None, "rate_limit"
         return None, last_error or "unknown_error"
     return None, last_error or "unknown_error"
+
 
 def render_rate_limit_and_retry(lang="en"):
     if lang == "vi":
@@ -2209,8 +2162,10 @@ def migrate_user_data(db_data: dict) -> tuple:
 def _today_vn_str() -> str:
     return vn_now().strftime("%Y-%m-%d")
 
+
 def _now_vn_iso() -> str:
     return vn_now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 def _prune_traffic_log(traffic: dict) -> dict:
     if not isinstance(traffic, dict):
@@ -2218,6 +2173,7 @@ def _prune_traffic_log(traffic: dict) -> dict:
     cutoff = vn_now() - timedelta(days=TRAFFIC_RETENTION_DAYS)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
     return {k: v for k, v in traffic.items() if k >= cutoff_str}
+
 
 def record_traffic(db_data: dict, user_label: str, role: str) -> bool:
     traffic = db_data.get(TRAFFIC_LOG_KEY, {})
@@ -2243,6 +2199,7 @@ def record_traffic(db_data: dict, user_label: str, role: str) -> bool:
     db_data[TRAFFIC_LOG_KEY] = _prune_traffic_log(traffic)
     return True
 
+
 def add_bug_report(db_data: dict, report: dict) -> bool:
     reports = db_data.get(BUG_REPORTS_KEY, [])
     if not isinstance(reports, list):
@@ -2253,6 +2210,7 @@ def add_bug_report(db_data: dict, report: dict) -> bool:
     db_data[BUG_REPORTS_KEY] = reports
     return True
 
+
 def delete_bug_report(db_data: dict, report_id: str) -> bool:
     reports = db_data.get(BUG_REPORTS_KEY, [])
     if not isinstance(reports, list):
@@ -2262,6 +2220,7 @@ def delete_bug_report(db_data: dict, report_id: str) -> bool:
         return False
     db_data[BUG_REPORTS_KEY] = new_reports
     return True
+
 
 def reply_bug_report(db_data: dict, report_id: str, reply_text: str, admin_name: str) -> bool:
     reports = db_data.get(BUG_REPORTS_KEY, [])
@@ -2275,6 +2234,7 @@ def reply_bug_report(db_data: dict, report_id: str, reply_text: str, admin_name:
             db_data[BUG_REPORTS_KEY] = reports
             return True
     return False
+
 
 def get_user_bug_reports(db_data: dict, username: str) -> list:
     reports = db_data.get(BUG_REPORTS_KEY, [])
@@ -2411,6 +2371,7 @@ def generate_chat_title(user_prompt, api_keys, model_name, lang="en"):
     except Exception:
         return user_prompt[:25] + "..." if len(user_prompt) > 25 else user_prompt
 
+
 def _fallback_summary(messages_to_summarize, existing_summary, lang="en"):
     parts = []
     if existing_summary:
@@ -2420,6 +2381,7 @@ def _fallback_summary(messages_to_summarize, existing_summary, lang="en"):
         c = m.get("content", "")[:300]
         parts.append(f"{role}: {c}")
     return "\n".join(parts)
+
 
 def generate_summary_structured(
     messages_to_summarize, existing_summary, api_keys, model_name,
@@ -2493,6 +2455,7 @@ def generate_summary_structured(
         return _fallback_summary(messages_to_summarize, existing_summary, lang)
     except Exception:
         return _fallback_summary(messages_to_summarize, existing_summary, lang)
+
 
 def generate_summary_in_batches(
     messages_to_summarize, existing_summary, api_keys, model_name,
@@ -2709,7 +2672,6 @@ TRANSLATIONS = {
         "privacy_link_label": "Read full legal notice:",
         "privacy_btn": "📜 View Privacy Policy",
         "privacy_accepted_note": "By using this software, you agree to the Privacy Policy.",
-        # LTTP Security
         "lttp_sec_title": "🛡️ LTTP Security",
         "lttp_sec_running": "LTTP Security is running in the background to protect your data.",
         "lttp_sec_safety": "Safety Score",
@@ -2731,6 +2693,8 @@ TRANSLATIONS = {
         "lttp_sec_off_msg": "⚠️ LTTP Security is OFF. Enable it or run a manual scan.",
         "lttp_sec_scan_running": "🔍 Running LTTP Security scan...",
         "lttp_sec_no_issues": "No security issues found.",
+        "lttp_sec_taskbar_caption": "LTTP Security status (bottom bar)",
+        "terms_lang_note": "Language: English",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -2927,7 +2891,6 @@ TRANSLATIONS = {
         "privacy_link_label": "Đọc toàn bộ thông báo pháp lý:",
         "privacy_btn": "📜 Xem Chính sách Quyền riêng tư",
         "privacy_accepted_note": "Khi sử dụng phần mềm này, bạn đồng ý với Chính sách Quyền riêng tư.",
-        # LTTP Security
         "lttp_sec_title": "🛡️ LTTP Security",
         "lttp_sec_running": "LTTP Security đang chạy ngầm để bảo vệ dữ liệu của bạn.",
         "lttp_sec_safety": "Độ an toàn",
@@ -2949,28 +2912,20 @@ TRANSLATIONS = {
         "lttp_sec_off_msg": "⚠️ LTTP Security đang TẮT. Hãy bật hoặc chạy quét thủ công.",
         "lttp_sec_scan_running": "🔍 Đang chạy quét LTTP Security...",
         "lttp_sec_no_issues": "Không phát hiện vấn đề bảo mật.",
+        "lttp_sec_taskbar_caption": "Trạng thái LTTP Security (thanh dưới)",
+        "terms_lang_note": "Ngôn ngữ: Tiếng Việt",
     }
 }
 
 def t(key: str, lang: str = "en") -> str:
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
 
-PRIVACY_POLICY_HTML = """
-<div style="max-height: 450px; overflow-y: auto; padding: 16px; background: rgba(102,126,234,0.06); border-radius: 10px; font-size: 0.92rem; line-height: 1.7;">
-<h3>🔒 TUYÊN BỐ VỀ QUYỀN RIÊNG TƯ VÀ CÁCH XỬ LÝ DỮ LIỆU</h3>
-<ol style="padding-left: 20px;">
-<li><b>Phần mềm cam kết không chia sẻ dữ liệu cá nhân với bất kỳ bên thứ ba nào; mọi dữ liệu đều được xử lý một cách cẩn trọng.</b></li>
-<li>Phần mềm sử dụng một số cookie nhất định (cụ thể là các cookie dùng để ghi nhớ phiên đăng nhập).</li>
-<li><b style="color: #fbbf24;">Lưu ý quan trọng:</b> Vui lòng kiểm chứng thông tin do AI tạo ra trước khi chia sẻ.</li>
-<li>Nghiêm cấm mọi hành vi sao chép phần mềm dưới bất kỳ hình thức nào mà không được phép. Tìm hiểu thêm về các quy định pháp lý liên quan đến bản quyền tại:
-   <a href="https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md" target="_blank" style="color: #667eea;">https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md</a>
-</li>
-</ol>
-</div>
-"""
 
-TERMS_OF_USE_HTML = """
-<div style="max-height: 400px; overflow-y: auto; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; font-size: 0.9rem; line-height: 1.6;">
+# ==========================================
+# TERMS OF USE - ĐA NGÔN NGỮ (EN + VI)
+# ==========================================
+TERMS_OF_USE_HTML_EN = """
+<div style="max-height: 500px; overflow-y: auto; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; font-size: 0.9rem; line-height: 1.6;">
 <h3>TERMS OF USE & LEGAL DISCLAIMER</h3>
 <p><b>1. Prohibited Actions</b><br>
 The following actions are strictly prohibited and considered illegal:<br>
@@ -2983,13 +2938,59 @@ The following actions are strictly prohibited and considered illegal:<br>
 Any user who commits the following violations will be permanently blocked from using the services:<br>
 2.1. Creating multiple inactive or unused accounts.<br>
 2.2. Repeatedly sending inappropriate, spam, or meaningless content to the AI.<br>
-2.3. Performing actions that overload the server (including but not limited to DDoS attacks or scraping).<br>
-2.4. Exploiting security vulnerabilities without notifying the author.<br>
+2.3. Performing actions that overload the server (including but not limited to DDoS attacks or scraping), regardless of whether the source code is affected.<br>
+2.4. Exploiting security vulnerabilities without notifying the author, causing harm to the software, users, or related third-party platforms (e.g., GitHub, Streamlit Cloud).<br>
 2.5. Reverse-engineering the software to illicitly extract personal data or proprietary algorithms.</p>
 
 <p><b>3. Legal Consequences & Penalties</b><br>
-3.1. <b>In Vietnam:</b> Administrative fines up to 5,000,000,000 VND or criminal prosecution with imprisonment up to 3 years.<br>
-3.2. <b>International Jurisdiction:</b> Berne Convention applies in all signatory member countries.</p>
+3.1. <b>In Vietnam:</b> Violations of Section 1 may be subject to liability under the Law on Intellectual Property, the Law on Cybersecurity, and the Penal Code of Vietnam; administrative fines may reach up to 5,000,000,000 VND or criminal prosecution with imprisonment up to 3 years.<br>
+3.2. <b>International Jurisdiction:</b> Copyright-related violations (Section 1.1 and 1.3) will be handled in accordance with the Berne Convention for the Protection of Literary and Artistic Works, applicable in all signatory member countries (including but not limited to the United States, United Kingdom, European Union member states, Japan, etc.).</p>
+</div>
+"""
+
+TERMS_OF_USE_HTML_VI = """
+<div style="max-height: 500px; overflow-y: auto; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; font-size: 0.9rem; line-height: 1.7;">
+<h3>ĐIỀU KHOẢN SỬ DỤNG &amp; TUYÊN BỐ MIỄN TRỪ TRÁCH NHIỆM PHÁP LÝ</h3>
+<p><b>1. Các hành vi bị nghiêm cấm</b><br>
+Các hành vi sau đây bị nghiêm cấm tuyệt đối và được coi là bất hợp pháp:<br>
+1.1. Sao chép mã nguồn mà không có sự cho phép bằng văn bản từ tác giả.<br>
+1.2. Mạo danh tác giả hoặc chủ sở hữu bản quyền.<br>
+1.3. Thực hiện các sửa đổi trái phép đối với phần mềm.<br>
+1.4. Truyền tải hoặc phân phối thông tin/dữ liệu liên quan đến phần mềm mà không được cho phép trước.</p>
+
+<p><b>2. Vi phạm Điều khoản sử dụng</b><br>
+Người dùng thực hiện các hành vi vi phạm dưới đây sẽ bị chặn vĩnh viễn khỏi việc sử dụng các dịch vụ:<br>
+2.1. Tạo nhiều tài khoản không hoạt động hoặc không sử dụng.<br>
+2.2. Liên tục gửi nội dung không phù hợp, thư rác (spam) hoặc nội dung vô nghĩa cho AI.<br>
+2.3. Thực hiện các hành động gây quá tải máy chủ (bao gồm nhưng không giới hạn ở các cuộc tấn công DDoS hoặc thu thập dữ liệu tự động - scraping), bất kể mã nguồn có bị ảnh hưởng hay không.<br>
+2.4. Khai thác các lỗ hổng bảo mật mà không thông báo cho tác giả, gây tổn hại đến phần mềm, người dùng hoặc các nền tảng bên thứ ba có liên quan (ví dụ: GitHub, Streamlit Cloud).<br>
+2.5. Kỹ thuật đảo ngược (reverse-engineering) phần mềm nhằm mục đích trích xuất trái phép dữ liệu cá nhân hoặc các thuật toán độc quyền.</p>
+
+<p><b>3. Hậu quả pháp lý &amp; Hình thức xử phạt</b><br>
+3.1. <b>Tại Việt Nam:</b> Các hành vi vi phạm Mục 1 có thể bị truy cứu trách nhiệm theo Luật Sở hữu trí tuệ, Luật An ninh mạng và Bộ luật Hình sự Việt Nam; mức xử phạt hành chính có thể lên tới 5.000.000.000 VNĐ hoặc bị truy cứu trách nhiệm hình sự với mức án tù lên đến 3 năm.<br>
+3.2. <b>Phạm vi quốc tế:</b> Các hành vi vi phạm liên quan đến bản quyền (Mục 1.1 và 1.3) sẽ bị xử lý theo Công ước Berne về bảo hộ các tác phẩm văn học và nghệ thuật, áp dụng tại tất cả các quốc gia thành viên ký kết (bao gồm nhưng không giới hạn ở Hoa Kỳ, Vương quốc Anh, các quốc gia thành viên Liên minh Châu Âu, Nhật Bản, v.v.).</p>
+</div>
+"""
+
+
+def get_terms_html(lang: str) -> str:
+    """Trả về Terms of Use HTML phù hợp với ngôn ngữ."""
+    if lang == "vi":
+        return TERMS_OF_USE_HTML_VI
+    return TERMS_OF_USE_HTML_EN
+
+
+PRIVACY_POLICY_HTML = """
+<div style="max-height: 450px; overflow-y: auto; padding: 16px; background: rgba(102,126,234,0.06); border-radius: 10px; font-size: 0.92rem; line-height: 1.7;">
+<h3>🔒 TUYÊN BỐ VỀ QUYỀN RIÊNG TƯ VÀ CÁCH XỬ LÝ DỮ LIỆU</h3>
+<ol style="padding-left: 20px;">
+<li><b>Phần mềm cam kết không chia sẻ dữ liệu cá nhân với bất kỳ bên thứ ba nào; mọi dữ liệu đều được xử lý một cách cẩn trọng.</b></li>
+<li>Phần mềm sử dụng một số cookie nhất định (cụ thể là các cookie dùng để ghi nhớ phiên đăng nhập).</li>
+<li><b style="color: #fbbf24;">Lưu ý quan trọng:</b> Vui lòng kiểm chứng thông tin do AI tạo ra trước khi chia sẻ.</li>
+<li>Nghiêm cấm mọi hành vi sao chép phần mềm dưới bất kỳ hình thức nào mà không được phép. Tìm hiểu thêm về các quy định pháp lý liên quan đến bản quyền tại:
+   <a href="https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md" target="_blank" style="color: #667eea;">https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md</a>
+</li>
+</ol>
 </div>
 """
 
@@ -3152,6 +3153,7 @@ def _try_record_traffic_once():
             GitHubStorage.save_db(db)
         st.session_state.traffic_recorded = True
 
+
 _try_record_traffic_once()
 
 
@@ -3224,6 +3226,7 @@ def render_announcement_banner():
         {meta_html}
     </div>
     """, unsafe_allow_html=True)
+
 
 def render_test_banner():
     if not is_temporary_session():
@@ -3393,7 +3396,8 @@ def render_auth_ui():
 
                 st.markdown(f"**{t('terms_title', lang)}**")
                 with st.expander(t("terms_show_btn", lang), expanded=False):
-                    st.markdown(TERMS_OF_USE_HTML, unsafe_allow_html=True)
+                    # HIỂN THỊ TERMS OF USE THEO NGÔN NGỮ HIỆN TẠI
+                    st.markdown(get_terms_html(lang), unsafe_allow_html=True)
                 terms_agree = st.checkbox(t("terms_accept_checkbox", lang), value=False, key="terms_agree_chk")
 
                 st.markdown(f"**{t('privacy_title', lang)}**")
@@ -4557,10 +4561,9 @@ for msg in st.session_state.messages:
 
 
 # ==========================================
-# 33. XỬ LÝ PROMPT - TỐI ƯU
+# 33. XỬ LÝ PROMPT
 # ==========================================
 def _run_deferred_tasks(chat_data, user_prompt, lang):
-    """Chạy các tác vụ phụ (title, summary) KHÔNG block response."""
     try:
         all_messages = st.session_state.messages
 
@@ -4842,14 +4845,18 @@ elif user_prompt := st.chat_input(t("chat_placeholder", lang)):
 
 
 # ==========================================
-# 34. LTTP SECURITY PANEL (Bottom of UI)
+# 34. LTTP SECURITY - TASKBAR (CUỐI TRANG, KHÔNG TRONG KHUNG CHAT)
 # ==========================================
-def render_lttp_security_panel():
-    """LTTP Security panel - hiển thị ở cuối giao diện."""
+def render_lttp_security_taskbar():
+    """
+    Hiển thị LTTP Security ở CUỐI trang (taskbar), KHÔNG nằm trong khung chat.
+    Được gọi SAU khối chat chính → nằm dưới cùng giao diện.
+    """
     sec_enabled = is_lttp_security_enabled()
-    
+
+    st.markdown('<div class="lttp-taskbar-wrap">', unsafe_allow_html=True)
     st.markdown('<div class="lttp-sec-panel">', unsafe_allow_html=True)
-    
+
     # Header
     status_badge = (
         f'<span class="lttp-sec-badge-on">✅ {t("lttp_sec_toggle_on", lang)}</span>'
@@ -4864,20 +4871,20 @@ def render_lttp_security_panel():
         f'</div>',
         unsafe_allow_html=True
     )
-    
+    st.caption(f"<span style='font-size:0.72rem;opacity:0.6;'>{t('lttp_sec_taskbar_caption', lang)}</span>", unsafe_allow_html=True)
+
     if sec_enabled:
         st.caption(t("lttp_sec_running", lang))
     else:
         st.warning(t("lttp_sec_off_msg", lang))
-    
-    # Run initial scan if needed
+
+    # Auto-scan
     now_ts = time.time()
     last_scan_time = st.session_state.get("_lttp_sec_last_scan_time", 0)
     last_scan = st.session_state.get("_lttp_sec_last_scan")
-    
-    # Auto-scan every 60s when enabled
+
     needs_scan = (last_scan is None) or (sec_enabled and (now_ts - last_scan_time) > 60)
-    
+
     if needs_scan:
         with st.spinner(t("lttp_sec_scan_running", lang)):
             db_scan = GitHubStorage.load_db()
@@ -4885,8 +4892,7 @@ def render_lttp_security_panel():
             st.session_state._lttp_sec_last_scan = findings
             st.session_state._lttp_sec_last_scan_time = now_ts
             last_scan = findings
-            last_scan_time = now_ts
-    
+
     if last_scan:
         score = last_scan.get("score", 100)
         if score >= 80:
@@ -4895,8 +4901,7 @@ def render_lttp_security_panel():
             score_class = "warn"
         else:
             score_class = "bad"
-        
-        # Safety score
+
         sc1, sc2 = st.columns([1, 3])
         with sc1:
             st.markdown(
@@ -4916,8 +4921,7 @@ def render_lttp_security_panel():
                     msg = iss.get("msg", "")
                     icon = {"low": "ℹ️", "medium": "⚠️", "high": "🚨", "critical": "🔥"}.get(sev, "ℹ️")
                     st.markdown(f"{icon} {msg}")
-        
-        # Layers
+
         with st.expander(f"🛡️ {t('lttp_sec_layers', lang)}", expanded=False):
             layers = last_scan.get("layers", [])
             for layer in layers:
@@ -4932,7 +4936,7 @@ def render_lttp_security_panel():
                     f'</div>',
                     unsafe_allow_html=True
                 )
-    
+
     # Controls
     st.markdown("---")
     ctrl1, ctrl2 = st.columns(2)
@@ -4943,14 +4947,13 @@ def render_lttp_security_panel():
         else:
             toggle_label = t("lttp_sec_enable_btn", lang)
             toggle_type = "primary"
-        
+
         if st.button(toggle_label, use_container_width=True, key="lttp_sec_toggle_btn", type=toggle_type):
             if not enforce_rate_limit("security_toggle", "LTTP Security toggle"):
                 pass
             else:
                 new_state = not sec_enabled
                 if not new_state:
-                    # Confirmation dialog for disabling
                     st.session_state._lttp_sec_confirm_disable = True
                     st.rerun()
                 else:
@@ -4958,14 +4961,13 @@ def render_lttp_security_panel():
                     st.toast(t("lttp_sec_enabled_toast", lang), icon="🛡️")
                     time.sleep(0.4)
                     st.rerun()
-    
+
     with ctrl2:
         if st.button(t("lttp_sec_scan_now", lang), use_container_width=True, key="lttp_sec_manual_scan_btn"):
             if enforce_rate_limit("security_scan", "LTTP Security scan"):
                 with st.spinner(t("lttp_sec_scan_running", lang)):
                     db_scan = GitHubStorage.load_db()
                     findings = run_lttp_security_scan(db_scan)
-                    # Log scan history
                     if not is_temporary_session():
                         try:
                             log_lttp_security_scan(db_scan, findings)
@@ -4977,8 +4979,8 @@ def render_lttp_security_panel():
                 st.success(t("lttp_sec_scan_clean", lang) if not findings.get("issues") else t("lttp_sec_scan_issues", lang))
                 time.sleep(0.5)
                 st.rerun()
-    
-    # Confirmation for disabling
+
+    # Confirmation dialog for disabling
     if st.session_state.get("_lttp_sec_confirm_disable", False):
         st.warning(t("lttp_sec_disable_warning", lang))
         wc1, wc2 = st.columns(2)
@@ -4993,9 +4995,10 @@ def render_lttp_security_panel():
             if st.button("❌ " + ("Hủy" if lang == "vi" else "Cancel"), use_container_width=True, key="lttp_sec_confirm_no"):
                 st.session_state._lttp_sec_confirm_disable = False
                 st.rerun()
-    
+
+    st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-# Render LTTP Security panel at the bottom
-render_lttp_security_panel()
+# Render LTTP Security ở cuối trang (taskbar) - SAU khối chat
+render_lttp_security_taskbar()
