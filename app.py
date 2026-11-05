@@ -32,7 +32,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.43.0"
+APP_VERSION = "1.44.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -71,8 +71,6 @@ BR_META_COOKIE = "LTTP_br_meta"
 BR_CHUNK_SIZE = 3000
 BR_MAX_CHUNKS = 20
 
-STREAM_UPDATE_INTERVAL = 0.05
-
 TYPING_MODE_SMOOTH = "smooth"
 TYPING_MODE_CONTROLLED = "controlled"
 TYPING_MODE_INSTANT = "instant"
@@ -82,7 +80,7 @@ DEFAULT_TYPING_CPS = 30
 COOKIE_STOP_FLAG = "LTTP_stop_flag"
 QL_MODE_COOKIE = "LTTP_ql_mode"
 LTTP_SECURITY_ENABLED_COOKIE = "LTTP_sec_enabled"
-LTTP_TASKBAR_COLLAPSED_COOKIE = "LTTP_tb_collapsed"
+LTTP_FEEDBACK_OPEN_COOKIE = "LTTP_fb_open"
 
 # ========== TỐI ƯU TỐC ĐỘ ==========
 SUMMARY_TRIGGER_RATIO = 0.95
@@ -431,15 +429,28 @@ lttp_security = LTTPSecurity()
 
 
 # ==========================================
-# 2b. CUSTOM CSS + RESPONSIVE + TASKBAR
+# 2b. CUSTOM CSS + RESPONSIVE + ANIMATED TITLE
 # ==========================================
 st.markdown("""
 <style>
+    /* ===== ANIMATED GRADIENT TITLE ===== */
     .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        font-weight: 800; font-size: 2.5rem; margin-bottom: 0.2rem;
+        background: linear-gradient(90deg, #667eea, #764ba2, #f093fb, #f5576c, #4facfe, #00f2fe, #667eea);
+        background-size: 400% 400%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
+        font-size: 2.5rem;
+        margin-bottom: 0.2rem;
+        animation: gradientShift 8s ease infinite;
     }
+    @keyframes gradientShift {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+
     .ai-loading-box {
         display: flex; align-items: center; gap: 12px;
         padding: 12px 18px;
@@ -522,14 +533,9 @@ st.markdown("""
         background: linear-gradient(90deg,#f59e0b,#f97316);
         color:#fff; border-radius:12px; margin-bottom:14px;
         box-shadow: 0 4px 16px rgba(249,115,22,0.35);
-        animation: rebootPulse 2s ease-in-out infinite;
     }
     .reboot-banner-title { font-size:1.05rem; font-weight:800; margin-bottom:4px; }
     .reboot-banner-desc { font-size:0.9rem; opacity:0.95; }
-    @keyframes rebootPulse {
-        0%,100% { box-shadow: 0 4px 16px rgba(249,115,22,0.35); }
-        50% { box-shadow: 0 4px 24px rgba(249,115,22,0.65); }
-    }
 
     .announcement-banner {
         padding: 16px 20px;
@@ -707,99 +713,7 @@ st.markdown("""
         border-color: rgba(239,68,68,0.7) !important;
     }
 
-    /* ===== TASKBAR CỐ ĐỊNH ===== */
-    #lttp-fixed-taskbar {
-        position: fixed;
-        left: 0; right: 0; bottom: 0;
-        z-index: 999998;
-        background: rgba(14,17,23,0.97);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        border-top: 2px solid rgba(16,185,129,0.4);
-        box-shadow: 0 -8px 32px rgba(0,0,0,0.6);
-        padding: 10px 16px;
-        max-height: 65vh;
-        overflow-y: auto;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: #e2e8f0;
-    }
-    #lttp-fixed-taskbar .tb-header {
-        display: flex; align-items: center; gap: 10px;
-        flex-wrap: wrap;
-        margin-bottom: 8px;
-    }
-    #lttp-fixed-taskbar .tb-tab {
-        padding: 6px 14px;
-        border-radius: 8px;
-        border: 1px solid rgba(148,163,184,0.3);
-        background: rgba(255,255,255,0.03);
-        color: #94a3b8;
-        font-size: 0.82rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.15s ease;
-    }
-    #lttp-fixed-taskbar .tb-tab.active {
-        background: rgba(16,185,129,0.15);
-        color: #10b981;
-        border-color: rgba(16,185,129,0.5);
-    }
-    #lttp-fixed-taskbar .tb-tab:hover {
-        background: rgba(16,185,129,0.1);
-    }
-    #lttp-fixed-taskbar .tb-collapse-btn {
-        margin-left: auto;
-        width: 34px; height: 34px;
-        border-radius: 8px;
-        border: 1px solid rgba(16,185,129,0.4);
-        background: rgba(16,185,129,0.15);
-        color: #10b981;
-        cursor: pointer;
-        font-weight: bold;
-        font-size: 14px;
-        display: flex; align-items: center; justify-content: center;
-    }
-    #lttp-fixed-taskbar .tb-collapse-btn:hover {
-        background: rgba(16,185,129,0.3);
-    }
-    #lttp-fixed-taskbar .tb-body {
-        padding: 8px 0;
-    }
-    #lttp-fixed-taskbar .tb-shield {
-        display: inline-block;
-        width: 22px; height: 22px;
-        background: linear-gradient(135deg, #10b981, #059669);
-        border-radius: 6px;
-        animation: shieldGlow 2s ease-in-out infinite;
-    }
-    @keyframes shieldGlow {
-        0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,0.5); }
-        50% { box-shadow: 0 0 0 6px rgba(16,185,129,0.1); }
-    }
-    #lttp-fixed-taskbar .tb-badge-on {
-        display: inline-block; padding: 3px 10px;
-        border-radius: 8px; font-size: 0.75rem;
-        font-weight: 700;
-        background: rgba(16,185,129,0.2); color: #10b981;
-        border: 1px solid rgba(16,185,129,0.4);
-    }
-    #lttp-fixed-taskbar .tb-badge-off {
-        display: inline-block; padding: 3px 10px;
-        border-radius: 8px; font-size: 0.75rem;
-        font-weight: 700;
-        background: rgba(239,68,68,0.2); color: #ef4444;
-        border: 1px solid rgba(239,68,68,0.4);
-    }
-    #lttp-fixed-taskbar .tb-score {
-        font-size: 1.5rem; font-weight: 900;
-        color: #10b981; line-height: 1.1;
-    }
-    #lttp-fixed-taskbar .tb-score.warn { color: #fbbf24; }
-    #lttp-fixed-taskbar .tb-score.bad { color: #ef4444; }
-
-    /* Đẩy nội dung chính lên để không bị taskbar che */
-    body { padding-bottom: 70px !important; }
-
+    /* ===== HIDE FILE UPLOAD ===== */
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -844,48 +758,7 @@ st.markdown("""
             padding-top: 1rem !important;
             padding-bottom: 90px !important;
         }
-
-        /* Taskbar mobile */
-        #lttp-fixed-taskbar {
-            padding: 8px 10px;
-            max-height: 55vh;
-        }
-        #lttp-fixed-taskbar .tb-tab {
-            padding: 5px 10px;
-            font-size: 0.75rem;
-        }
-        #lttp-fixed-taskbar .tb-collapse-btn {
-            width: 30px; height: 30px;
-            font-size: 12px;
-        }
-        #lttp-fixed-taskbar .tb-score {
-            font-size: 1.2rem;
-        }
-        body { padding-bottom: 60px !important; }
-
-        /* Chat input mobile */
-        section[data-testid="stChatInput"] {
-            position: sticky !important;
-            bottom: 55px !important;
-            z-index: 999997 !important;
-        }
     }
-
-    @media (max-width: 480px) {
-        #lttp-fixed-taskbar {
-            padding: 6px 8px;
-            max-height: 50vh;
-        }
-        #lttp-fixed-taskbar .tb-header {
-            gap: 6px;
-            margin-bottom: 6px;
-        }
-        #lttp-fixed-taskbar .tb-tab {
-            padding: 4px 8px;
-            font-size: 0.7rem;
-        }
-    }
-
     @media (min-width: 769px) {
         section.main .block-container {
             padding-top: 1.5rem !important;
@@ -1025,7 +898,7 @@ def fetch_changelog_cached() -> tuple:
         resp = requests.get(
             CHANGELOG_URL,
             timeout=5,
-            headers={"User-Agent": "LTTP-AI-Online/1.43.0"}
+            headers={"User-Agent": "LTTP-AI-Online/1.44.0"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -2794,26 +2667,26 @@ TRANSLATIONS = {
         "privacy_btn": "📜 View Privacy Policy",
         "privacy_accepted_note": "By using this software, you agree to the Privacy Policy.",
         "lttp_sec_title": "LTTP Security",
-        "lttp_sec_running": "Running in background",
+        "lttp_sec_running": "Running",
         "lttp_sec_safety": "Safety",
         "lttp_sec_layers": "Protection layers",
         "lttp_sec_enabled_toast": "LTTP Security enabled",
         "lttp_sec_disabled_toast": "⚠️ LTTP Security disabled — data NOT fully protected!",
         "lttp_sec_disable_warning": "⚠️ WARNING: When disabled, LTTP Security no longer protects your data automatically. Only manual scans remain. Are you sure?",
-        "lttp_sec_scan_now": "🔄 Scan now",
-        "lttp_sec_scan_clean": "✅ Clean — no issues",
-        "lttp_sec_scan_issues": "⚠️ Issues detected",
+        "lttp_sec_scan_now": "🔄 Scan",
+        "lttp_sec_scan_clean": "✅ Clean",
+        "lttp_sec_scan_issues": "⚠️ Issues",
         "lttp_sec_toggle_on": "ON",
         "lttp_sec_toggle_off": "OFF",
         "lttp_sec_enable_btn": "🛡️ Enable",
         "lttp_sec_disable_btn": "🔓 Disable",
-        "lttp_sec_off_msg": "⚠️ LTTP Security is OFF. Enable or scan manually.",
+        "lttp_sec_off_msg": "⚠️ OFF",
         "lttp_sec_scan_running": "Scanning...",
-        "lttp_sec_no_issues": "No security issues found.",
-        "taskbar_lttp_sec": "🛡️ Security",
-        "taskbar_feedback": "💬 Feedback",
-        "taskbar_collapse": "▼",
-        "taskbar_expand": "▲",
+        "lttp_sec_no_issues": "No issues found.",
+        "taskbar_sec": "Security",
+        "taskbar_feedback": "Feedback",
+        "taskbar_lang_tip": "Switch language",
+        "taskbar_user": "User",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -3038,26 +2911,26 @@ TRANSLATIONS = {
         "privacy_btn": "📜 Xem Chính sách Quyền riêng tư",
         "privacy_accepted_note": "Khi sử dụng phần mềm này, bạn đồng ý với Chính sách Quyền riêng tư.",
         "lttp_sec_title": "LTTP Security",
-        "lttp_sec_running": "Đang chạy ngầm bảo vệ",
+        "lttp_sec_running": "Đang chạy",
         "lttp_sec_safety": "An toàn",
         "lttp_sec_layers": "Các lớp bảo vệ",
         "lttp_sec_enabled_toast": "Đã bật LTTP Security",
         "lttp_sec_disabled_toast": "⚠️ Đã TẮT LTTP Security — dữ liệu KHÔNG được bảo vệ đầy đủ!",
         "lttp_sec_disable_warning": "⚠️ CẢNH BÁO: Khi tắt, LTTP Security không còn tự động bảo vệ dữ liệu. Chỉ còn quét thủ công. Bạn chắc chắn?",
-        "lttp_sec_scan_now": "🔄 Quét ngay",
-        "lttp_sec_scan_clean": "✅ Sạch — không có vấn đề",
-        "lttp_sec_scan_issues": "⚠️ Phát hiện vấn đề",
+        "lttp_sec_scan_now": "🔄 Quét",
+        "lttp_sec_scan_clean": "✅ Sạch",
+        "lttp_sec_scan_issues": "⚠️ Có vấn đề",
         "lttp_sec_toggle_on": "BẬT",
         "lttp_sec_toggle_off": "TẮT",
         "lttp_sec_enable_btn": "🛡️ Bật",
         "lttp_sec_disable_btn": "🔓 Tắt",
-        "lttp_sec_off_msg": "⚠️ LTTP Security đang TẮT. Hãy bật hoặc quét thủ công.",
+        "lttp_sec_off_msg": "⚠️ TẮT",
         "lttp_sec_scan_running": "Đang quét...",
-        "lttp_sec_no_issues": "Không phát hiện vấn đề bảo mật.",
-        "taskbar_lttp_sec": "🛡️ Bảo mật",
-        "taskbar_feedback": "💬 Phản hồi",
-        "taskbar_collapse": "▼",
-        "taskbar_expand": "▲",
+        "lttp_sec_no_issues": "Không phát hiện vấn đề.",
+        "taskbar_sec": "Bảo mật",
+        "taskbar_feedback": "Phản hồi",
+        "taskbar_lang_tip": "Đổi ngôn ngữ",
+        "taskbar_user": "Người dùng",
     }
 }
 
@@ -3165,8 +3038,7 @@ for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
               ("_lttp_sec_enabled", True),
               ("_lttp_sec_last_scan", None),
               ("_lttp_sec_last_scan_time", 0),
-              ("_taskbar_tab", "security"),
-              ("_taskbar_collapsed", False)]:
+              ("_taskbar_feedback_open", False)]:
     if k not in st.session_state:
         st.session_state[k] = dv
 
@@ -3926,7 +3798,7 @@ def render_admin_panel():
     render_security_panel(lang, db)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ===== FEEDBACK MANAGEMENT =====
+    # FEEDBACK MANAGEMENT
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("feedback_admin_title", lang))
     st.caption(t("feedback_admin_desc", lang))
@@ -4007,7 +3879,7 @@ def render_admin_panel():
                 st.markdown("---")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ===== BUG REPORTS =====
+    # BUG REPORTS
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("bug_report_admin_title", lang))
     st.caption(t("bug_report_admin_desc", lang))
@@ -4308,10 +4180,6 @@ with st.sidebar:
 
     if st.button(t("bug_report_btn", lang), use_container_width=True, key="bug_report_open_btn"):
         st.session_state.bug_report_open = True
-        st.rerun()
-
-    if st.button(t("feedback_btn", lang), use_container_width=True, key="feedback_open_btn"):
-        st.session_state.feedback_open = True
         st.rerun()
 
     if not is_test and not is_guest:
@@ -5169,321 +5037,308 @@ elif user_prompt := st.chat_input(t("chat_placeholder", lang)):
 
 
 # ==========================================
-# 34. TASKBAR (FIXED BOTTOM) - LTTP SECURITY + FEEDBACK
+# 34. TASKBAR - PURE HTML (NO STREAMLIT WIDGETS INSIDE CHAT)
 # ==========================================
-def render_taskbar():
+def render_taskbar_html():
     """
-    Taskbar cố định ở CUỐI MÀN HÌNH (fixed bottom), không nằm trong chat.
-    Có 2 tab: LTTP Security và Feedback.
+    Taskbar render 100% bằng HTML thuần qua st.components.v1.html với height=0.
+    → KHÔNG để lại bất kỳ element Streamlit nào trong khung chat.
+    → Taskbar fixed bottom qua CSS trong iframe's parent document (injected JS).
+    
+    Nội dung:
+    - Statue nhỏ: icon khiên + điểm số + ON/OFF
+    - Tên người dùng (hoặc Guest/Test/Admin)
+    - Nút chuyển đổi ngôn ngữ EN/VI
+    - Nút Feedback (mở dialog qua query param)
     """
     sec_enabled = is_lttp_security_enabled()
-    cur_tab = st.session_state.get("_taskbar_tab", "security")
-    collapsed = st.session_state.get("_taskbar_collapsed", False)
-
-    # Auto-scan
+    
+    # Auto-scan trước khi render (nhẹ, không tốn nhiều)
     now_ts = time.time()
     last_scan_time = st.session_state.get("_lttp_sec_last_scan_time", 0)
     last_scan = st.session_state.get("_lttp_sec_last_scan")
-
-    needs_scan = (last_scan is None) or (sec_enabled and (now_ts - last_scan_time) > 60)
-    if needs_scan:
+    if (last_scan is None) or (sec_enabled and (now_ts - last_scan_time) > 60):
         db_scan = GitHubStorage.load_db()
         findings = run_lttp_security_scan(db_scan)
         st.session_state._lttp_sec_last_scan = findings
         st.session_state._lttp_sec_last_scan_time = now_ts
         last_scan = findings
-
+    
     score = last_scan.get("score", 100) if last_scan else 100
-    score_class = "" if score >= 80 else ("warn" if score >= 50 else "bad")
-
-    # Header HTML
-    sec_badge = (
-        f'<span class="tb-badge-on">✅ {t("lttp_sec_toggle_on", lang)}</span>'
-        if sec_enabled else
-        f'<span class="tb-badge-off">❌ {t("lttp_sec_toggle_off", lang)}</span>'
-    )
-    tab_sec_active = "active" if cur_tab == "security" else ""
-    tab_fb_active = "active" if cur_tab == "feedback" else ""
-
-    # Container cho taskbar - key để JS tìm
-    tb_container = st.container(key="lttp_taskbar_container")
-
-    with tb_container:
-        # Header + tabs
-        st.markdown(f"""
-        <div id="lttp-fixed-taskbar">
-            <div class="tb-header">
-                <span class="tb-shield"></span>
-                <span style="font-weight:800;color:#10b981;font-size:0.95rem;">LTTP Security</span>
-                {sec_badge}
-                <span style="font-size:0.72rem;opacity:0.6;">v{LTTPSecurity.VERSION} • {t('lttp_sec_running', lang) if sec_enabled else t('lttp_sec_off_msg', lang)}</span>
-                <span style="margin-left:auto;font-size:0.75rem;opacity:0.6;">{t('taskbar_lttp_sec', lang)} / {t('taskbar_feedback', lang)}</span>
-            </div>
+    
+    # Xác định user label
+    if is_test:
+        user_label = f"🔧 {st.session_state.get('user', 'test')}"
+        user_color = "#a855f7"
+    elif is_guest:
+        user_label = f"👤 {'Khách' if lang == 'vi' else 'Guest'}"
+        user_color = "#94a3b8"
+    else:
+        user_label = f"👤 {st.session_state.get('user', '?')}"
+        user_color = "#667eea"
+    
+    # Score color
+    if score >= 80:
+        score_color = "#10b981"
+    elif score >= 50:
+        score_color = "#fbbf24"
+    else:
+        score_color = "#ef4444"
+    
+    # Trạng thái
+    if sec_enabled:
+        sec_status_text = "ON" if lang == "en" else "BẬT"
+        sec_dot_color = "#10b981"
+    else:
+        sec_status_text = "OFF" if lang == "en" else "TẮT"
+        sec_dot_color = "#ef4444"
+    
+    # Language buttons
+    if lang == "en":
+        lang_en_style = "background:rgba(102,126,234,0.25);color:#667eea;border:1px solid rgba(102,126,234,0.5);"
+        lang_vi_style = "background:transparent;color:#94a3b8;border:1px solid rgba(148,163,184,0.2);"
+    else:
+        lang_en_style = "background:transparent;color:#94a3b8;border:1px solid rgba(148,163,184,0.2);"
+        lang_vi_style = "background:rgba(102,126,234,0.25);color:#667eea;border:1px solid rgba(102,126,234,0.5);"
+    
+    feedback_label = "💬 Feedback" if lang == "en" else "💬 Phản hồi"
+    
+    # Escape user label
+    user_label_html = (user_label
+                       .replace("&", "&amp;")
+                       .replace("<", "&lt;")
+                       .replace(">", "&gt;"))
+    
+    # HTML taskbar
+    taskbar_html = f"""
+    <style>
+    #lttp-taskbar {{
+        position: fixed;
+        left: 0; right: 0; bottom: 0;
+        z-index: 999998;
+        background: linear-gradient(180deg, rgba(14,17,23,0.92), rgba(14,17,23,0.98));
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-top: 1px solid rgba(16,185,129,0.35);
+        box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
+        padding: 6px 14px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 0.82rem;
+        color: #e2e8f0;
+        height: 42px;
+        box-sizing: border-box;
+        overflow-x: auto;
+        overflow-y: hidden;
+        white-space: nowrap;
+    }}
+    #lttp-taskbar::-webkit-scrollbar {{
+        height: 4px;
+    }}
+    #lttp-taskbar::-webkit-scrollbar-thumb {{
+        background: rgba(16,185,129,0.3);
+        border-radius: 2px;
+    }}
+    #lttp-taskbar .tb-sec {{
+        display: flex; align-items: center; gap: 6px;
+        padding: 4px 10px;
+        background: rgba(16,185,129,0.08);
+        border: 1px solid rgba(16,185,129,0.25);
+        border-radius: 8px;
+        flex-shrink: 0;
+    }}
+    #lttp-taskbar .tb-sec-dot {{
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        background: {sec_dot_color};
+        box-shadow: 0 0 0 3px {sec_dot_color}22;
+        animation: tbPulse 2s ease-in-out infinite;
+    }}
+    @keyframes tbPulse {{
+        0%,100% {{ opacity: 1; transform: scale(1); }}
+        50% {{ opacity: 0.7; transform: scale(0.9); }}
+    }}
+    #lttp-taskbar .tb-sec-score {{
+        font-weight: 900;
+        color: {score_color};
+        font-size: 0.9rem;
+    }}
+    #lttp-taskbar .tb-sec-label {{
+        font-size: 0.68rem;
+        color: #94a3b8;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }}
+    #lttp-taskbar .tb-divider {{
+        width: 1px;
+        height: 20px;
+        background: rgba(148,163,184,0.2);
+        flex-shrink: 0;
+    }}
+    #lttp-taskbar .tb-user {{
+        display: flex; align-items: center; gap: 6px;
+        color: {user_color};
+        font-weight: 600;
+        flex-shrink: 0;
+    }}
+    #lttp-taskbar .tb-actions {{
+        margin-left: auto;
+        display: flex; align-items: center; gap: 6px;
+        flex-shrink: 0;
+    }}
+    #lttp-taskbar .tb-lang-btn {{
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        {lang_en_style}
+    }}
+    #lttp-taskbar .tb-lang-btn-vi {{
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        {lang_vi_style}
+    }}
+    #lttp-taskbar .tb-fb-btn {{
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        background: rgba(102,126,234,0.15);
+        color: #667eea;
+        border: 1px solid rgba(102,126,234,0.35);
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }}
+    #lttp-taskbar .tb-fb-btn:hover {{
+        background: rgba(102,126,234,0.3);
+    }}
+    body {{ padding-bottom: 50px !important; }}
+    section.main .block-container {{ padding-bottom: 60px !important; }}
+    
+    @media (max-width: 768px) {{
+        #lttp-taskbar {{
+            font-size: 0.75rem;
+            padding: 5px 8px;
+            gap: 8px;
+            height: 38px;
+        }}
+        #lttp-taskbar .tb-sec {{
+            padding: 3px 8px;
+            gap: 4px;
+        }}
+        #lttp-taskbar .tb-sec-score {{
+            font-size: 0.8rem;
+        }}
+        #lttp-taskbar .tb-sec-label {{
+            display: none;
+        }}
+        #lttp-taskbar .tb-lang-btn,
+        #lttp-taskbar .tb-lang-btn-vi {{
+            padding: 3px 7px;
+            font-size: 0.68rem;
+        }}
+        #lttp-taskbar .tb-fb-btn {{
+            padding: 3px 9px;
+            font-size: 0.7rem;
+        }}
+        body {{ padding-bottom: 44px !important; }}
+        section.main .block-container {{ padding-bottom: 55px !important; }}
+    }}
+    </style>
+    <div id="lttp-taskbar">
+        <div class="tb-sec">
+            <span class="tb-sec-dot"></span>
+            <span class="tb-sec-label">LTTP Security</span>
+            <span class="tb-sec-score">{score}</span>
+            <span style="color:#94a3b8;font-size:0.7rem;">{sec_status_text}</span>
         </div>
-        """, unsafe_allow_html=True)
-
-        # Tabs using Streamlit buttons (inside taskbar container)
-        tc1, tc2, tc3 = st.columns([1, 1, 1])
-        with tc1:
-            if st.button(t("taskbar_lttp_sec", lang), use_container_width=True,
-                         key="tb_tab_sec_btn", type="primary" if cur_tab == "security" else "secondary"):
-                st.session_state._taskbar_tab = "security"
-                st.rerun()
-        with tc2:
-            if st.button(t("taskbar_feedback", lang), use_container_width=True,
-                         key="tb_tab_fb_btn", type="primary" if cur_tab == "feedback" else "secondary"):
-                st.session_state._taskbar_tab = "feedback"
-                st.rerun()
-        with tc3:
-            collapse_label = "▲" if collapsed else "▼"
-            if st.button(collapse_label, use_container_width=True, key="tb_collapse_btn"):
-                st.session_state._taskbar_collapsed = not collapsed
-                st.rerun()
-
-        if not collapsed:
-            # ===== TAB: SECURITY =====
-            if cur_tab == "security":
-                if last_scan:
-                    sc1, sc2 = st.columns([1, 3])
-                    with sc1:
-                        st.markdown(
-                            f'<div style="text-align:center;padding:8px;background:rgba(16,185,129,0.08);border-radius:10px;border:1px solid rgba(16,185,129,0.25);">'
-                            f'<div class="tb-score {score_class}">{score}</div>'
-                            f'<div style="font-size:0.75rem;color:#94a3b8;">{t("lttp_sec_safety", lang)}</div>'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
-                    with sc2:
-                        issues = last_scan.get("issues", [])
-                        if not issues:
-                            st.success(t("lttp_sec_no_issues", lang))
-                        else:
-                            for iss in issues[:3]:
-                                sev = iss.get("severity", "low")
-                                msg = iss.get("msg", "")
-                                icon = {"low": "ℹ️", "medium": "⚠️", "high": "🚨", "critical": "🔥"}.get(sev, "ℹ️")
-                                st.markdown(f"{icon} {msg}")
-
-                    with st.expander(f"🛡️ {t('lttp_sec_layers', lang)}", expanded=False):
-                        layers = last_scan.get("layers", [])
-                        for layer in layers:
-                            lname = layer.get("name", "?")
-                            lstatus = layer.get("status", "?")
-                            ldesc = layer.get("desc", "")
-                            icon = "✅" if lstatus in ("active", "pass") else "⚪"
-                            st.markdown(f"{icon} **{lname}** — {ldesc}")
-
-                ctrl1, ctrl2 = st.columns(2)
-                with ctrl1:
-                    if sec_enabled:
-                        toggle_label = t("lttp_sec_disable_btn", lang)
-                        toggle_type = "secondary"
-                    else:
-                        toggle_label = t("lttp_sec_enable_btn", lang)
-                        toggle_type = "primary"
-                    if st.button(toggle_label, use_container_width=True,
-                                 key="tb_lttp_sec_toggle_btn", type=toggle_type):
-                        if enforce_rate_limit("security_toggle", "LTTP Security toggle"):
-                            new_state = not sec_enabled
-                            if not new_state:
-                                st.session_state._lttp_sec_confirm_disable = True
-                                st.rerun()
-                            else:
-                                set_lttp_security_enabled(True)
-                                st.toast(t("lttp_sec_enabled_toast", lang), icon="🛡️")
-                                time.sleep(0.3)
-                                st.rerun()
-
-                with ctrl2:
-                    if st.button(t("lttp_sec_scan_now", lang), use_container_width=True, key="tb_lttp_sec_scan_btn"):
-                        if enforce_rate_limit("security_scan", "LTTP Security scan"):
-                            with st.spinner(t("lttp_sec_scan_running", lang)):
-                                db_scan = GitHubStorage.load_db()
-                                findings = run_lttp_security_scan(db_scan)
-                                if not is_temporary_session():
-                                    try:
-                                        log_lttp_security_scan(db_scan, findings)
-                                        GitHubStorage.save_db(db_scan)
-                                    except Exception:
-                                        pass
-                                st.session_state._lttp_sec_last_scan = findings
-                                st.session_state._lttp_sec_last_scan_time = time.time()
-                            st.success(t("lttp_sec_scan_clean", lang) if not findings.get("issues") else t("lttp_sec_scan_issues", lang))
-                            time.sleep(0.4)
-                            st.rerun()
-
-                if st.session_state.get("_lttp_sec_confirm_disable", False):
-                    st.warning(t("lttp_sec_disable_warning", lang))
-                    wc1, wc2 = st.columns(2)
-                    with wc1:
-                        if st.button("✅ " + ("Đồng ý tắt" if lang == "vi" else "Yes"), use_container_width=True,
-                                     key="tb_lttp_sec_confirm_yes", type="primary"):
-                            set_lttp_security_enabled(False)
-                            st.session_state._lttp_sec_confirm_disable = False
-                            st.toast(t("lttp_sec_disabled_toast", lang), icon="⚠️")
-                            time.sleep(0.4)
-                            st.rerun()
-                    with wc2:
-                        if st.button("❌ " + ("Hủy" if lang == "vi" else "Cancel"), use_container_width=True,
-                                     key="tb_lttp_sec_confirm_no"):
-                            st.session_state._lttp_sec_confirm_disable = False
-                            st.rerun()
-
-            # ===== TAB: FEEDBACK =====
-            else:
-                st.markdown(f"**{t('feedback_title', lang)}**")
-                st.caption(t("feedback_desc", lang))
-
-                cat_options = ["feature", "bug", "improve", "other"]
-                cat_labels = {
-                    "feature": t("feedback_category_feature", lang),
-                    "bug": t("feedback_category_bug", lang),
-                    "improve": t("feedback_category_improve", lang),
-                    "other": t("feedback_category_other", lang),
-                }
-                cur_cat = st.session_state.get("feedback_category", "feature")
-                try:
-                    cat_idx = cat_options.index(cur_cat)
-                except ValueError:
-                    cat_idx = 0
-
-                selected_cat = st.radio(
-                    t("feedback_category_label", lang),
-                    options=cat_options,
-                    index=cat_idx,
-                    format_func=lambda x: cat_labels.get(x, x),
-                    key="tb_feedback_cat",
-                    horizontal=True,
-                )
-
-                fb_text = st.text_area(
-                    t("feedback_text_label", lang),
-                    value=st.session_state.get("feedback_text", ""),
-                    height=100,
-                    placeholder=t("feedback_text_placeholder", lang),
-                    key="tb_feedback_text"
-                )
-
-                fc1, fc2 = st.columns(2)
-                with fc1:
-                    if st.button(t("feedback_submit_btn", lang), use_container_width=True,
-                                 type="primary", key="tb_feedback_submit"):
-                        if not enforce_rate_limit("feedback", "Feedback"):
-                            pass
-                        elif not fb_text.strip():
-                            st.error(t("feedback_empty", lang))
-                        else:
-                            fb = {
-                                "id": str(uuid.uuid4()),
-                                "user": st.session_state.get("user") or ("guest" if st.session_state.get("is_guest") else "test"),
-                                "role": "guest" if st.session_state.get("is_guest") else ("test" if is_temporary_session() else "user"),
-                                "device": mask_device(device_id),
-                                "time": _now_vn_iso(),
-                                "category": selected_cat,
-                                "text": fb_text.strip(),
-                                "reply": "", "replied_at": "", "replied_by": "",
-                            }
-                            if is_temporary_session():
-                                st.session_state.setdefault("test_feedbacks", []).insert(0, fb)
-                                st.success(t("feedback_success", lang))
-                            else:
-                                db = GitHubStorage.load_db(force_refresh=True)
-                                add_feedback(db, fb)
-                                ok, msg = safe_save_db(db)
-                                if ok:
-                                    st.success(t("feedback_success", lang))
-                                else:
-                                    st.error(t("feedback_error", lang) + f" {msg}")
-                            st.session_state.feedback_text = ""
-                            time.sleep(0.8)
-                            st.rerun()
-
-                with fc2:
-                    if st.button(t("feedback_my_items", lang), use_container_width=True, key="tb_feedback_my_btn"):
-                        st.session_state.feedback_open = True
-                        st.rerun()
+        <div class="tb-divider"></div>
+        <div class="tb-user">{user_label_html}</div>
+        <div class="tb-actions">
+            <button class="tb-lang-btn" onclick="lttpSetLang('en')">🇬🇧 EN</button>
+            <button class="tb-lang-btn-vi" onclick="lttpSetLang('vi')">🇻🇳 VI</button>
+            <button class="tb-fb-btn" onclick="lttpOpenFeedback()">{feedback_label}</button>
+        </div>
+    </div>
+    <script>
+    function lttpSetLang(langCode) {{
+        try {{
+            const url = new URL(window.parent.location.href);
+            url.searchParams.set('__lttp_lang', langCode);
+            window.parent.location.href = url.toString();
+        }} catch(e) {{
+            console.warn("Cannot set lang:", e);
+        }}
+    }}
+    function lttpOpenFeedback() {{
+        try {{
+            const url = new URL(window.parent.location.href);
+            url.searchParams.set('__lttp_fb', '1');
+            window.parent.location.href = url.toString();
+        }} catch(e) {{
+            console.warn("Cannot open feedback:", e);
+        }}
+    }}
+    </script>
+    """
+    
+    # Render taskbar as isolated HTML in parent DOM
+    # Use components.v1.html with height=1 (minimal footprint, no visible space)
+    try:
+        from streamlit.components.v1 import html as _comp_html
+        _comp_html(taskbar_html, height=1, scrolling=False)
+    except Exception:
+        # Fallback: st.html with iframe-like positioning
+        st.markdown(
+            f'<iframe srcdoc="{taskbar_html.replace(chr(34), "&quot;")}" '
+            f'style="position:fixed;left:0;right:0;bottom:0;width:100%;height:45px;border:0;z-index:999998;"></iframe>',
+            unsafe_allow_html=True
+        )
 
 
-render_taskbar()
+# Render taskbar
+render_taskbar_html()
 
 
 # ==========================================
-# 35. JS: MOVE TASKBAR XUỐNG FIXED BOTTOM
+# 35. HANDLE LANG / FEEDBACK QUERY PARAMS
 # ==========================================
-def inject_taskbar_reposition_js():
-    """
-    Move container taskbar xuống fixed bottom của body.
-    Cần thiết vì st.chat_input luôn được Streamlit ghim sticky ở đáy section.main.
-    """
-    js = (
-        'function repositionLttpTaskbar() {\n'
-        '    try {\n'
-        '        const src = document.querySelector(".st-key-lttp_taskbar_container");\n'
-        '        if (!src) return false;\n'
-        '\n'
-        '        let footer = document.getElementById("lttp-fixed-taskbar");\n'
-        '        if (!footer) {\n'
-        '            footer = document.createElement("div");\n'
-        '            footer.id = "lttp-fixed-taskbar";\n'
-        '            footer.style.cssText = (\n'
-        '                "position: fixed;" +\n'
-        '                "left: 0; right: 0; bottom: 0;" +\n'
-        '                "z-index: 999998;" +\n'
-        '                "background: rgba(14,17,23,0.97);" +\n'
-        '                "backdrop-filter: blur(10px);" +\n'
-        '                "-webkit-backdrop-filter: blur(10px);" +\n'
-        '                "border-top: 2px solid rgba(16,185,129,0.4);" +\n'
-        '                "box-shadow: 0 -8px 32px rgba(0,0,0,0.6);" +\n'
-        '                "padding: 10px 16px;" +\n'
-        '                "max-height: 65vh;" +\n'
-        '                "overflow-y: auto;" +\n'
-        '                "font-family: -apple-system, BlinkMacSystemFont, sans-serif;" +\n'
-        '                "color: #e2e8f0;" +\n'
-        '                "transition: max-height 0.2s ease;"\n'
-        '            );\n'
-        '            document.body.appendChild(footer);\n'
-        '        }\n'
-        '\n'
-        '        if (src.parentElement !== footer) {\n'
-        '            footer.appendChild(src);\n'
-        '        }\n'
-        '\n'
-        '        const h = src.offsetHeight || 120;\n'
-        '        footer.style.display = "block";\n'
-        '\n'
-        '        const mainEl = document.querySelector("section.main");\n'
-        '        if (mainEl) {\n'
-        '            mainEl.style.paddingBottom = (h + 100) + "px";\n'
-        '        }\n'
-        '        const appView = document.querySelector("[data-testid=\\"stAppViewContainer\\"]");\n'
-        '        if (appView) {\n'
-        '            appView.style.paddingBottom = (h + 100) + "px";\n'
-        '        }\n'
-        '        return true;\n'
-        '    } catch (e) {\n'
-        '        console.warn("[LTTP] Taskbar reposition error:", e);\n'
-        '        return false;\n'
-        '    }\n'
-        '}\n'
-        '\n'
-        'function tryReposition(attempts) {\n'
-        '    if (repositionLttpTaskbar()) return;\n'
-        '    if (attempts > 0) {\n'
-        '        setTimeout(function() { tryReposition(attempts - 1); }, 300);\n'
-        '    }\n'
-        '}\n'
-        'tryReposition(20);\n'
-        '\n'
-        'if (!window.__lttp_taskbar_observer) {\n'
-        '    window.__lttp_taskbar_observer = true;\n'
-        '    const observer = new MutationObserver(function() {\n'
-        '        repositionLttpTaskbar();\n'
-        '    });\n'
-        '    observer.observe(document.body, { childList: true, subtree: false });\n'
-        '    setInterval(repositionLttpTaskbar, 2000);\n'
-        '}\n'
-    )
-    inject_js(js)
-
-
-inject_taskbar_reposition_js()
+try:
+    qp = st.query_params
+    _qp_lang = qp.get("__lttp_lang")
+    _qp_fb = qp.get("__lttp_fb")
+    
+    if _qp_lang in ("en", "vi") and _qp_lang != st.session_state.language:
+        # Update language
+        st.session_state.language = _qp_lang
+        if not is_guest and not is_test and st.session_state.user:
+            try:
+                user_data["language"] = _qp_lang
+                db_data[st.session_state.user] = user_data
+                safe_save_db(db_data)
+            except Exception:
+                pass
+        # Clear query param
+        try:
+            del st.query_params["__lttp_lang"]
+        except Exception:
+            pass
+        st.rerun()
+    
+    if _qp_fb == "1":
+        try:
+            del st.query_params["__lttp_fb"]
+        except Exception:
+            pass
+        st.session_state.feedback_open = True
+        st.rerun()
+except Exception:
+    pass
