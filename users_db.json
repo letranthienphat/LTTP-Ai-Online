@@ -159,5 +159,8 @@
   "__security_log__": [],
   "__security_alerts__": [],
   "__blocklist__": {},
-  "__guest_quotas__": {}
+  "__guest_quotas__": {},
+  "__lttp_security__": {
+    "history": []
+  }
 }
