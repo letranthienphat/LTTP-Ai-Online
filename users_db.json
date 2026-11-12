@@ -169,6 +169,25 @@
         "is_quick_lookup": false,
         "created_at": "2026-11-05T21:16:15.995210+07:00",
         "updated_at": "2026-11-05T21:24:45.505692+07:00"
+      },
+      "f106cce2-7312-4d2d-a1ad-d52e63e4d0fc": {
+        "title": "Cuộc trò chuyện mới",
+        "messages": [
+          {
+            "role": "user",
+            "content": "bạn có thể giúp tôi làm gì?"
+          },
+          {
+            "role": "assistant",
+            "content": "Xin chào! Tôi là **LTTP AI Online** — trợ lý AI do tác giả LTTP phát triển. Tôi có thể hỗ trợ bạn trong nhiều công việc và lĩnh vực khác nhau, bao gồm:\n\n1. **Giải đáp thắc mắc & Tra cứu thông tin:**\n   - Giải thích các khái niệm phức tạp (khoa học, lịch sử, kinh tế, công nghệ, đời sống...).\n   - Trả lời các câu hỏi thường gặp trong nhiều lĩnh vực.\n\n2. **Hỗ trợ công việc & Văn phòng:**\n   - Soạn thảo email, văn bản, hợp đồng mẫu, báo cáo, đề xuất.\n   - Tóm tắt tài liệu, sách hoặc bài viết dài.\n   - Lập kế hoạch công việc, quản lý thời gian, lên lịch trình du lịch/làm việc.\n\n3. **Hỗ trợ Lập trình & Kỹ thuật:**\n   - Viết mã nguồn (code) trên nhiều ngôn ngữ (Python, JavaScript, C++, HTML/CSS, SQL,...).\n   - Tìm và sửa lỗi (debug) trong đoạn code của bạn.\n   - Giải thích tư duy thuật toán và cấu trúc dữ liệu.\n\n4. **Sáng tạo nội dung & Marketing:**\n   - Viết bài chuẩn SEO, bài đăng mạng xã hội (Facebook, LinkedIn, TikTok...).\n   - Lập dàn ý và viết kịch bản video, bài phát biểu, truyện, thơ.\n   - Gợi ý ý tưởng mới (brainstorming) cho dự án hoặc sản phẩm.\n\n5. **Học tập & Học ngoại ngữ:**\n   - Dịch thuật chính xác giữa nhiều ngôn ngữ khác nhau.\n   - Luyện tập ngữ pháp, từ vựng, viết luận.\n   - Giải thích và hướng dẫn giải các bài tập.\n\nBạn đang cần hỗ trợ về công việc hoặc chủ đề nào cụ thể? Hãy chia sẻ với tôi nhé!"
+          }
+        ],
+        "summary": "",
+        "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": false,
+        "created_at": "2026-11-12T18:18:57.146097+07:00",
+        "updated_at": "2026-11-12T18:19:08.967418+07:00"
       }
     },
     "remembered_devices": [
