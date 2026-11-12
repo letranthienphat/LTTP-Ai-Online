@@ -212,7 +212,7 @@
       "top_k": 40,
       "smart_draft": true,
       "typing_mode": "controlled",
-      "typing_cps": 50
+      "typing_cps": 40
     }
   },
   "__feedback__": []
