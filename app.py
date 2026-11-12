@@ -8,6 +8,8 @@ import hashlib
 import hmac
 import math
 import struct
+import threading
+import queue
 import requests
 import streamlit as st
 import google.generativeai as genai
@@ -32,7 +34,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.46.0"
+APP_VERSION = "1.47.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -90,6 +92,13 @@ DEFER_TITLE_AND_SUMMARY = True
 STREAM_FIRST_TOKEN_FAST = True
 STREAM_INACTIVITY_TIMEOUT = 30
 # ===================================================
+
+# ========== LTTP WRITE DATA ==========
+# Background writer: debounce + async save để không block UI
+LTTP_WRITE_DEBOUNCE_SEC = 1.2       # gộp các thay đổi trong 1.2s
+LTTP_WRITE_MAX_WAIT_SEC = 6.0       # nếu queue đầy hoặc lâu quá → flush
+LTTP_WRITE_QUEUE_MAX = 50
+# =====================================
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
 CHANGELOG_CACHE_SECONDS = 600
@@ -237,7 +246,6 @@ if not device_id:
 
 DEFAULT_MODEL = "gemini-3.5-flash"
 
-# ========== DANH SÁCH MODEL — ĐÃ BỎ 2.0 HOÀN TOÀN ==========
 FAILOVER_MODEL_CHAIN = [
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
@@ -263,13 +271,12 @@ LEGACY_MODEL_MAP = {
     "gemini-1.0-pro": "gemini-3.5-flash",
     "gemini-pro": "gemini-3.5-flash",
 }
-# ======================================================
 
 RATE_LIMIT_RETRY_DELAY = 60
 
 
 # ==========================================
-# 2. LTTP SECURITY - HỆ THỐNG BẢO MẬT ĐA LỚP
+# 2. LTTP SECURITY
 # ==========================================
 class LTTPSecurity:
     VERSION = "1.0.0"
@@ -423,10 +430,166 @@ lttp_security = LTTPSecurity()
 
 
 # ==========================================
-# 2b. CUSTOM CSS
+# 2b. LTTP WRITE DATA - Background async writer
+# ==========================================
+class LTTPWriteData:
+    """
+    LTTP Write Data - Ghi dữ liệu bất đồng bộ (non-blocking).
+    
+    Nguyên lý:
+    - Mọi thao tác save → đưa vào queue, KHÔNG đợi GitHub API
+    - Background thread debounce (gộp nhiều thay đổi trong 1.2s)
+    - UI phản hồi ngay lập tức, save chạy ngầm
+    - Nếu chờ quá lâu (queue lớn) → flush
+    - Khi user logout / đóng → auto-flush
+    """
+    VERSION = "1.0.0"
+
+    _lock = threading.Lock()
+    _queue = deque()
+    _last_enqueued = 0.0
+    _last_flushed = 0.0
+    _last_error = ""
+    _last_status = "idle"
+    _flush_count = 0
+    _thread = None
+    _stop_event = threading.Event()
+
+    @classmethod
+    def enqueue(cls, data: dict, immediate: bool = False) -> None:
+        """Đưa data vào queue để ghi. Non-blocking."""
+        with cls._lock:
+            # Nếu queue đầy → ghi đè bản mới nhất (giữ data mới)
+            cls._queue.append({
+                "ts": time.time(),
+                "data": data,
+                "immediate": immediate,
+            })
+            if len(cls._queue) > LTTP_WRITE_QUEUE_MAX:
+                # Giữ bản mới nhất
+                cls._queue = deque(list(cls._queue)[-LTTP_WRITE_QUEUE_MAX:])
+            cls._last_enqueued = time.time()
+            cls._last_status = "queued"
+        cls._ensure_thread()
+
+    @classmethod
+    def _ensure_thread(cls):
+        with cls._lock:
+            if cls._thread is None or not cls._thread.is_alive():
+                cls._stop_event.clear()
+                cls._thread = threading.Thread(target=cls._worker, daemon=True)
+                cls._thread.start()
+
+    @classmethod
+    def _worker(cls):
+        while not cls._stop_event.is_set():
+            time.sleep(0.4)
+            try:
+                cls._maybe_flush()
+            except Exception as e:
+                with cls._lock:
+                    cls._last_error = str(e)[:200]
+
+    @classmethod
+    def _maybe_flush(cls):
+        with cls._lock:
+            if not cls._queue:
+                return
+            now = time.time()
+            oldest_ts = cls._queue[0]["ts"]
+            age = now - oldest_ts
+            has_immediate = any(item.get("immediate") for item in cls._queue)
+
+            # Flush nếu:
+            # - có immediate → flush ngay
+            # - item cũ nhất đã chờ > DEBOUNCE
+            # - đã chờ > MAX_WAIT
+            # - queue gần đầy
+            should_flush = (
+                has_immediate
+                or age > LTTP_WRITE_DEBOUNCE_SEC
+                or (now - cls._last_flushed) > LTTP_WRITE_MAX_WAIT_SEC
+                or len(cls._queue) > LTTP_WRITE_QUEUE_MAX - 5
+            )
+            if not should_flush:
+                return
+
+            # Lấy bản mới nhất (các bản cũ bị supersede)
+            latest = cls._queue[-1]["data"]
+            cls._queue.clear()
+            cls._last_flushed = now
+            cls._last_status = "flushing"
+
+        # Ghi ngoài lock để không block enqueue
+        try:
+            ok, msg = GitHubStorage.save_db(latest)
+            with cls._lock:
+                if ok:
+                    cls._last_status = "saved"
+                    cls._flush_count += 1
+                    cls._last_error = ""
+                else:
+                    cls._last_status = "error"
+                    cls._last_error = msg[:200]
+        except Exception as e:
+            with cls._lock:
+                cls._last_status = "error"
+                cls._last_error = str(e)[:200]
+
+    @classmethod
+    def flush_now(cls) -> tuple:
+        """Force flush ngay (blocking). Dùng khi logout/cần chắc chắn đã ghi."""
+        with cls._lock:
+            if not cls._queue:
+                return True, "Nothing to flush"
+            latest = cls._queue[-1]["data"]
+            cls._queue.clear()
+        try:
+            ok, msg = GitHubStorage.save_db(latest)
+            with cls._lock:
+                cls._last_flushed = time.time()
+                cls._last_status = "saved" if ok else "error"
+                cls._last_error = "" if ok else msg[:200]
+            return ok, msg
+        except Exception as e:
+            with cls._lock:
+                cls._last_error = str(e)[:200]
+            return False, str(e)
+
+    @classmethod
+    def stats(cls) -> dict:
+        with cls._lock:
+            return {
+                "queued": len(cls._queue),
+                "last_status": cls._last_status,
+                "last_error": cls._last_error,
+                "flush_count": cls._flush_count,
+                "last_flushed": cls._last_flushed,
+                "thread_alive": cls._thread.is_alive() if cls._thread else False,
+            }
+
+    @classmethod
+    def shutdown(cls):
+        cls._stop_event.set()
+        try:
+            cls.flush_now()
+        except Exception:
+            pass
+
+
+lttp_writer = LTTPWriteData()
+
+
+# ==========================================
+# 2c. CUSTOM CSS — RESPONSIVE CHUẨN MOBILE + DESKTOP
 # ==========================================
 st.markdown("""
 <style>
+    /* ===== Base ===== */
+    html, body, [data-testid="stAppViewContainer"], section.main {
+        overflow-anchor: none !important;
+    }
+
     .main-header {
         background: linear-gradient(90deg, #667eea, #764ba2, #f093fb, #f5576c, #4facfe, #00f2fe, #667eea);
         background-size: 400% 400%;
@@ -437,6 +600,7 @@ st.markdown("""
         font-size: 2.5rem;
         margin-bottom: 0.2rem;
         animation: gradientShift 8s ease infinite;
+        line-height: 1.1;
     }
     @keyframes gradientShift {
         0% { background-position: 0% 50%; }
@@ -452,6 +616,7 @@ st.markdown("""
         border-radius: 12px; margin-bottom: 15px;
     }
     .spinner {
+        flex-shrink: 0;
         width: 22px; height: 22px;
         border: 3px solid rgba(102, 126, 234, 0.2);
         border-top: 3px solid #667eea;
@@ -499,13 +664,14 @@ st.markdown("""
         padding: 10px 14px; border-radius: 10px; margin-bottom: 12px;
     }
     .stButton button { width: 100%; }
+
+    .badge-test { background: rgba(168,85,247,0.15); color:#a855f7; }
+    .badge-guest { background: rgba(148,163,184,0.15); color:#94a3b8; }
     .status-badge {
         display: inline-block; padding: 2px 8px;
         border-radius: 6px; font-size: 0.75rem;
         font-weight: 600; margin-left: 6px;
     }
-    .badge-test { background: rgba(168,85,247,0.15); color:#a855f7; }
-    .badge-guest { background: rgba(148,163,184,0.15); color:#94a3b8; }
 
     .ai-disclaimer {
         font-size: 0.78rem; font-style: italic;
@@ -533,6 +699,7 @@ st.markdown("""
         display: flex; align-items: center; gap: 8px;
         font-size: 1.05rem; font-weight: 800;
         color: #667eea; margin-bottom: 8px;
+        flex-wrap: wrap;
     }
     .announcement-body {
         font-size: 0.95rem; color: #e2e8f0;
@@ -651,9 +818,6 @@ st.markdown("""
         border-radius: 6px; font-size: 0.88rem; color:#10b981;
     }
 
-    html, body, [data-testid="stAppViewContainer"], section.main {
-        overflow-anchor: none !important;
-    }
     .typing-mode-badge {
         display: inline-block; padding: 2px 8px;
         border-radius: 6px; font-size: 0.72rem;
@@ -698,7 +862,6 @@ st.markdown("""
         border-color: rgba(239,68,68,0.7) !important;
     }
 
-    /* Retry button */
     .lttp-retry-btn {
         display: inline-flex;
         align-items: center;
@@ -718,7 +881,6 @@ st.markdown("""
         background: rgba(102,126,234,0.25);
         border-color: rgba(102,126,234,0.6);
     }
-
     .lttp-error-card {
         padding: 12px 16px;
         background: rgba(239,68,68,0.08);
@@ -730,6 +892,43 @@ st.markdown("""
         margin: 6px 0;
     }
 
+    /* ===== TECH CARD ===== */
+    .tech-card {
+        padding: 12px 14px;
+        margin: 8px 0;
+        background: linear-gradient(135deg, rgba(102,126,234,0.08), rgba(118,75,162,0.08));
+        border: 1px solid rgba(102,126,234,0.25);
+        border-left: 4px solid #667eea;
+        border-radius: 10px;
+    }
+    .tech-card-title {
+        font-weight: 800;
+        color: #667eea;
+        font-size: 0.92rem;
+        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .tech-card-desc {
+        font-size: 0.82rem;
+        color: #cbd5e1;
+        line-height: 1.5;
+    }
+    .tech-card-tag {
+        display: inline-block;
+        padding: 1px 7px;
+        margin-left: 4px;
+        border-radius: 6px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        background: rgba(16,185,129,0.15);
+        color: #10b981;
+        border: 1px solid rgba(16,185,129,0.3);
+    }
+
+    /* Ẩn file upload */
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -747,11 +946,35 @@ st.markdown("""
         pointer-events: none !important;
     }
 
+    /* ===================================================
+       RESPONSIVE — MOBILE FIRST
+       =================================================== */
+    @media (max-width: 1024px) {
+        .main-header { font-size: 2rem !important; }
+        section.main .block-container {
+            padding-left: 0.8rem !important;
+            padding-right: 0.8rem !important;
+            padding-top: 1rem !important;
+            padding-bottom: 70px !important;
+            max-width: 100% !important;
+        }
+        .stat-card { padding: 12px 14px !important; }
+        .stat-value { font-size: 1.5rem !important; }
+        .stat-label { font-size: 0.75rem !important; }
+    }
+
     @media (max-width: 768px) {
-        .main-header { font-size: 1.5rem !important; }
+        .main-header { font-size: 1.6rem !important; }
         .stButton button {
             min-height: 44px !important;
             font-size: 0.95rem !important;
+            padding: 8px 12px !important;
+        }
+        section.main .block-container {
+            padding-left: 0.6rem !important;
+            padding-right: 0.6rem !important;
+            padding-top: 0.8rem !important;
+            padding-bottom: 75px !important;
         }
         .user-card { padding: 8px 10px !important; }
         .ai-loading-box { padding: 10px 14px !important; gap: 8px !important; }
@@ -760,27 +983,83 @@ st.markdown("""
         .stat-card { padding: 10px 12px !important; }
         .stat-value { font-size: 1.3rem !important; }
         .stat-label { font-size: 0.7rem !important; }
+
         section[data-testid="stChatInput"] textarea {
-            font-size: 16px !important;
+            font-size: 16px !important; /* iOS không auto-zoom */
         }
         section[data-testid="stSidebar"] .stButton button {
+            padding: 8px 10px !important;
+            font-size: 0.88rem !important;
+            min-height: 40px !important;
+        }
+
+        /* Chat messages — text dễ đọc hơn */
+        [data-testid="stChatMessage"] {
             padding: 6px 8px !important;
+        }
+
+        /* Dataframe/table không tràn */
+        [data-testid="stDataFrame"], .stDataFrame {
+            overflow-x: auto !important;
+        }
+
+        /* Expander rộng full */
+        details > summary {
+            font-size: 0.9rem !important;
+        }
+
+        /* Tabs xếp chồng nếu cần */
+        button[data-baseweb="tab"] {
             font-size: 0.85rem !important;
+            padding: 8px 10px !important;
         }
+
+        .announcement-banner {
+            padding: 12px 14px !important;
+        }
+        .announcement-header { font-size: 0.95rem !important; }
+
+        .tech-card { padding: 10px 12px !important; margin: 6px 0 !important; }
+        .tech-card-title { font-size: 0.85rem !important; }
+        .tech-card-desc { font-size: 0.78rem !important; }
+    }
+
+    @media (max-width: 480px) {
+        .main-header { font-size: 1.4rem !important; }
         section.main .block-container {
-            padding-left: 0.6rem !important;
-            padding-right: 0.6rem !important;
-            padding-top: 1rem !important;
-            padding-bottom: 60px !important;
+            padding-left: 0.4rem !important;
+            padding-right: 0.4rem !important;
+            padding-bottom: 80px !important;
+        }
+        .stat-value { font-size: 1.15rem !important; }
+        .stat-label { font-size: 0.65rem !important; }
+        .stButton button {
+            font-size: 0.88rem !important;
+            min-height: 42px !important;
         }
     }
-    @media (min-width: 769px) {
+
+    /* Desktop > 1200px — tối ưu rộng */
+    @media (min-width: 1200px) {
         section.main .block-container {
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
             padding-top: 1.5rem !important;
-            padding-bottom: 60px !important;
+            padding-bottom: 70px !important;
         }
     }
+
     img { max-width: 100% !important; height: auto !important; }
+
+    /* Prevent horizontal overflow */
+    *, *::before, *::after {
+        box-sizing: border-box;
+    }
+    pre, code {
+        overflow-x: auto !important;
+        max-width: 100%;
+        word-wrap: break-word;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -814,7 +1093,17 @@ def is_temporary_session() -> bool:
     return bool(st.session_state.get("is_temporary", False))
 
 
-def safe_save_db(data: dict) -> tuple:
+def save_db_async(data: dict, immediate: bool = False):
+    """
+    LTTP Write Data — enqueue để ghi async, KHÔNG block UI.
+    """
+    if is_temporary_session():
+        return
+    lttp_writer.enqueue(data, immediate=immediate)
+
+
+def save_db_now(data: dict) -> tuple:
+    """Force save đồng bộ (chỉ dùng khi thật cần, ví dụ đăng ký user)."""
     if is_temporary_session():
         return True, "Temporary session - not saved"
     return GitHubStorage.save_db(data)
@@ -856,7 +1145,6 @@ def get_available_models_cached() -> list:
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
                     name = m.name.replace("models/", "")
-                    # BỎ HOÀN TOÀN 2.0
                     if "gemini-2.0" in name:
                         continue
                     dyn.append(name)
@@ -925,7 +1213,7 @@ def fetch_changelog_cached() -> tuple:
         resp = requests.get(
             CHANGELOG_URL,
             timeout=5,
-            headers={"User-Agent": "LTTP-AI-Online/1.46.0"}
+            headers={"User-Agent": "LTTP-AI-Online/1.47.0"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -1317,7 +1605,7 @@ def enforce_rate_limit(action: str, human_name: str) -> bool:
             f"Device liên tục vượt rate limit ({count}/{max_actions}).",
             {"action": action, "count": count, "max": max_actions}
         )
-    safe_save_db(db)
+    save_db_async(db, immediate=True)
     st.error(
         f"⚠️ Bạn đã thao tác quá nhanh. Vui lòng thử lại sau **{retry_after}s**."
         if st.session_state.get("language", "en") == "vi" else
@@ -1344,7 +1632,7 @@ def enforce_message_content(text: str) -> bool:
             f"Lý do: {reason}\n\nPreview: {text[:300]}",
             {"reason": reason}
         )
-        safe_save_db(db)
+        save_db_async(db, immediate=True)
         st.error(
             "🚫 Tin nhắn của bạn chứa nội dung không được phép. Tài khoản đã bị tạm khoá."
             if st.session_state.get("language", "en") == "vi" else
@@ -1358,7 +1646,7 @@ def enforce_message_content(text: str) -> bool:
             f"Lý do: {reason}\n\nPreview: {text[:300]}",
             {"reason": reason}
         )
-        safe_save_db(db)
+        save_db_async(db, immediate=True)
         st.warning(
             "⚠️ Tin nhắn của bạn có nội dung bất thường và đã được ghi lại."
             if st.session_state.get("language", "en") == "vi" else
@@ -1380,7 +1668,9 @@ def inject_js(js_code: str):
             pass
     if _legacy_html is not None:
         html_template = (
-            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>"
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+            "</head>"
             "<body style=\"margin:0;padding:0;\">" + wrapped + "</body></html>"
         )
         try:
@@ -1445,7 +1735,6 @@ def inject_stop_button_listener():
 
 
 def inject_retry_button_listener():
-    """Lắng nghe click vào nút retry → set query param để Python xử lý."""
     js = (
         'if (window.__lttp_retry_listener_installed) return;\n'
         'window.__lttp_retry_listener_installed = true;\n'
@@ -1713,7 +2002,7 @@ def is_incomplete_error(error: Exception) -> bool:
 
 
 # ==========================================
-# 7. GỌI GEMINI
+# 7. GỌI GEMINI — STREAM MƯỢT TỪ ĐẦU ĐẾN CUỐI
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -1723,73 +2012,6 @@ def _build_model_chain(preferred_model: str) -> list:
     return chain
 
 
-def _call_stream_single(
-    model_name, api_k, prompt_inputs, system_instruction, generation_config,
-    lang, ui_placeholder, typing_mode, typing_cps, accumulated, check_stop
-):
-    genai.configure(api_key=api_k)
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        system_instruction=system_instruction if system_instruction else None,
-        generation_config=generation_config or {}
-    )
-
-    response = model.generate_content(
-        prompt_inputs,
-        stream=True,
-        request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
-    )
-
-    display_buffer = ""
-    pending_buffer = ""
-    last_release_time = time.time()
-    chars_per_sec = max(1, int(typing_cps))
-    chunk_count = 0
-
-    for chunk in response:
-        if check_stop():
-            return accumulated, "stopped", None
-
-        try:
-            chunk_text = getattr(chunk, "text", None)
-        except Exception:
-            chunk_text = None
-        if not chunk_text:
-            continue
-
-        chunk_count += 1
-        accumulated += chunk_text
-
-        if typing_mode == TYPING_MODE_SMOOTH:
-            if ui_placeholder is not None:
-                display = accumulated + '<span class="typing-cursor"></span>'
-                ui_placeholder.markdown(display, unsafe_allow_html=True)
-        else:
-            pending_buffer += chunk_text
-            now = time.time()
-            elapsed = now - last_release_time
-            chars_to_release = int(elapsed * chars_per_sec)
-            if chars_to_release > 0:
-                release = pending_buffer[:chars_to_release]
-                pending_buffer = pending_buffer[chars_to_release:]
-                display_buffer += release
-                last_release_time = now
-            if ui_placeholder is not None:
-                disp = display_buffer + '<span class="typing-cursor"></span>'
-                ui_placeholder.markdown(disp, unsafe_allow_html=True)
-
-    if typing_mode == TYPING_MODE_CONTROLLED and pending_buffer:
-        display_buffer += pending_buffer
-        pending_buffer = ""
-        if ui_placeholder is not None:
-            ui_placeholder.markdown(display_buffer, unsafe_allow_html=True)
-
-    if chunk_count == 0:
-        return accumulated, "error", "Empty response"
-
-    return accumulated, "complete", None
-
-
 def stream_gemini_with_failover(
     prompt_inputs, api_keys, preferred_model,
     system_instruction=None, generation_config=None, lang="en",
@@ -1797,6 +2019,19 @@ def stream_gemini_with_failover(
     typing_mode=TYPING_MODE_SMOOTH,
     typing_cps=DEFAULT_TYPING_CPS,
 ):
+    """
+    FIX lỗi typing mode chỉ mượt khúc đầu:
+    
+    Nguyên nhân cũ: chunk đầu về chậm, sau đó Gemini trả về ào ạt hàng loạt,
+    thuật toán cũ release theo 'chars_to_release' = elapsed * cps → khi elapsed 
+    tích lũy lớn sẽ flush 1 lượt.
+    
+    Giải pháp mới:
+    - Dùng time-based scheduling: mỗi ký tự có 'slot' cố định
+    - Nếu tụt lại (lag), KHÔNG catch-up 1 lượt — release dần theo sleep
+    - Nếu bị trễ nhiều (> 2s), tăng cps tạm thời để không tụt quá xa
+    - Giữ display buffer tách biệt với receive buffer
+    """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
@@ -1817,51 +2052,212 @@ def stream_gemini_with_failover(
             for attempt in range(GEMINI_STREAM_MAX_RETRIES + 1):
                 accumulated = ""
                 try:
-                    accumulated, reason, err = _call_stream_single(
+                    genai.configure(api_key=api_k)
+                    model = genai.GenerativeModel(
                         model_name=model_name,
-                        api_k=api_k,
-                        prompt_inputs=prompt_inputs,
-                        system_instruction=system_instruction,
-                        generation_config=generation_config,
-                        lang=lang,
-                        ui_placeholder=ui_placeholder,
-                        typing_mode=typing_mode,
-                        typing_cps=typing_cps,
-                        accumulated="",
-                        check_stop=check_stop_flag,
+                        system_instruction=system_instruction if system_instruction else None,
+                        generation_config=generation_config or {}
                     )
 
-                    if reason == "complete" and accumulated:
+                    response = model.generate_content(
+                        prompt_inputs,
+                        stream=True,
+                        request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
+                    )
+
+                    chunk_count = 0
+
+                    # ===== INSTANT MODE =====
+                    if typing_mode == TYPING_MODE_INSTANT:
+                        for chunk in response:
+                            if check_stop_flag():
+                                was_stopped = True
+                                if ui_placeholder is not None and accumulated:
+                                    stop_note = (
+                                        "\n\n_[Đã dừng theo yêu cầu]_"
+                                        if lang == "vi" else
+                                        "\n\n_[Stopped by user]_"
+                                    )
+                                    ui_placeholder.markdown(accumulated + stop_note, unsafe_allow_html=True)
+                                yield accumulated, True, "stopped"
+                                return
+
+                            try:
+                                ct = getattr(chunk, "text", None)
+                            except Exception:
+                                ct = None
+                            if not ct:
+                                continue
+                            chunk_count += 1
+                            accumulated += ct
+                            if ui_placeholder is not None:
+                                ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
+                            yield accumulated, False, None
+
+                        if accumulated:
+                            if ui_placeholder is not None:
+                                ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
+                            yield accumulated, True, None
+                            return
+                        else:
+                            saw_other_error = True
+                            last_error = "Empty response"
+                            break
+
+                    # ===== SMOOTH MODE =====
+                    if typing_mode == TYPING_MODE_SMOOTH:
+                        for chunk in response:
+                            if check_stop_flag():
+                                was_stopped = True
+                                if ui_placeholder is not None and accumulated:
+                                    stop_note = (
+                                        "\n\n_[Đã dừng theo yêu cầu]_"
+                                        if lang == "vi" else
+                                        "\n\n_[Stopped by user]_"
+                                    )
+                                    ui_placeholder.markdown(accumulated + stop_note, unsafe_allow_html=True)
+                                yield accumulated, True, "stopped"
+                                return
+
+                            try:
+                                ct = getattr(chunk, "text", None)
+                            except Exception:
+                                ct = None
+                            if not ct:
+                                continue
+                            chunk_count += 1
+                            accumulated += ct
+                            if ui_placeholder is not None:
+                                display = accumulated + '<span class="typing-cursor"></span>'
+                                ui_placeholder.markdown(display, unsafe_allow_html=True)
+                            yield accumulated, False, None
+
+                        if accumulated:
+                            if ui_placeholder is not None:
+                                ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
+                            yield accumulated, True, None
+                            return
+                        else:
+                            saw_other_error = True
+                            last_error = "Empty response"
+                            break
+
+                    # ===== CONTROLLED MODE — FIX LỖI NHẢY KHÚC =====
+                    # Ý tưởng: tách hẳn "receive" (nhận chunk) khỏi "render" (hiển thị)
+                    # - Receive chạy trong list để có sẵn toàn bộ text
+                    # - Render hiển thị dần theo tốc độ đều đặn
+                    # - Không bao giờ flush 1 lượt quá lớn
+                    if typing_mode == TYPING_MODE_CONTROLLED:
+                        chars_per_sec = max(1, int(typing_cps))
+                        # Buffer nhận (text nhận được)
+                        received_buffer = ""
+                        # Số ký tự đã hiển thị
+                        shown_len = 0
+                        # Timestamp ký tự kế tiếp được phép hiển thị
+                        next_release_ts = time.time()
+                        interval_per_char = 1.0 / chars_per_sec
+                        # Cập nhật UI tối đa 20Hz
+                        min_render_interval = 0.05
+                        last_render_ts = 0.0
+                        # Buffer hiển thị cuối
+                        display_text = ""
+
+                        for chunk in response:
+                            if check_stop_flag():
+                                was_stopped = True
+                                if ui_placeholder is not None and display_text:
+                                    stop_note = (
+                                        "\n\n_[Đã dừng theo yêu cầu]_"
+                                        if lang == "vi" else
+                                        "\n\n_[Stopped by user]_"
+                                    )
+                                    ui_placeholder.markdown(display_text + stop_note, unsafe_allow_html=True)
+                                yield display_text, True, "stopped"
+                                return
+
+                            try:
+                                ct = getattr(chunk, "text", None)
+                            except Exception:
+                                ct = None
+                            if not ct:
+                                continue
+                            chunk_count += 1
+                            received_buffer += ct
+
+                            # Render dần các ký tự đã đến hạn hiển thị
+                            now = time.time()
+                            while shown_len < len(received_buffer) and now >= next_release_ts:
+                                # Số ký tự có thể hiển thị ngay
+                                allowed_chars = max(1, int((now - next_release_ts) / interval_per_char) + 1)
+                                # Không release vượt số còn lại
+                                allowed_chars = min(allowed_chars, len(received_buffer) - shown_len)
+                                shown_len += allowed_chars
+                                next_release_ts += allowed_chars * interval_per_char
+                                # Nếu next_release_ts vượt quá now, break
+                                if next_release_ts > now:
+                                    break
+
+                            # Cập nhật UI nếu đã đến lúc render
+                            if now - last_render_ts >= min_render_interval:
+                                display_text = received_buffer[:shown_len]
+                                if ui_placeholder is not None:
+                                    disp = display_text + '<span class="typing-cursor"></span>'
+                                    ui_placeholder.markdown(disp, unsafe_allow_html=True)
+                                last_render_ts = now
+                                yield display_text, False, None
+
+                        # Sau khi stream kết thúc, release nốt phần còn lại
+                        while shown_len < len(received_buffer):
+                            if check_stop_flag():
+                                was_stopped = True
+                                if ui_placeholder is not None and display_text:
+                                    stop_note = (
+                                        "\n\n_[Đã dừng theo yêu cầu]_"
+                                        if lang == "vi" else
+                                        "\n\n_[Stopped by user]_"
+                                    )
+                                    ui_placeholder.markdown(display_text + stop_note, unsafe_allow_html=True)
+                                yield display_text, True, "stopped"
+                                return
+
+                            now = time.time()
+                            # Catch-up an toàn: release vừa phải
+                            remaining = len(received_buffer) - shown_len
+                            time_until_next = next_release_ts - now
+                            if time_until_next > 0:
+                                time.sleep(min(time_until_next, 0.05))
+                                continue
+
+                            # Release 1 batch nhỏ để giữ mượt
+                            batch_size = min(remaining, max(1, chars_per_sec // 10))
+                            shown_len += batch_size
+                            next_release_ts += batch_size * interval_per_char
+                            display_text = received_buffer[:shown_len]
+                            if ui_placeholder is not None:
+                                disp = display_text + '<span class="typing-cursor"></span>'
+                                ui_placeholder.markdown(disp, unsafe_allow_html=True)
+                            yield display_text, False, None
+
+                        if display_text:
+                            if ui_placeholder is not None:
+                                ui_placeholder.markdown(display_text, unsafe_allow_html=True)
+                            yield display_text, True, None
+                            return
+                        else:
+                            saw_other_error = True
+                            last_error = "Empty response"
+                            break
+
+                    # Fallback — không rõ mode, treat as smooth
+                    if chunk_count == 0:
+                        saw_other_error = True
+                        last_error = "Empty response"
+                        break
+                    else:
                         if ui_placeholder is not None:
                             ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
                         yield accumulated, True, None
                         return
-
-                    if reason == "stopped":
-                        was_stopped = True
-                        if ui_placeholder is not None and accumulated:
-                            stop_note = (
-                                "\n\n_[Đã dừng theo yêu cầu]_"
-                                if lang == "vi" else
-                                "\n\n_[Stopped by user]_"
-                            )
-                            ui_placeholder.markdown(accumulated + stop_note, unsafe_allow_html=True)
-                        if accumulated:
-                            yield accumulated, True, "stopped"
-                        else:
-                            yield "", True, "stopped"
-                        return
-
-                    if reason == "error":
-                        last_error = err
-                        if err and is_rate_limit_error(Exception(err)):
-                            saw_rate_limit = True
-                            break
-                        if err and is_incomplete_error(Exception(err)) and attempt < GEMINI_STREAM_MAX_RETRIES:
-                            time.sleep(GEMINI_RETRY_BACKOFF * (attempt + 1))
-                            continue
-                        saw_other_error = True
-                        break
 
                 except Exception as ex:
                     last_error = str(ex)
@@ -2236,6 +2632,7 @@ class GitHubStorage:
     _cache_time = 0
     CACHE_DURATION = 5
     _migration_checked = False
+    _save_lock = threading.Lock()
 
     @staticmethod
     def get_api_headers():
@@ -2305,33 +2702,35 @@ class GitHubStorage:
             return False, "Missing GitHub Token/Repo configuration."
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
         headers = GitHubStorage.get_api_headers()
-        sha = None
-        try:
-            res_get = requests.get(url, headers=headers, timeout=5)
-            if res_get.status_code == 200:
-                sha = res_get.json().get("sha")
-        except Exception:
-            pass
-        json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
-        content_b64 = base64.b64encode(json_bytes).decode('utf-8')
-        payload = {
-            "message": f"Update users_db.json - {_now_vn_iso()} (VN)",
-            "content": content_b64
-        }
-        if sha:
-            payload["sha"] = sha
-        try:
-            res_put = requests.put(url, headers=headers, json=payload, timeout=10)
-            if res_put.status_code in [200, 201]:
-                GitHubStorage._cache = data
-                GitHubStorage._cache_time = time.time()
-                return True, "Saved successfully!"
-            else:
-                return False, f"GitHub error (HTTP {res_put.status_code})"
-        except requests.exceptions.Timeout:
-            return False, "Timeout saving to GitHub"
-        except Exception as e:
-            return False, f"Save error: {e}"
+
+        with GitHubStorage._save_lock:
+            sha = None
+            try:
+                res_get = requests.get(url, headers=headers, timeout=5)
+                if res_get.status_code == 200:
+                    sha = res_get.json().get("sha")
+            except Exception:
+                pass
+            json_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+            content_b64 = base64.b64encode(json_bytes).decode('utf-8')
+            payload = {
+                "message": f"Update users_db.json - {_now_vn_iso()} (VN)",
+                "content": content_b64
+            }
+            if sha:
+                payload["sha"] = sha
+            try:
+                res_put = requests.put(url, headers=headers, json=payload, timeout=10)
+                if res_put.status_code in [200, 201]:
+                    GitHubStorage._cache = data
+                    GitHubStorage._cache_time = time.time()
+                    return True, "Saved successfully!"
+                else:
+                    return False, f"GitHub error (HTTP {res_put.status_code})"
+            except requests.exceptions.Timeout:
+                return False, "Timeout saving to GitHub"
+            except Exception as e:
+                return False, f"Save error: {e}"
 
 
 # ==========================================
@@ -2708,6 +3107,22 @@ TRANSLATIONS = {
         "taskbar_feedback": "Feedback",
         "taskbar_lang_tip": "Switch language",
         "taskbar_user": "User",
+        # ===== TECH STACK =====
+        "tech_title": "🚀 Advanced Technologies",
+        "tech_desc": "Exclusive technologies powering LTTP AI Online.",
+        "tech_security_title": "LTTP Security",
+        "tech_security_desc": "Multi-layer encryption: AES-256-GCM + LTTP-Cipher fallback + HMAC integrity + payload obfuscation + replay prevention + entropy detection. Protects user data without third-party dependency.",
+        "tech_write_title": "LTTP Write Data",
+        "tech_write_desc": "Non-blocking async database writer. Groups changes within 1.2s and writes to GitHub in the background. You can freely change typing speed, delete chats, toggle Quick Lookup… UI never freezes.",
+        "tech_ai_title": "LTTP AI",
+        "tech_ai_desc": "Smart AI engine with multi-model failover (3.x chain), streaming retry when interrupted, AI response partial recovery, per-message retry button, and intelligent context summarization.",
+        "tech_ui_title": "LTTP UI",
+        "tech_ui_desc": "Responsive UI optimized for phones, tablets and desktops. Touch-friendly 44px targets on mobile, iOS anti-zoom input, smooth animated gradient title, adaptive sidebar and taskbar.",
+        "tech_stream_title": "LTTP Stream Engine",
+        "tech_stream_desc": "Char-by-char streaming that never lags midway. Time-based scheduling with lag correction — smooth from the first token to the last, at any typing speed.",
+        "tech_memory_title": "LTTP Memory",
+        "tech_memory_desc": "Sliding-window context manager with auto-summarization, preserved key facts, and per-chat memory. Keeps conversations coherent even with very long histories.",
+        "tech_badge_active": "ACTIVE",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
@@ -2955,6 +3370,22 @@ TRANSLATIONS = {
         "taskbar_feedback": "Phản hồi",
         "taskbar_lang_tip": "Đổi ngôn ngữ",
         "taskbar_user": "Người dùng",
+        # ===== TECH STACK =====
+        "tech_title": "🚀 Công nghệ tiên tiến",
+        "tech_desc": "Các công nghệ độc quyền đang được áp dụng trong LTTP AI Online.",
+        "tech_security_title": "LTTP Security",
+        "tech_security_desc": "Mã hóa đa lớp: AES-256-GCM + LTTP-Cipher fallback + HMAC toàn vẹn + xáo trộn payload + chống replay + phát hiện entropy. Bảo vệ dữ liệu người dùng mà không phụ thuộc bên thứ ba.",
+        "tech_write_title": "LTTP Write Data",
+        "tech_write_desc": "Ghi database bất đồng bộ, không chặn UI. Gộp các thay đổi trong 1.2s và ghi GitHub ở background. Bạn có thể đổi tốc độ gõ, xóa chat, bật/tắt Quick Lookup… mà giao diện không hề đóng băng.",
+        "tech_ai_title": "LTTP AI",
+        "tech_ai_desc": "Bộ máy AI thông minh với failover đa mô hình (chuỗi 3.x), tự retry khi stream đứt, phục hồi phản hồi dở dang, nút Thử lại từng tin nhắn, và tóm tắt ngữ cảnh thông minh.",
+        "tech_ui_title": "LTTP UI",
+        "tech_ui_desc": "Giao diện responsive tối ưu cho điện thoại, máy tính bảng và desktop. Nút chạm 44px trên mobile, chống zoom iOS, tiêu đề gradient động mượt mà, sidebar và taskbar thích nghi.",
+        "tech_stream_title": "LTTP Stream Engine",
+        "tech_stream_desc": "Stream từng ký tự không bị lag giữa chừng. Lập lịch theo thời gian có bù trễ — mượt từ token đầu đến cuối, ở mọi tốc độ gõ.",
+        "tech_memory_title": "LTTP Memory",
+        "tech_memory_desc": "Quản lý ngữ cảnh sliding-window có tự tóm tắt, giữ lại dữ kiện quan trọng và bộ nhớ riêng từng chat. Giữ hội thoại mạch lạc ngay cả khi lịch sử rất dài.",
+        "tech_badge_active": "ĐANG HOẠT ĐỘNG",
     }
 }
 
@@ -2963,7 +3394,7 @@ def t(key: str, lang: str = "en") -> str:
 
 
 # ==========================================
-# TERMS OF USE - ĐA NGÔN NGỮ
+# TERMS OF USE — ĐA NGÔN NGỮ
 # ==========================================
 TERMS_OF_USE_HTML_EN = """
 <div style="max-height: 500px; overflow-y: auto; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; font-size: 0.9rem; line-height: 1.6;">
@@ -3174,7 +3605,7 @@ def _try_record_traffic_once():
     if role:
         db = GitHubStorage.load_db()
         if record_traffic(db, label, role):
-            GitHubStorage.save_db(db)
+            save_db_async(db)
         st.session_state.traffic_recorded = True
 
 
@@ -3295,11 +3726,8 @@ def bug_report_dialog():
                 else:
                     db = GitHubStorage.load_db(force_refresh=True)
                     add_bug_report(db, report)
-                    ok, msg = safe_save_db(db)
-                    if ok:
-                        st.success(t("bug_report_success", lang))
-                    else:
-                        st.error(t("bug_report_error", lang) + f" {msg}")
+                    save_db_async(db, immediate=True)
+                    st.success(t("bug_report_success", lang))
                 clear_bug_report_cookies()
                 st.session_state.bug_report_open = False
                 time.sleep(1.0)
@@ -3372,11 +3800,8 @@ def feedback_dialog():
                 else:
                     db = GitHubStorage.load_db(force_refresh=True)
                     add_feedback(db, fb)
-                    ok, msg = safe_save_db(db)
-                    if ok:
-                        st.success(t("feedback_success", lang))
-                    else:
-                        st.error(t("feedback_error", lang) + f" {msg}")
+                    save_db_async(db, immediate=True)
+                    st.success(t("feedback_success", lang))
                 st.session_state.feedback_open = False
                 st.session_state.feedback_text = ""
                 time.sleep(1.0)
@@ -3455,7 +3880,7 @@ def render_auth_ui():
                                 db[u_name_lower].setdefault("remembered_devices", [])
                                 if device_id not in db[u_name_lower]["remembered_devices"]:
                                     db[u_name_lower]["remembered_devices"].append(device_id)
-                                    GitHubStorage.save_db(db)
+                                    save_db_async(db)
                             st.toast(t("login_success", st.session_state.language), icon="✅")
                             st.rerun()
                         else:
@@ -3514,7 +3939,7 @@ def render_auth_ui():
                                     "typing_cps": DEFAULT_TYPING_CPS
                                 }
                             }
-                            ok, msg = GitHubStorage.save_db(db)
+                            ok, msg = save_db_now(db)
                             if ok:
                                 st.success(t("register_success", lang))
                             else:
@@ -3666,7 +4091,7 @@ def render_security_panel(lang: str, db: dict):
                 if st.button(t("security_unblock_device", lang), key=f"unblock_{dev[:8]}", use_container_width=True):
                     db2 = GitHubStorage.load_db(force_refresh=True)
                     unblock_device(db2, dev)
-                    GitHubStorage.save_db(db2)
+                    save_db_async(db2, immediate=True)
                     st.toast(t("security_device_unblocked", lang), icon="✅")
                     time.sleep(0.3); st.rerun()
     st.markdown("---")
@@ -3699,7 +4124,7 @@ def render_security_panel(lang: str, db: dict):
                             if x.get("id") == aid:
                                 x["acknowledged"] = True
                         db2[SECURITY_ALERTS_KEY] = al2
-                        GitHubStorage.save_db(db2)
+                        save_db_async(db2, immediate=True)
                         st.toast(t("security_alert_acked", lang), icon="✅")
                         time.sleep(0.3); st.rerun()
             with bc2:
@@ -3708,7 +4133,7 @@ def render_security_panel(lang: str, db: dict):
                     if st.button(t("security_block_device", lang), key=f"block_{aid[:8]}", use_container_width=True):
                         db2 = GitHubStorage.load_db(force_refresh=True)
                         block_device(db2, dev_raw, f"Manual: {title_alert}", "high", duration_override=24 * 3600)
-                        GitHubStorage.save_db(db2)
+                        save_db_async(db2, immediate=True)
                         st.toast(t("security_device_blocked", lang), icon="🚫")
                         time.sleep(0.3); st.rerun()
             with bc3:
@@ -3716,7 +4141,7 @@ def render_security_panel(lang: str, db: dict):
                     db2 = GitHubStorage.load_db(force_refresh=True)
                     al2 = [x for x in db2.get(SECURITY_ALERTS_KEY, []) if x.get("id") != aid]
                     db2[SECURITY_ALERTS_KEY] = al2
-                    GitHubStorage.save_db(db2)
+                    save_db_async(db2, immediate=True)
                     st.toast(t("security_alert_deleted", lang), icon="🗑️")
                     time.sleep(0.3); st.rerun()
     with st.expander(t("security_log", lang), expanded=False):
@@ -3792,22 +4217,16 @@ def render_admin_panel():
                 cfg["announcement"] = {"enabled": True, "title": ann_title_input.strip(),
                                         "body": ann_body_input.strip(), "updated_at": _now_vn_iso()}
                 db[SYSTEM_CONFIG_KEY] = cfg
-                ok, msg = GitHubStorage.save_db(db)
-                if ok:
-                    st.toast(t("announcement_sent_toast", lang), icon="📢")
-                    time.sleep(0.4); st.rerun()
-                else:
-                    st.error(f"Error: {msg}")
+                save_db_async(db, immediate=True)
+                st.toast(t("announcement_sent_toast", lang), icon="📢")
+                time.sleep(0.4); st.rerun()
     with acol2:
         if st.button(t("announcement_clear_btn", lang), use_container_width=True, key="admin_ann_clear"):
             cfg["announcement"] = {"enabled": False, "title": "", "body": "", "updated_at": _now_vn_iso()}
             db[SYSTEM_CONFIG_KEY] = cfg
-            ok, msg = GitHubStorage.save_db(db)
-            if ok:
-                st.toast(t("announcement_cleared_toast", lang), icon="🗑️")
-                time.sleep(0.4); st.rerun()
-            else:
-                st.error(f"Error: {msg}")
+            save_db_async(db, immediate=True)
+            st.toast(t("announcement_cleared_toast", lang), icon="🗑️")
+            time.sleep(0.4); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
     status_text = t("sys_paused", lang) if cur_maint else t("sys_running", lang)
@@ -3818,40 +4237,31 @@ def render_admin_panel():
     with col_a:
         if st.button(t("maintenance_on", lang), use_container_width=True, disabled=cur_maint, key="admin_maint_on"):
             cfg["maintenance_mode"] = True; db[SYSTEM_CONFIG_KEY] = cfg
-            ok, msg = GitHubStorage.save_db(db)
-            if ok:
-                st.toast("🔴 System paused", icon="🔴")
-                time.sleep(0.3); st.rerun()
-            else:
-                st.error(f"Error: {msg}")
+            save_db_async(db, immediate=True)
+            st.toast("🔴 System paused", icon="🔴")
+            time.sleep(0.3); st.rerun()
     with col_b:
         if st.button(t("maintenance_off", lang), use_container_width=True, disabled=not cur_maint, key="admin_maint_off"):
             cfg["maintenance_mode"] = False; db[SYSTEM_CONFIG_KEY] = cfg
-            ok, msg = GitHubStorage.save_db(db)
-            if ok:
-                st.toast("🟢 System resumed", icon="🟢")
-                time.sleep(0.3); st.rerun()
-            else:
-                st.error(f"Error: {msg}")
+            save_db_async(db, immediate=True)
+            st.toast("🟢 System resumed", icon="🟢")
+            time.sleep(0.3); st.rerun()
     st.markdown(f"**{t('maintenance_note_label', lang)}**")
     note_input = st.text_area("Note:", value=cur_note, height=100,
                               placeholder=t("maintenance_note_placeholder", lang),
                               key="admin_maint_note", label_visibility="collapsed")
     if st.button(t("save_maintenance_note", lang), use_container_width=True, key="admin_save_note"):
         cfg["maintenance_note"] = note_input.strip(); db[SYSTEM_CONFIG_KEY] = cfg
-        ok, msg = GitHubStorage.save_db(db)
-        if ok:
-            st.toast(t("maintenance_note_saved", lang), icon="💾")
-            time.sleep(0.3); st.rerun()
-        else:
-            st.error(f"Error: {msg}")
+        save_db_async(db, immediate=True)
+        st.toast(t("maintenance_note_saved", lang), icon="💾")
+        time.sleep(0.3); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     render_security_panel(lang, db)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # FEEDBACK MANAGEMENT
+    # FEEDBACK
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("feedback_admin_title", lang))
     st.caption(t("feedback_admin_desc", lang))
@@ -3909,24 +4319,18 @@ def render_admin_panel():
                         else:
                             db2 = GitHubStorage.load_db(force_refresh=True)
                             if reply_feedback(db2, fid, reply_input.strip(), "Admin"):
-                                ok2, msg2 = GitHubStorage.save_db(db2)
-                                if ok2:
-                                    st.toast(t("feedback_admin_reply_saved", lang), icon="✅")
-                                    time.sleep(0.4); st.rerun()
-                                else:
-                                    st.error(f"Error: {msg2}")
+                                save_db_async(db2, immediate=True)
+                                st.toast(t("feedback_admin_reply_saved", lang), icon="✅")
+                                time.sleep(0.4); st.rerun()
                             else:
                                 st.error("Not found.")
                 with cr2:
                     if st.button(t("feedback_admin_delete_btn", lang), use_container_width=True, key=f"fb_del_{fid}"):
                         db2 = GitHubStorage.load_db(force_refresh=True)
                         if delete_feedback(db2, fid):
-                            ok2, msg2 = GitHubStorage.save_db(db2)
-                            if ok2:
-                                st.toast(t("feedback_admin_deleted", lang), icon="🗑️")
-                                time.sleep(0.4); st.rerun()
-                            else:
-                                st.error(f"Error: {msg2}")
+                            save_db_async(db2, immediate=True)
+                            st.toast(t("feedback_admin_deleted", lang), icon="🗑️")
+                            time.sleep(0.4); st.rerun()
                         else:
                             st.error("Not found.")
                 st.markdown("---")
@@ -3988,24 +4392,18 @@ def render_admin_panel():
                         else:
                             db2 = GitHubStorage.load_db(force_refresh=True)
                             if reply_bug_report(db2, rid, reply_input.strip(), "Admin"):
-                                ok2, msg2 = GitHubStorage.save_db(db2)
-                                if ok2:
-                                    st.toast(t("bug_report_admin_reply_saved", lang), icon="✅")
-                                    time.sleep(0.4); st.rerun()
-                                else:
-                                    st.error(f"Error: {msg2}")
+                                save_db_async(db2, immediate=True)
+                                st.toast(t("bug_report_admin_reply_saved", lang), icon="✅")
+                                time.sleep(0.4); st.rerun()
                             else:
                                 st.error("Not found.")
                 with cr2:
                     if st.button(t("bug_report_admin_delete_btn", lang), use_container_width=True, key=f"reply_del_{rid}"):
                         db2 = GitHubStorage.load_db(force_refresh=True)
                         if delete_bug_report(db2, rid):
-                            ok2, msg2 = GitHubStorage.save_db(db2)
-                            if ok2:
-                                st.toast(t("bug_report_admin_deleted", lang), icon="🗑️")
-                                time.sleep(0.4); st.rerun()
-                            else:
-                                st.error(f"Error: {msg2}")
+                            save_db_async(db2, immediate=True)
+                            st.toast(t("bug_report_admin_deleted", lang), icon="🗑️")
+                            time.sleep(0.4); st.rerun()
                         else:
                             st.error("Not found.")
                 st.markdown("---")
@@ -4014,6 +4412,16 @@ def render_admin_panel():
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     _render_traffic_analytics(lang, db.get(TRAFFIC_LOG_KEY, {}))
     st.markdown('</div>', unsafe_allow_html=True)
+
+    # LTTP Write Data stats
+    with st.expander("⚙️ LTTP Write Data — Status", expanded=False):
+        wstats = lttp_writer.stats()
+        st.markdown(f"- **Queue:** {wstats.get('queued', 0)}")
+        st.markdown(f"- **Status:** {wstats.get('last_status', '?')}")
+        st.markdown(f"- **Flush count:** {wstats.get('flush_count', 0)}")
+        st.markdown(f"- **Thread alive:** {'✅' if wstats.get('thread_alive') else '❌'}")
+        if wstats.get("last_error"):
+            st.caption(f"Last error: {wstats.get('last_error')}")
 
     with st.expander("📋 Existing users", expanded=False):
         user_list = [u for u in db.keys()
@@ -4029,6 +4437,7 @@ def render_admin_panel():
 
     st.divider()
     if st.button(t("admin_logout", lang), use_container_width=True, key="admin_logout"):
+        lttp_writer.flush_now()
         st.session_state.is_admin = False
         st.session_state.user = None
         st.session_state.is_guest = False
@@ -4196,7 +4605,7 @@ with st.sidebar:
             if enforce_rate_limit("change_language", "Change language"):
                 user_data["language"] = lc
                 db_data[st.session_state.user] = user_data
-                safe_save_db(db_data)
+                save_db_async(db_data)
                 st.session_state.language = lc
                 st.rerun()
 
@@ -4287,7 +4696,8 @@ with st.sidebar:
             if device_id in u.get("remembered_devices", []):
                 u["remembered_devices"].remove(device_id)
                 db[st.session_state.user] = u
-                GitHubStorage.save_db(db)
+                save_db_async(db, immediate=True)
+        lttp_writer.flush_now()
         st.session_state.user = None
         st.session_state.is_guest = False
         st.session_state.is_temporary = False
@@ -4334,12 +4744,12 @@ with st.sidebar:
                         else:
                             user_data["chats"] = user_chats
                             db_data[st.session_state.user] = user_data
-                            safe_save_db(db_data)
+                            # Async — không block, có thể xóa chat khác ngay
+                            save_db_async(db_data)
                         if st.session_state.current_chat_id == cid:
                             st.session_state.current_chat_id = None
                             st.session_state.messages = []
                         st.toast(t("chat_deleted", lang), icon="🗑️")
-                        time.sleep(0.3)
                         st.rerun()
 
     ql_on = is_quick_lookup_mode()
@@ -4354,7 +4764,6 @@ with st.sidebar:
         new_state = not ql_on
         set_quick_lookup_mode(new_state)
         st.toast(t("ql_enabled_toast", lang) if new_state else t("ql_disabled_toast", lang), icon="🔍")
-        time.sleep(0.3)
         st.rerun()
 
     if ql_on:
@@ -4385,7 +4794,7 @@ with st.sidebar:
                     st.session_state.guest_prefs["smart_draft"] = smart_draft_val
                 else:
                     db_data[st.session_state.user] = user_data
-                    safe_save_db(db_data)
+                    save_db_async(db_data)
                 st.toast(t("smart_draft_on", lang) if smart_draft_val else t("smart_draft_off", lang), icon="💾")
 
         status_txt = t("smart_draft_on", lang) if smart_draft_val else t("smart_draft_off", lang)
@@ -4438,7 +4847,8 @@ with st.sidebar:
                     st.session_state.guest_prefs["typing_cps"] = new_cps
                 else:
                     db_data[st.session_state.user] = user_data
-                    safe_save_db(db_data)
+                    # Async — không block, user có thể thao tác tiếp
+                    save_db_async(db_data)
                 st.toast(t("typing_mode_saved", lang), icon="⌨️")
 
     st.divider()
@@ -4484,6 +4894,7 @@ with st.sidebar:
 
     st.divider()
 
+    # ===== Bộ nhớ cố định =====
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         mem = st.text_area("Memory:", value=user_data.get("custom_instructions", ""),
@@ -4500,9 +4911,72 @@ with st.sidebar:
                 else:
                     user_data["custom_instructions"] = mem.strip()
                     db_data[st.session_state.user] = user_data
-                    safe_save_db(db_data)
+                    save_db_async(db_data)
                 st.toast(t("memory_saved", lang), icon="🧠")
-                time.sleep(0.3); st.rerun()
+                st.rerun()
+
+    # ===== CÔNG NGHỆ TIÊN TIẾN =====
+    with st.expander(t("tech_title", lang), expanded=False):
+        st.caption(t("tech_desc", lang))
+
+        techs = [
+            {
+                "icon": "🛡️",
+                "name": t("tech_security_title", lang),
+                "desc": t("tech_security_desc", lang),
+                "badge": t("tech_badge_active", lang),
+            },
+            {
+                "icon": "⚡",
+                "name": t("tech_write_title", lang),
+                "desc": t("tech_write_desc", lang),
+                "badge": t("tech_badge_active", lang),
+            },
+            {
+                "icon": "🤖",
+                "name": t("tech_ai_title", lang),
+                "desc": t("tech_ai_desc", lang),
+                "badge": t("tech_badge_active", lang),
+            },
+            {
+                "icon": "🎨",
+                "name": t("tech_ui_title", lang),
+                "desc": t("tech_ui_desc", lang),
+                "badge": t("tech_badge_active", lang),
+            },
+            {
+                "icon": "🌊",
+                "name": t("tech_stream_title", lang),
+                "desc": t("tech_stream_desc", lang),
+                "badge": t("tech_badge_active", lang),
+            },
+            {
+                "icon": "🧠",
+                "name": t("tech_memory_title", lang),
+                "desc": t("tech_memory_desc", lang),
+                "badge": t("tech_badge_active", lang),
+            },
+        ]
+
+        for tech in techs:
+            st.markdown(f"""
+            <div class="tech-card">
+                <div class="tech-card-title">
+                    {tech['icon']} {tech['name']}
+                    <span class="tech-card-tag">{tech['badge']}</span>
+                </div>
+                <div class="tech-card-desc">{tech['desc']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # LTTP Write Data live stats
+        wstats = lttp_writer.stats()
+        queue_size = wstats.get("queued", 0)
+        last_status = wstats.get("last_status", "idle")
+        if queue_size > 0:
+            st.caption(f"⚙️ Write queue: **{queue_size}** • status: **{last_status}**")
+
+    st.divider()
 
     st.subheader(t("model_select", lang))
 
@@ -4530,7 +5004,7 @@ with st.sidebar:
                 st.session_state.guest_prefs["model"] = _new_model
             else:
                 db_data[st.session_state.user] = user_data
-                safe_save_db(db_data)
+                save_db_async(db_data)
     sel_model = _new_model
 
     with st.expander(t("gen_config", lang), expanded=False):
@@ -4599,9 +5073,9 @@ with st.sidebar:
                         st.session_state.guest_prefs = user_data["preferences"]
                     else:
                         db_data[st.session_state.user] = user_data
-                        safe_save_db(db_data)
+                        save_db_async(db_data)
                     st.toast(t("params_saved", lang), icon="💾")
-                    time.sleep(0.3); st.rerun()
+                    st.rerun()
         with bcol2:
             if st.button(t("reset_params", lang), use_container_width=True, key="sidebar_reset_params"):
                 if enforce_rate_limit("change_setting", "Reset settings"):
@@ -4614,9 +5088,9 @@ with st.sidebar:
                         st.session_state.guest_prefs = user_data["preferences"]
                     else:
                         db_data[st.session_state.user] = user_data
-                        safe_save_db(db_data)
+                        save_db_async(db_data)
                     st.toast(t("reset_params_toast", lang), icon="🔄")
-                    time.sleep(0.3); st.rerun()
+                    st.rerun()
 
 
 # ==========================================
@@ -4717,16 +5191,15 @@ if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
         if st.button(t("draft_discard_btn", lang), use_container_width=True, key="draft_discard_btn"):
             clear_draft_cookie_via_js()
             st.toast(t("draft_discarded_toast", lang), icon="🗑️")
-            time.sleep(0.3); st.rerun()
+            st.rerun()
 
-# Render messages
+# Messages
 for idx, msg in enumerate(st.session_state.messages):
     role = msg["role"]
     content = msg.get("content", "")
     is_error_msg = msg.get("is_error", False)
     with st.chat_message(role):
         if is_error_msg:
-            # Hiển thị lỗi + nút thử lại
             st.markdown(f'<div class="lttp-error-card">{content}</div>', unsafe_allow_html=True)
             retry_label = t("ai_retry_btn", lang)
             st.markdown(
@@ -4759,7 +5232,7 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
                 else:
                     user_data["chats"] = user_chats
                     db_data[st.session_state.user] = user_data
-                    safe_save_db(db_data)
+                    save_db_async(db_data)
             return
 
         if not chat_data.get("title") or chat_data.get("title") == t("new_chat", lang):
@@ -4806,16 +5279,12 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
             else:
                 user_data["chats"] = user_chats
                 db_data[st.session_state.user] = user_data
-                safe_save_db(db_data)
+                save_db_async(db_data)
     except Exception:
         pass
 
 
 def _process_prompt(user_prompt, is_retry=False):
-    """
-    Xử lý prompt. Nếu is_retry=True, KHÔNG append user message mới —
-    chỉ gọi AI lại với history hiện tại.
-    """
     if not is_retry:
         if not enforce_message_content(user_prompt):
             return
@@ -4827,10 +5296,7 @@ def _process_prompt(user_prompt, is_retry=False):
                 st.error(t("guest_quota_exceeded", lang))
                 st.stop()
             increment_guest_quota(db_q, device_id)
-            try:
-                GitHubStorage.save_db(db_q)
-            except Exception:
-                pass
+            save_db_async(db_q)
 
         clear_draft_cookie_via_js()
         clear_stop_flag()
@@ -4885,23 +5351,14 @@ def _process_prompt(user_prompt, is_retry=False):
 
     all_messages = st.session_state.messages
 
-    # Khi retry: bỏ message lỗi cuối (assistant error) trước khi build history
-    if is_retry:
-        # Tìm message user gần nhất phía trước để build lại
-        # all_messages vẫn chứa user prompt gốc
-        pass
-
     if ql_active:
         recent_window = []
     else:
         recent_window = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
-        # Bỏ message cuối nếu nó trùng user_prompt (chỉ khi không phải retry)
         if not is_retry and recent_window and recent_window[-1].get("content") == user_prompt:
             recent_window = recent_window[:-1]
-        # Bỏ message assistant error nếu có
         recent_window = [m for m in recent_window if not m.get("is_error", False)]
 
-    # Lấy user_prompt cuối cùng nếu là retry
     if is_retry:
         last_user_content = ""
         for m in reversed(all_messages):
@@ -4909,7 +5366,6 @@ def _process_prompt(user_prompt, is_retry=False):
                 last_user_content = m.get("content", "")
                 break
         user_prompt = last_user_content
-        # Bỏ message user cuối khỏi window (vì sẽ append ở dưới)
         if recent_window and recent_window[-1].get("role") == "user":
             recent_window = recent_window[:-1]
 
@@ -4941,7 +5397,6 @@ def _process_prompt(user_prompt, is_retry=False):
     final_text = ""
     final_err = None
 
-    # Nếu retry: xóa message lỗi cuối trước khi gọi lại
     if is_retry and st.session_state.messages:
         if st.session_state.messages[-1].get("is_error", False):
             st.session_state.messages.pop()
@@ -5050,7 +5505,7 @@ def _process_prompt(user_prompt, is_retry=False):
         else:
             user_data["chats"] = user_chats
             db_data[st.session_state.user] = user_data
-            safe_save_db(db_data)
+            save_db_async(db_data)
 
     if final_text and final_err not in ("stopped",):
         _run_deferred_tasks(chat_data, user_prompt, lang)
@@ -5059,7 +5514,7 @@ def _process_prompt(user_prompt, is_retry=False):
 
 
 # ==========================================
-# 33. XỬ LÝ QUERY PARAMS (RETRY / LANG / FEEDBACK)
+# 33. XỬ LÝ QUERY PARAMS
 # ==========================================
 _handle_retry = False
 _retry_idx = None
@@ -5080,13 +5535,10 @@ except Exception:
     pass
 
 if _handle_retry and _retry_idx is not None:
-    # Xác định vị trí message lỗi và user message ngay trước nó
     msgs = st.session_state.messages
     if 0 <= _retry_idx < len(msgs) and msgs[_retry_idx].get("is_error", False):
         if enforce_rate_limit("retry_message", "Retry message"):
-            # Xóa message lỗi
             msgs.pop(_retry_idx)
-            # Tìm user prompt gần nhất
             last_user_prompt = ""
             for m in reversed(msgs):
                 if m.get("role") == "user" and not m.get("is_error", False):
@@ -5120,7 +5572,7 @@ try:
             try:
                 user_data["language"] = _qp_lang
                 db_data[st.session_state.user] = user_data
-                safe_save_db(db_data)
+                save_db_async(db_data)
             except Exception:
                 pass
         try:
@@ -5141,7 +5593,7 @@ except Exception:
 
 
 # ==========================================
-# 35. TASKBAR - PURE HTML
+# 35. TASKBAR - PURE HTML, RESPONSIVE
 # ==========================================
 def render_taskbar_html():
     sec_enabled = is_lttp_security_enabled()
@@ -5197,7 +5649,12 @@ def render_taskbar_html():
                        .replace(">", "&gt;"))
 
     taskbar_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
+    body {{ margin: 0; padding: 0; }}
     #lttp-taskbar {{
         position: fixed;
         left: 0; right: 0; bottom: 0;
@@ -5210,7 +5667,7 @@ def render_taskbar_html():
         padding: 6px 14px;
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         font-size: 0.82rem;
         color: #e2e8f0;
@@ -5236,6 +5693,7 @@ def render_taskbar_html():
         background: {sec_dot_color};
         box-shadow: 0 0 0 3px {sec_dot_color}22;
         animation: tbPulse 2s ease-in-out infinite;
+        flex-shrink: 0;
     }}
     @keyframes tbPulse {{
         0%,100% {{ opacity: 1; transform: scale(1); }}
@@ -5263,6 +5721,9 @@ def render_taskbar_html():
         color: {user_color};
         font-weight: 600;
         flex-shrink: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 160px;
     }}
     #lttp-taskbar .tb-actions {{
         margin-left: auto;
@@ -5291,27 +5752,27 @@ def render_taskbar_html():
         transition: all 0.15s ease;
     }}
     #lttp-taskbar .tb-fb-btn:hover {{ background: rgba(102,126,234,0.3); }}
-    body {{ padding-bottom: 50px !important; }}
-    section.main .block-container {{ padding-bottom: 60px !important; }}
 
     @media (max-width: 768px) {{
         #lttp-taskbar {{
-            font-size: 0.75rem;
-            padding: 5px 8px;
-            gap: 8px;
-            height: 38px;
+            font-size: 0.72rem;
+            padding: 4px 6px;
+            gap: 5px;
+            height: 36px;
         }}
-        #lttp-taskbar .tb-sec {{ padding: 3px 8px; gap: 4px; }}
-        #lttp-taskbar .tb-sec-score {{ font-size: 0.8rem; }}
+        #lttp-taskbar .tb-sec {{ padding: 2px 6px; gap: 3px; }}
+        #lttp-taskbar .tb-sec-score {{ font-size: 0.75rem; }}
         #lttp-taskbar .tb-sec-label {{ display: none; }}
+        #lttp-taskbar .tb-user {{ max-width: 90px; font-size: 0.7rem; }}
+        #lttp-taskbar .tb-divider {{ display: none; }}
         #lttp-taskbar .tb-lang-btn, #lttp-taskbar .tb-lang-btn-vi {{
-            padding: 3px 7px; font-size: 0.68rem;
+            padding: 2px 6px; font-size: 0.65rem;
         }}
-        #lttp-taskbar .tb-fb-btn {{ padding: 3px 9px; font-size: 0.7rem; }}
-        body {{ padding-bottom: 44px !important; }}
-        section.main .block-container {{ padding-bottom: 55px !important; }}
+        #lttp-taskbar .tb-fb-btn {{ padding: 2px 8px; font-size: 0.65rem; }}
     }}
     </style>
+    </head>
+    <body>
     <div id="lttp-taskbar">
         <div class="tb-sec">
             <span class="tb-sec-dot"></span>
@@ -5343,6 +5804,8 @@ def render_taskbar_html():
         }} catch(e) {{ console.warn("Cannot open feedback:", e); }}
     }}
     </script>
+    </body>
+    </html>
     """
 
     try:
