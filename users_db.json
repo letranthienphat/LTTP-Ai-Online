@@ -1,6 +1,6 @@
 {
   "__system_config__": {
-    "maintenance_mode": false,
+    "maintenance_mode": true,
     "maintenance_note": "Đang cập nhật sửa lỗi, sẽ xong vào lúc 6:05.",
     "announcement": {
       "enabled": false,
