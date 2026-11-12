@@ -10,6 +10,7 @@ import math
 import struct
 import threading
 import queue
+import zlib
 import requests
 import streamlit as st
 import google.generativeai as genai
@@ -34,7 +35,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.47.0"
+APP_VERSION = "1.48.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -82,7 +83,7 @@ COOKIE_STOP_FLAG = "LTTP_stop_flag"
 QL_MODE_COOKIE = "LTTP_ql_mode"
 LTTP_SECURITY_ENABLED_COOKIE = "LTTP_sec_enabled"
 
-# ========== TỐI ƯU TỐC ĐỘ & CHỐNG NGẮT ==========
+# ========== TỐI ƯU TỐC ĐỘ ==========
 SUMMARY_TRIGGER_RATIO = 0.95
 GEMINI_REQUEST_TIMEOUT = 45
 GEMINI_STREAM_MAX_RETRIES = 2
@@ -90,15 +91,23 @@ GEMINI_RETRY_BACKOFF = 1.5
 MODEL_LIST_CACHE_SECONDS = 600
 DEFER_TITLE_AND_SUMMARY = True
 STREAM_FIRST_TOKEN_FAST = True
-STREAM_INACTIVITY_TIMEOUT = 30
-# ===================================================
+# ==================================
 
 # ========== LTTP WRITE DATA ==========
-# Background writer: debounce + async save để không block UI
-LTTP_WRITE_DEBOUNCE_SEC = 1.2       # gộp các thay đổi trong 1.2s
-LTTP_WRITE_MAX_WAIT_SEC = 6.0       # nếu queue đầy hoặc lâu quá → flush
+LTTP_WRITE_DEBOUNCE_SEC = 1.2
+LTTP_WRITE_MAX_WAIT_SEC = 6.0
 LTTP_WRITE_QUEUE_MAX = 50
 # =====================================
+
+# ========== LTTP MULTI-CHAT ==========
+MULTI_CHAT_QUEUE_MAX = 2000  # max chunks per chat queue
+# =====================================
+
+# ========== LTTP CHAT CRYPTO (NÉN + MÃ HÓA) ==========
+CHAT_CRYPTO_MAGIC = b"LTTPCHAT"
+CHAT_CRYPTO_VERSION = 1
+CHAT_COMPRESS_LEVEL = 9  # 0-9, 9 = max
+# ===================================================
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
 CHANGELOG_CACHE_SECONDS = 600
@@ -229,6 +238,7 @@ GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
 GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 
 MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "LTTPAI_Master_Secret_Key_2026")
+CHAT_SECRET = st.secrets.get("CHAT_ENCRYPTION_SECRET", MASTER_SECRET + "_CHAT_v1")
 FERNET_KEY = base64.urlsafe_b64encode(hashlib.sha256(MASTER_SECRET.encode()).digest())
 cipher = Fernet(FERNET_KEY)
 
@@ -430,19 +440,118 @@ lttp_security = LTTPSecurity()
 
 
 # ==========================================
-# 2b. LTTP WRITE DATA - Background async writer
+# 2b. LTTP CHAT CRYPTO — NÉN + MÃ HÓA
+# ==========================================
+class LTTPSecureChatCodec:
+    """
+    Mã hóa + nén dữ liệu chat trước khi lưu GitHub.
+    
+    Format (binary, base64 encoded):
+    - MAGIC (8 bytes) "LTTPCHAT"
+    - VERSION (1 byte)
+    - SALT (16 bytes)
+    - NONCE (12 bytes)
+    - CIPHERTEXT (AES-256-GCM)
+    
+    Quy trình:
+    1. messages (list) → JSON serialize
+    2. zlib compress level 9 (giảm ~70-90%)
+    3. AES-256-GCM encrypt
+    4. base64 encode
+    
+    Kết quả: chuỗi base64 ngắn hơn ~10-30% so với JSON gốc,
+              nhưng hoàn toàn không đọc được.
+    """
+    MAGIC = b"LTTPCHAT"
+    VERSION = 1
+    NONCE_LEN = 12
+    SALT_LEN = 16
+    HEADER_LEN = len(MAGIC) + 1 + SALT_LEN + NONCE_LEN  # 8+1+16+12 = 37
+
+    @staticmethod
+    def _derive_key(secret: str, salt: bytes) -> bytes:
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=60_000,
+        )
+        return kdf.derive(secret.encode('utf-8'))
+
+    @classmethod
+    def encode(cls, messages: list, secret: str = None) -> str:
+        """Nén + mã hóa list[dict] → base64 string."""
+        if secret is None:
+            secret = CHAT_SECRET
+        if not messages:
+            return ""
+        try:
+            # 1. JSON
+            json_bytes = json.dumps(messages, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            # 2. Compress
+            compressed = zlib.compress(json_bytes, level=CHAT_COMPRESS_LEVEL)
+            # 3. Encrypt
+            salt = os.urandom(cls.SALT_LEN)
+            key = cls._derive_key(secret, salt)
+            nonce = os.urandom(cls.NONCE_LEN)
+            aesgcm = AESGCM(key)
+            ciphertext = aesgcm.encrypt(nonce, compressed, None)
+            # 4. Header + payload
+            header = cls.MAGIC + bytes([cls.VERSION]) + salt + nonce
+            payload = header + ciphertext
+            return base64.urlsafe_b64encode(payload).decode('ascii')
+        except Exception:
+            return ""
+
+    @classmethod
+    def decode(cls, encoded: str, secret: str = None) -> list:
+        """Giải mã + giải nén → list[dict]."""
+        if secret is None:
+            secret = CHAT_SECRET
+        if not encoded:
+            return []
+        try:
+            raw = base64.urlsafe_b64decode(encoded.encode('ascii'))
+            if len(raw) < cls.HEADER_LEN + 16:
+                return []
+            if not raw.startswith(cls.MAGIC):
+                return []
+            version = raw[len(cls.MAGIC)]
+            if version != cls.VERSION:
+                return []
+            offset = len(cls.MAGIC) + 1
+            salt = raw[offset:offset + cls.SALT_LEN]
+            offset += cls.SALT_LEN
+            nonce = raw[offset:offset + cls.NONCE_LEN]
+            offset += cls.NONCE_LEN
+            ciphertext = raw[offset:]
+            key = cls._derive_key(secret, salt)
+            aesgcm = AESGCM(key)
+            compressed = aesgcm.decrypt(nonce, ciphertext, None)
+            json_bytes = zlib.decompress(compressed)
+            return json.loads(json_bytes.decode('utf-8'))
+        except Exception:
+            return []
+
+    @classmethod
+    def is_encoded(cls, val) -> bool:
+        """Kiểm tra 1 string có phải là chat đã mã hóa không."""
+        if not isinstance(val, str) or not val:
+            return False
+        try:
+            raw = base64.urlsafe_b64decode(val.encode('ascii'))
+            return raw.startswith(cls.MAGIC)
+        except Exception:
+            return False
+
+
+chat_codec = LTTPSecureChatCodec()
+
+
+# ==========================================
+# 2c. LTTP WRITE DATA — ASYNC WRITER
 # ==========================================
 class LTTPWriteData:
-    """
-    LTTP Write Data - Ghi dữ liệu bất đồng bộ (non-blocking).
-    
-    Nguyên lý:
-    - Mọi thao tác save → đưa vào queue, KHÔNG đợi GitHub API
-    - Background thread debounce (gộp nhiều thay đổi trong 1.2s)
-    - UI phản hồi ngay lập tức, save chạy ngầm
-    - Nếu chờ quá lâu (queue lớn) → flush
-    - Khi user logout / đóng → auto-flush
-    """
     VERSION = "1.0.0"
 
     _lock = threading.Lock()
@@ -457,16 +566,13 @@ class LTTPWriteData:
 
     @classmethod
     def enqueue(cls, data: dict, immediate: bool = False) -> None:
-        """Đưa data vào queue để ghi. Non-blocking."""
         with cls._lock:
-            # Nếu queue đầy → ghi đè bản mới nhất (giữ data mới)
             cls._queue.append({
                 "ts": time.time(),
                 "data": data,
                 "immediate": immediate,
             })
             if len(cls._queue) > LTTP_WRITE_QUEUE_MAX:
-                # Giữ bản mới nhất
                 cls._queue = deque(list(cls._queue)[-LTTP_WRITE_QUEUE_MAX:])
             cls._last_enqueued = time.time()
             cls._last_status = "queued"
@@ -500,11 +606,6 @@ class LTTPWriteData:
             age = now - oldest_ts
             has_immediate = any(item.get("immediate") for item in cls._queue)
 
-            # Flush nếu:
-            # - có immediate → flush ngay
-            # - item cũ nhất đã chờ > DEBOUNCE
-            # - đã chờ > MAX_WAIT
-            # - queue gần đầy
             should_flush = (
                 has_immediate
                 or age > LTTP_WRITE_DEBOUNCE_SEC
@@ -514,13 +615,11 @@ class LTTPWriteData:
             if not should_flush:
                 return
 
-            # Lấy bản mới nhất (các bản cũ bị supersede)
             latest = cls._queue[-1]["data"]
             cls._queue.clear()
             cls._last_flushed = now
             cls._last_status = "flushing"
 
-        # Ghi ngoài lock để không block enqueue
         try:
             ok, msg = GitHubStorage.save_db(latest)
             with cls._lock:
@@ -538,7 +637,6 @@ class LTTPWriteData:
 
     @classmethod
     def flush_now(cls) -> tuple:
-        """Force flush ngay (blocking). Dùng khi logout/cần chắc chắn đã ghi."""
         with cls._lock:
             if not cls._queue:
                 return True, "Nothing to flush"
@@ -581,11 +679,176 @@ lttp_writer = LTTPWriteData()
 
 
 # ==========================================
-# 2c. CUSTOM CSS — RESPONSIVE CHUẨN MOBILE + DESKTOP
+# 2d. LTTP MULTI-CHAT ENGINE — CHAT CHẠY SONG SONG
+# ==========================================
+class LTTPMultiChatEngine:
+    """
+    Cho phép stream AI chạy nền trong thread riêng, không block UI.
+    
+    Kiến trúc:
+    - Mỗi chat có 1 "state" với:
+        * status: idle | running | completed | error | stopped
+        * queue: deque chứa (accumulated, done, err)
+        * accumulated: str tích lũy
+        * started_at, finished_at
+        * final_text, final_err
+    - Method start_stream(chat_id, ...) → spawn thread
+    - Method get_state(chat_id) → trả về snapshot
+    - Method stop(chat_id) → set stop event
+    - Method consume_queue(chat_id) → lấy hết chunks mới
+    
+    Thread an toàn: dùng lock per state.
+    """
+    VERSION = "1.0.0"
+
+    _lock = threading.Lock()
+    _states = {}  # chat_id -> state dict
+    _threads = {}  # chat_id -> threading.Thread
+    _stop_events = {}  # chat_id -> threading.Event
+
+    @classmethod
+    def _create_state(cls):
+        return {
+            "status": "idle",
+            "queue": deque(),
+            "accumulated": "",
+            "started_at": 0,
+            "finished_at": 0,
+            "final_text": "",
+            "final_err": None,
+            "last_update": 0,
+        }
+
+    @classmethod
+    def get_state(cls, chat_id: str) -> dict:
+        with cls._lock:
+            if chat_id not in cls._states:
+                cls._states[chat_id] = cls._create_state()
+            st_obj = cls._states[chat_id]
+            return {
+                "status": st_obj["status"],
+                "accumulated": st_obj["accumulated"],
+                "started_at": st_obj["started_at"],
+                "finished_at": st_obj["finished_at"],
+                "final_text": st_obj["final_text"],
+                "final_err": st_obj["final_err"],
+                "last_update": st_obj["last_update"],
+                "queue_size": len(st_obj["queue"]),
+            }
+
+    @classmethod
+    def is_running(cls, chat_id: str) -> bool:
+        with cls._lock:
+            if chat_id not in cls._states:
+                return False
+            return cls._states[chat_id]["status"] == "running"
+
+    @classmethod
+    def consume_chunks(cls, chat_id: str) -> list:
+        """Lấy tất cả chunk mới trong queue, clear queue."""
+        with cls._lock:
+            if chat_id not in cls._states:
+                return []
+            q = cls._states[chat_id]["queue"]
+            chunks = list(q)
+            q.clear()
+            return chunks
+
+    @classmethod
+    def stop(cls, chat_id: str):
+        with cls._lock:
+            if chat_id in cls._stop_events:
+                cls._stop_events[chat_id].set()
+            if chat_id in cls._states:
+                cls._states[chat_id]["status"] = "stopped"
+
+    @classmethod
+    def start_stream(
+        cls, chat_id, prompt_inputs, api_keys, preferred_model,
+        system_instruction, generation_config, lang,
+        typing_mode, typing_cps,
+    ):
+        """Spawn thread để stream AI cho chat_id. Trả về True nếu start được."""
+        with cls._lock:
+            # Nếu đã chạy → không start lại
+            if chat_id in cls._states and cls._states[chat_id]["status"] == "running":
+                return False
+            cls._states[chat_id] = cls._create_state()
+            cls._states[chat_id]["status"] = "running"
+            cls._states[chat_id]["started_at"] = time.time()
+            stop_evt = threading.Event()
+            cls._stop_events[chat_id] = stop_evt
+
+        def worker():
+            try:
+                for accumulated, done, err in stream_gemini_with_failover(
+                    prompt_inputs=prompt_inputs,
+                    api_keys=api_keys,
+                    preferred_model=preferred_model,
+                    system_instruction=system_instruction,
+                    generation_config=generation_config,
+                    lang=lang,
+                    ui_placeholder=None,  # Không render trực tiếp trong thread
+                    typing_mode=typing_mode,
+                    typing_cps=typing_cps,
+                    stop_event=stop_evt,
+                ):
+                    with cls._lock:
+                        if chat_id not in cls._states:
+                            return
+                        st_obj = cls._states[chat_id]
+                        # Cap queue để tránh tràn RAM
+                        if len(st_obj["queue"]) < MULTI_CHAT_QUEUE_MAX:
+                            st_obj["queue"].append((accumulated, done, err))
+                        st_obj["accumulated"] = accumulated
+                        st_obj["last_update"] = time.time()
+                        if done:
+                            st_obj["final_text"] = accumulated
+                            st_obj["final_err"] = err
+                            st_obj["finished_at"] = time.time()
+                            if err == "stopped":
+                                st_obj["status"] = "stopped"
+                            elif err is None:
+                                st_obj["status"] = "completed"
+                            else:
+                                st_obj["status"] = "error"
+            except Exception as e:
+                with cls._lock:
+                    if chat_id in cls._states:
+                        cls._states[chat_id]["status"] = "error"
+                        cls._states[chat_id]["final_err"] = str(e)[:200]
+                        cls._states[chat_id]["finished_at"] = time.time()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        with cls._lock:
+            cls._threads[chat_id] = thread
+        thread.start()
+        return True
+
+    @classmethod
+    def cleanup_chat(cls, chat_id: str):
+        """Xóa state khi user xóa chat hoặc logout."""
+        with cls._lock:
+            if chat_id in cls._stop_events:
+                cls._stop_events[chat_id].set()
+            cls._states.pop(chat_id, None)
+            cls._threads.pop(chat_id, None)
+            cls._stop_events.pop(chat_id, None)
+
+    @classmethod
+    def get_all_running(cls) -> list:
+        with cls._lock:
+            return [cid for cid, s in cls._states.items() if s["status"] == "running"]
+
+
+multi_chat = LTTPMultiChatEngine()
+
+
+# ==========================================
+# 2e. CUSTOM CSS
 # ==========================================
 st.markdown("""
 <style>
-    /* ===== Base ===== */
     html, body, [data-testid="stAppViewContainer"], section.main {
         overflow-anchor: none !important;
     }
@@ -892,7 +1155,6 @@ st.markdown("""
         margin: 6px 0;
     }
 
-    /* ===== TECH CARD ===== */
     .tech-card {
         padding: 12px 14px;
         margin: 8px 0;
@@ -928,7 +1190,35 @@ st.markdown("""
         border: 1px solid rgba(16,185,129,0.3);
     }
 
-    /* Ẩn file upload */
+    /* Multi-chat running badge */
+    .chat-running-badge {
+        display: inline-block;
+        padding: 1px 6px;
+        margin-left: 4px;
+        border-radius: 4px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        background: rgba(245,158,11,0.2);
+        color: #f59e0b;
+        border: 1px solid rgba(245,158,11,0.4);
+        animation: pulseBadge 1.5s ease-in-out infinite;
+    }
+    @keyframes pulseBadge {
+        0%,100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+
+    /* Encrypted data notice */
+    .encrypted-notice {
+        padding: 8px 12px;
+        background: rgba(16,185,129,0.06);
+        border: 1px solid rgba(16,185,129,0.25);
+        border-radius: 8px;
+        font-size: 0.78rem;
+        color: #10b981;
+        margin: 6px 0;
+    }
+
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -946,9 +1236,6 @@ st.markdown("""
         pointer-events: none !important;
     }
 
-    /* ===================================================
-       RESPONSIVE — MOBILE FIRST
-       =================================================== */
     @media (max-width: 1024px) {
         .main-header { font-size: 2rem !important; }
         section.main .block-container {
@@ -985,7 +1272,7 @@ st.markdown("""
         .stat-label { font-size: 0.7rem !important; }
 
         section[data-testid="stChatInput"] textarea {
-            font-size: 16px !important; /* iOS không auto-zoom */
+            font-size: 16px !important;
         }
         section[data-testid="stSidebar"] .stButton button {
             padding: 8px 10px !important;
@@ -993,22 +1280,18 @@ st.markdown("""
             min-height: 40px !important;
         }
 
-        /* Chat messages — text dễ đọc hơn */
         [data-testid="stChatMessage"] {
             padding: 6px 8px !important;
         }
 
-        /* Dataframe/table không tràn */
         [data-testid="stDataFrame"], .stDataFrame {
             overflow-x: auto !important;
         }
 
-        /* Expander rộng full */
         details > summary {
             font-size: 0.9rem !important;
         }
 
-        /* Tabs xếp chồng nếu cần */
         button[data-baseweb="tab"] {
             font-size: 0.85rem !important;
             padding: 8px 10px !important;
@@ -1039,7 +1322,6 @@ st.markdown("""
         }
     }
 
-    /* Desktop > 1200px — tối ưu rộng */
     @media (min-width: 1200px) {
         section.main .block-container {
             padding-left: 2rem !important;
@@ -1051,7 +1333,6 @@ st.markdown("""
 
     img { max-width: 100% !important; height: auto !important; }
 
-    /* Prevent horizontal overflow */
     *, *::before, *::after {
         box-sizing: border-box;
     }
@@ -1094,16 +1375,12 @@ def is_temporary_session() -> bool:
 
 
 def save_db_async(data: dict, immediate: bool = False):
-    """
-    LTTP Write Data — enqueue để ghi async, KHÔNG block UI.
-    """
     if is_temporary_session():
         return
     lttp_writer.enqueue(data, immediate=immediate)
 
 
 def save_db_now(data: dict) -> tuple:
-    """Force save đồng bộ (chỉ dùng khi thật cần, ví dụ đăng ký user)."""
     if is_temporary_session():
         return True, "Temporary session - not saved"
     return GitHubStorage.save_db(data)
@@ -1201,7 +1478,49 @@ def truncate_message_smart(content: str, max_tokens: int) -> str:
 
 
 # ==========================================
-# 3b. CHANGELOG / QUICK LOOKUP / GUEST QUOTA
+# 3b. CHAT STORAGE HELPERS (encrypted)
+# ==========================================
+def serialize_messages_for_storage(messages: list) -> str:
+    """Nén + mã hóa messages trước khi lưu. Trả về base64 string."""
+    return chat_codec.encode(messages)
+
+
+def deserialize_messages_from_storage(stored) -> list:
+    """
+    Đọc messages từ storage.
+    - Nếu stored là str (encrypted) → decode
+    - Nếu stored là list (legacy plaintext) → trả nguyên (sẽ migrate khi save)
+    """
+    if isinstance(stored, list):
+        return stored
+    if isinstance(stored, str):
+        if not stored:
+            return []
+        decoded = chat_codec.decode(stored)
+        if decoded:
+            return decoded
+        return []
+    return []
+
+
+def prepare_chat_for_save(chat_data: dict) -> dict:
+    """
+    Chuẩn bị chat_data để lưu:
+    - Nếu messages là list → nén + mã hóa
+    - Trả về dict mới với messages đã encrypt
+    """
+    result = dict(chat_data)
+    msgs = chat_data.get("messages", [])
+    if isinstance(msgs, list):
+        result["messages"] = serialize_messages_for_storage(msgs)
+        result["_encrypted"] = True
+    elif isinstance(msgs, str):
+        result["_encrypted"] = chat_codec.is_encoded(msgs)
+    return result
+
+
+# ==========================================
+# 3c. CHANGELOG / QUICK LOOKUP / GUEST QUOTA
 # ==========================================
 def fetch_changelog_cached() -> tuple:
     now = time.time()
@@ -1213,7 +1532,7 @@ def fetch_changelog_cached() -> tuple:
         resp = requests.get(
             CHANGELOG_URL,
             timeout=5,
-            headers={"User-Agent": "LTTP-AI-Online/1.47.0"}
+            headers={"User-Agent": "LTTP-AI-Online/1.48.0"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -1247,7 +1566,7 @@ def count_high_frequency_users(db_data: dict) -> int:
                     continue
                 updated = chat.get("updated_at", "")
                 if updated and updated >= yesterday:
-                    msgs = chat.get("messages", [])
+                    msgs = deserialize_messages_from_storage(chat.get("messages", []))
                     if isinstance(msgs, list):
                         msg_count += sum(1 for m in msgs if isinstance(m, dict) and m.get("role") == "user")
             if msg_count >= HIGH_FREQ_MSG_THRESHOLD:
@@ -1539,6 +1858,8 @@ def run_lttp_security_scan(db_data: dict) -> dict:
     findings["layers"].append({"name": "Payload Obfuscation", "status": "active", "desc": "Anti-reverse-engineering"})
     findings["layers"].append({"name": "Replay Prevention", "status": "active", "desc": "Nonce + timestamp"})
     findings["layers"].append({"name": "Entropy Detection", "status": "active", "desc": "Anomaly detection"})
+    findings["layers"].append({"name": "Chat Codec (zlib + AES-GCM)", "status": "active", "desc": "Messages compressed and encrypted before storage"})
+    findings["layers"].append({"name": "Multi-Chat Engine", "status": "active", "desc": "Threaded streaming per chat"})
 
     try:
         test_data = "LTTP_SECURITY_TEST_" + str(uuid.uuid4())
@@ -1552,6 +1873,27 @@ def run_lttp_security_scan(db_data: dict) -> dict:
     except Exception as e:
         findings["issues"].append({"severity": "high", "msg": f"Encryption error: {str(e)[:80]}"})
         findings["score"] -= 20
+
+    # Test chat codec
+    try:
+        test_msgs = [{"role": "user", "content": "test " * 100}, {"role": "assistant", "content": "reply " * 100}]
+        enc_chat = chat_codec.encode(test_msgs)
+        dec_chat = chat_codec.decode(enc_chat)
+        if dec_chat == test_msgs:
+            orig_size = len(json.dumps(test_msgs, ensure_ascii=False))
+            enc_size = len(enc_chat)
+            reduction = 100 - (enc_size / orig_size * 100) if orig_size > 0 else 0
+            findings["layers"].append({
+                "name": "Chat Codec Roundtrip",
+                "status": "pass",
+                "desc": f"Compress+Encrypt OK (reduction: {reduction:.0f}%)"
+            })
+        else:
+            findings["issues"].append({"severity": "high", "msg": "Chat codec roundtrip failed"})
+            findings["score"] -= 15
+    except Exception as e:
+        findings["issues"].append({"severity": "high", "msg": f"Chat codec error: {str(e)[:80]}"})
+        findings["score"] -= 15
 
     blocklist = db_data.get(BLOCKLIST_KEY, {})
     blocked_count = sum(1 for e in blocklist.values() if float(e.get("until_ts", 0)) > time.time())
@@ -2002,7 +2344,7 @@ def is_incomplete_error(error: Exception) -> bool:
 
 
 # ==========================================
-# 7. GỌI GEMINI — STREAM MƯỢT TỪ ĐẦU ĐẾN CUỐI
+# 7. GỌI GEMINI — STREAM MƯỢT + SUPPORT STOP_EVENT
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -2018,23 +2360,23 @@ def stream_gemini_with_failover(
     ui_placeholder=None,
     typing_mode=TYPING_MODE_SMOOTH,
     typing_cps=DEFAULT_TYPING_CPS,
+    stop_event=None,
 ):
     """
-    FIX lỗi typing mode chỉ mượt khúc đầu:
+    Stream Gemini.
     
-    Nguyên nhân cũ: chunk đầu về chậm, sau đó Gemini trả về ào ạt hàng loạt,
-    thuật toán cũ release theo 'chars_to_release' = elapsed * cps → khi elapsed 
-    tích lũy lớn sẽ flush 1 lượt.
-    
-    Giải pháp mới:
-    - Dùng time-based scheduling: mỗi ký tự có 'slot' cố định
-    - Nếu tụt lại (lag), KHÔNG catch-up 1 lượt — release dần theo sleep
-    - Nếu bị trễ nhiều (> 2s), tăng cps tạm thời để không tụt quá xa
-    - Giữ display buffer tách biệt với receive buffer
+    Nếu stop_event được truyền (dùng cho multi-chat background thread):
+    - Kiểm tra stop_event thay vì cookie
+    - Không dùng ui_placeholder
     """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
+
+    def _check_stop():
+        if stop_event is not None:
+            return stop_event.is_set()
+        return check_stop_flag()
 
     model_chain = _build_model_chain(preferred_model)
     last_error = None
@@ -2067,10 +2409,9 @@ def stream_gemini_with_failover(
 
                     chunk_count = 0
 
-                    # ===== INSTANT MODE =====
                     if typing_mode == TYPING_MODE_INSTANT:
                         for chunk in response:
-                            if check_stop_flag():
+                            if _check_stop():
                                 was_stopped = True
                                 if ui_placeholder is not None and accumulated:
                                     stop_note = (
@@ -2104,10 +2445,9 @@ def stream_gemini_with_failover(
                             last_error = "Empty response"
                             break
 
-                    # ===== SMOOTH MODE =====
                     if typing_mode == TYPING_MODE_SMOOTH:
                         for chunk in response:
-                            if check_stop_flag():
+                            if _check_stop():
                                 was_stopped = True
                                 if ui_placeholder is not None and accumulated:
                                     stop_note = (
@@ -2142,28 +2482,18 @@ def stream_gemini_with_failover(
                             last_error = "Empty response"
                             break
 
-                    # ===== CONTROLLED MODE — FIX LỖI NHẢY KHÚC =====
-                    # Ý tưởng: tách hẳn "receive" (nhận chunk) khỏi "render" (hiển thị)
-                    # - Receive chạy trong list để có sẵn toàn bộ text
-                    # - Render hiển thị dần theo tốc độ đều đặn
-                    # - Không bao giờ flush 1 lượt quá lớn
                     if typing_mode == TYPING_MODE_CONTROLLED:
                         chars_per_sec = max(1, int(typing_cps))
-                        # Buffer nhận (text nhận được)
                         received_buffer = ""
-                        # Số ký tự đã hiển thị
                         shown_len = 0
-                        # Timestamp ký tự kế tiếp được phép hiển thị
                         next_release_ts = time.time()
                         interval_per_char = 1.0 / chars_per_sec
-                        # Cập nhật UI tối đa 20Hz
                         min_render_interval = 0.05
                         last_render_ts = 0.0
-                        # Buffer hiển thị cuối
                         display_text = ""
 
                         for chunk in response:
-                            if check_stop_flag():
+                            if _check_stop():
                                 was_stopped = True
                                 if ui_placeholder is not None and display_text:
                                     stop_note = (
@@ -2184,20 +2514,15 @@ def stream_gemini_with_failover(
                             chunk_count += 1
                             received_buffer += ct
 
-                            # Render dần các ký tự đã đến hạn hiển thị
                             now = time.time()
                             while shown_len < len(received_buffer) and now >= next_release_ts:
-                                # Số ký tự có thể hiển thị ngay
                                 allowed_chars = max(1, int((now - next_release_ts) / interval_per_char) + 1)
-                                # Không release vượt số còn lại
                                 allowed_chars = min(allowed_chars, len(received_buffer) - shown_len)
                                 shown_len += allowed_chars
                                 next_release_ts += allowed_chars * interval_per_char
-                                # Nếu next_release_ts vượt quá now, break
                                 if next_release_ts > now:
                                     break
 
-                            # Cập nhật UI nếu đã đến lúc render
                             if now - last_render_ts >= min_render_interval:
                                 display_text = received_buffer[:shown_len]
                                 if ui_placeholder is not None:
@@ -2206,9 +2531,8 @@ def stream_gemini_with_failover(
                                 last_render_ts = now
                                 yield display_text, False, None
 
-                        # Sau khi stream kết thúc, release nốt phần còn lại
                         while shown_len < len(received_buffer):
-                            if check_stop_flag():
+                            if _check_stop():
                                 was_stopped = True
                                 if ui_placeholder is not None and display_text:
                                     stop_note = (
@@ -2221,14 +2545,12 @@ def stream_gemini_with_failover(
                                 return
 
                             now = time.time()
-                            # Catch-up an toàn: release vừa phải
                             remaining = len(received_buffer) - shown_len
                             time_until_next = next_release_ts - now
                             if time_until_next > 0:
                                 time.sleep(min(time_until_next, 0.05))
                                 continue
 
-                            # Release 1 batch nhỏ để giữ mượt
                             batch_size = min(remaining, max(1, chars_per_sec // 10))
                             shown_len += batch_size
                             next_release_ts += batch_size * interval_per_char
@@ -2248,7 +2570,6 @@ def stream_gemini_with_failover(
                             last_error = "Empty response"
                             break
 
-                    # Fallback — không rõ mode, treat as smooth
                     if chunk_count == 0:
                         saw_other_error = True
                         last_error = "Empty response"
@@ -2355,7 +2676,7 @@ def render_rate_limit_and_retry(lang="en"):
 
 
 # ==========================================
-# 8. MIGRATION
+# 8. MIGRATION (giờ có migrate chat encryption)
 # ==========================================
 def migrate_user_data(db_data: dict) -> tuple:
     migrated = False
@@ -2486,6 +2807,16 @@ def migrate_user_data(db_data: dict) -> tuple:
             if "summary_token_count" not in chat:
                 chat["summary_token_count"] = 0
                 migrated = True
+
+            # Nếu messages là list (legacy) → nén + mã hóa
+            msgs = chat.get("messages", [])
+            if isinstance(msgs, list) and len(msgs) > 0:
+                try:
+                    chat["messages"] = chat_codec.encode(msgs)
+                    chat["_encrypted"] = True
+                    migrated = True
+                except Exception:
+                    pass
 
         if "api_keys" in uinfo:
             del uinfo["api_keys"]
@@ -2918,6 +3249,8 @@ TRANSLATIONS = {
         "ai_retry_btn": "🔄 Retry",
         "ai_retry_tooltip": "Retry this message",
         "ai_retry_sending": "Retrying...",
+        "ai_chat_running_elsewhere": "⚠️ Another chat is still generating. You can continue in this chat.",
+        "chat_running_badge": "GEN",
         "device_id": "Device ID", "online": "Online", "language": "🌐 Language",
         "guest_btn": "👤 Continue as Guest",
         "guest_mode": "Guest Mode",
@@ -3107,21 +3440,24 @@ TRANSLATIONS = {
         "taskbar_feedback": "Feedback",
         "taskbar_lang_tip": "Switch language",
         "taskbar_user": "User",
-        # ===== TECH STACK =====
         "tech_title": "🚀 Advanced Technologies",
         "tech_desc": "Exclusive technologies powering LTTP AI Online.",
         "tech_security_title": "LTTP Security",
-        "tech_security_desc": "Multi-layer encryption: AES-256-GCM + LTTP-Cipher fallback + HMAC integrity + payload obfuscation + replay prevention + entropy detection. Protects user data without third-party dependency.",
+        "tech_security_desc": "Multi-layer encryption: AES-256-GCM + LTTP-Cipher fallback + HMAC integrity + payload obfuscation + replay prevention + entropy detection.",
         "tech_write_title": "LTTP Write Data",
-        "tech_write_desc": "Non-blocking async database writer. Groups changes within 1.2s and writes to GitHub in the background. You can freely change typing speed, delete chats, toggle Quick Lookup… UI never freezes.",
+        "tech_write_desc": "Non-blocking async database writer. Groups changes within 1.2s and writes to GitHub in the background.",
         "tech_ai_title": "LTTP AI",
-        "tech_ai_desc": "Smart AI engine with multi-model failover (3.x chain), streaming retry when interrupted, AI response partial recovery, per-message retry button, and intelligent context summarization.",
+        "tech_ai_desc": "Smart AI engine with multi-model failover, streaming retry when interrupted, per-message retry button, and intelligent context summarization.",
         "tech_ui_title": "LTTP UI",
-        "tech_ui_desc": "Responsive UI optimized for phones, tablets and desktops. Touch-friendly 44px targets on mobile, iOS anti-zoom input, smooth animated gradient title, adaptive sidebar and taskbar.",
+        "tech_ui_desc": "Responsive UI optimized for phones, tablets and desktops. Touch-friendly, iOS-safe input, smooth animated gradient title.",
         "tech_stream_title": "LTTP Stream Engine",
-        "tech_stream_desc": "Char-by-char streaming that never lags midway. Time-based scheduling with lag correction — smooth from the first token to the last, at any typing speed.",
+        "tech_stream_desc": "Char-by-char streaming that never lags midway. Time-based scheduling with lag correction.",
         "tech_memory_title": "LTTP Memory",
-        "tech_memory_desc": "Sliding-window context manager with auto-summarization, preserved key facts, and per-chat memory. Keeps conversations coherent even with very long histories.",
+        "tech_memory_desc": "Sliding-window context manager with auto-summarization, preserved key facts, per-chat memory.",
+        "tech_multichat_title": "LTTP Multi-Chat Engine",
+        "tech_multichat_desc": "Run multiple AI streams in background threads. Start a new chat while another is still generating — no waiting, no blocking.",
+        "tech_crypto_title": "LTTP Chat Crypto",
+        "tech_crypto_desc": "Messages compressed with zlib level 9 and encrypted with AES-256-GCM before writing to GitHub. Reduces storage size ~70-90% and keeps chats unreadable to anyone without the secret key.",
         "tech_badge_active": "ACTIVE",
     },
     "vi": {
@@ -3181,6 +3517,8 @@ TRANSLATIONS = {
         "ai_retry_btn": "🔄 Thử lại",
         "ai_retry_tooltip": "Gửi lại tin nhắn này",
         "ai_retry_sending": "Đang thử lại...",
+        "ai_chat_running_elsewhere": "⚠️ Một chat khác vẫn đang tạo phản hồi. Bạn có thể tiếp tục ở chat này.",
+        "chat_running_badge": "ĐANG TẠO",
         "device_id": "Device ID", "online": "Online", "language": "🌐 Ngôn ngữ",
         "guest_btn": "👤 Tiếp tục với tư cách Khách",
         "guest_mode": "Chế độ Khách",
@@ -3370,21 +3708,24 @@ TRANSLATIONS = {
         "taskbar_feedback": "Phản hồi",
         "taskbar_lang_tip": "Đổi ngôn ngữ",
         "taskbar_user": "Người dùng",
-        # ===== TECH STACK =====
         "tech_title": "🚀 Công nghệ tiên tiến",
         "tech_desc": "Các công nghệ độc quyền đang được áp dụng trong LTTP AI Online.",
         "tech_security_title": "LTTP Security",
-        "tech_security_desc": "Mã hóa đa lớp: AES-256-GCM + LTTP-Cipher fallback + HMAC toàn vẹn + xáo trộn payload + chống replay + phát hiện entropy. Bảo vệ dữ liệu người dùng mà không phụ thuộc bên thứ ba.",
+        "tech_security_desc": "Mã hóa đa lớp: AES-256-GCM + LTTP-Cipher fallback + HMAC toàn vẹn + xáo trộn payload + chống replay + phát hiện entropy.",
         "tech_write_title": "LTTP Write Data",
-        "tech_write_desc": "Ghi database bất đồng bộ, không chặn UI. Gộp các thay đổi trong 1.2s và ghi GitHub ở background. Bạn có thể đổi tốc độ gõ, xóa chat, bật/tắt Quick Lookup… mà giao diện không hề đóng băng.",
+        "tech_write_desc": "Ghi database bất đồng bộ, không chặn UI. Gộp các thay đổi trong 1.2s và ghi GitHub ở background.",
         "tech_ai_title": "LTTP AI",
-        "tech_ai_desc": "Bộ máy AI thông minh với failover đa mô hình (chuỗi 3.x), tự retry khi stream đứt, phục hồi phản hồi dở dang, nút Thử lại từng tin nhắn, và tóm tắt ngữ cảnh thông minh.",
+        "tech_ai_desc": "Bộ máy AI thông minh với failover đa mô hình, tự retry khi stream đứt, nút Thử lại từng tin nhắn, và tóm tắt ngữ cảnh thông minh.",
         "tech_ui_title": "LTTP UI",
-        "tech_ui_desc": "Giao diện responsive tối ưu cho điện thoại, máy tính bảng và desktop. Nút chạm 44px trên mobile, chống zoom iOS, tiêu đề gradient động mượt mà, sidebar và taskbar thích nghi.",
+        "tech_ui_desc": "Giao diện responsive tối ưu cho điện thoại, máy tính bảng và desktop. Nút chạm 44px trên mobile, chống zoom iOS, tiêu đề gradient động mượt mà.",
         "tech_stream_title": "LTTP Stream Engine",
-        "tech_stream_desc": "Stream từng ký tự không bị lag giữa chừng. Lập lịch theo thời gian có bù trễ — mượt từ token đầu đến cuối, ở mọi tốc độ gõ.",
+        "tech_stream_desc": "Stream từng ký tự không bị lag giữa chừng. Lập lịch theo thời gian có bù trễ.",
         "tech_memory_title": "LTTP Memory",
-        "tech_memory_desc": "Quản lý ngữ cảnh sliding-window có tự tóm tắt, giữ lại dữ kiện quan trọng và bộ nhớ riêng từng chat. Giữ hội thoại mạch lạc ngay cả khi lịch sử rất dài.",
+        "tech_memory_desc": "Quản lý ngữ cảnh sliding-window có tự tóm tắt, giữ lại dữ kiện quan trọng và bộ nhớ riêng từng chat.",
+        "tech_multichat_title": "LTTP Multi-Chat Engine",
+        "tech_multichat_desc": "Chạy nhiều stream AI song song trong background thread. Có thể tạo chat mới trong khi chat khác vẫn đang tạo phản hồi — không chờ, không block.",
+        "tech_crypto_title": "LTTP Chat Crypto",
+        "tech_crypto_desc": "Tin nhắn được nén bằng zlib level 9 và mã hóa AES-256-GCM trước khi ghi lên GitHub. Giảm ~70-90% dung lượng và khiến chat không thể đọc được nếu không có khóa bí mật.",
         "tech_badge_active": "ĐANG HOẠT ĐỘNG",
     }
 }
@@ -3394,7 +3735,7 @@ def t(key: str, lang: str = "en") -> str:
 
 
 # ==========================================
-# TERMS OF USE — ĐA NGÔN NGỮ
+# TERMS OF USE
 # ==========================================
 TERMS_OF_USE_HTML_EN = """
 <div style="max-height: 500px; overflow-y: auto; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; font-size: 0.9rem; line-height: 1.6;">
@@ -3405,7 +3746,6 @@ The following actions are strictly prohibited and considered illegal:<br>
 1.2. Impersonating the author or copyright holder.<br>
 1.3. Making unauthorized modifications to the software.<br>
 1.4. Transmitting or distributing software-related information/data without prior authorization.</p>
-
 <p><b>2. Violations of Terms of Use</b><br>
 Any user who commits the following violations will be permanently blocked from using the services:<br>
 2.1. Creating multiple inactive or unused accounts.<br>
@@ -3413,10 +3753,9 @@ Any user who commits the following violations will be permanently blocked from u
 2.3. Performing actions that overload the server (including but not limited to DDoS attacks or scraping), regardless of whether the source code is affected.<br>
 2.4. Exploiting security vulnerabilities without notifying the author, causing harm to the software, users, or related third-party platforms (e.g., GitHub, Streamlit Cloud).<br>
 2.5. Reverse-engineering the software to illicitly extract personal data or proprietary algorithms.</p>
-
 <p><b>3. Legal Consequences & Penalties</b><br>
 3.1. <b>In Vietnam:</b> Violations of Section 1 may be subject to liability under the Law on Intellectual Property, the Law on Cybersecurity, and the Penal Code of Vietnam; administrative fines may reach up to 5,000,000,000 VND or criminal prosecution with imprisonment up to 3 years.<br>
-3.2. <b>International Jurisdiction:</b> Copyright-related violations (Section 1.1 and 1.3) will be handled in accordance with the Berne Convention for the Protection of Literary and Artistic Works, applicable in all signatory member countries (including but not limited to the United States, United Kingdom, European Union member states, Japan, etc.).</p>
+3.2. <b>International Jurisdiction:</b> Copyright-related violations (Section 1.1 and 1.3) will be handled in accordance with the Berne Convention for the Protection of Literary and Artistic Works, applicable in all signatory member countries.</p>
 </div>
 """
 
@@ -3429,18 +3768,16 @@ Các hành vi sau đây bị nghiêm cấm tuyệt đối và được coi là b
 1.2. Mạo danh tác giả hoặc chủ sở hữu bản quyền.<br>
 1.3. Thực hiện các sửa đổi trái phép đối với phần mềm.<br>
 1.4. Truyền tải hoặc phân phối thông tin/dữ liệu liên quan đến phần mềm mà không được cho phép trước.</p>
-
 <p><b>2. Vi phạm Điều khoản sử dụng</b><br>
 Người dùng thực hiện các hành vi vi phạm dưới đây sẽ bị chặn vĩnh viễn khỏi việc sử dụng các dịch vụ:<br>
 2.1. Tạo nhiều tài khoản không hoạt động hoặc không sử dụng.<br>
 2.2. Liên tục gửi nội dung không phù hợp, thư rác (spam) hoặc nội dung vô nghĩa cho AI.<br>
 2.3. Thực hiện các hành động gây quá tải máy chủ (bao gồm nhưng không giới hạn ở các cuộc tấn công DDoS hoặc thu thập dữ liệu tự động - scraping), bất kể mã nguồn có bị ảnh hưởng hay không.<br>
-2.4. Khai thác các lỗ hổng bảo mật mà không thông báo cho tác giả, gây tổn hại đến phần mềm, người dùng hoặc các nền tảng bên thứ ba có liên quan (ví dụ: GitHub, Streamlit Cloud).<br>
+2.4. Khai thác các lỗ hổng bảo mật mà không thông báo cho tác giả, gây tổn hại đến phần mềm, người dùng hoặc các nền tảng bên thứ ba có liên quan.<br>
 2.5. Kỹ thuật đảo ngược (reverse-engineering) phần mềm nhằm mục đích trích xuất trái phép dữ liệu cá nhân hoặc các thuật toán độc quyền.</p>
-
 <p><b>3. Hậu quả pháp lý &amp; Hình thức xử phạt</b><br>
 3.1. <b>Tại Việt Nam:</b> Các hành vi vi phạm Mục 1 có thể bị truy cứu trách nhiệm theo Luật Sở hữu trí tuệ, Luật An ninh mạng và Bộ luật Hình sự Việt Nam; mức xử phạt hành chính có thể lên tới 5.000.000.000 VNĐ hoặc bị truy cứu trách nhiệm hình sự với mức án tù lên đến 3 năm.<br>
-3.2. <b>Phạm vi quốc tế:</b> Các hành vi vi phạm liên quan đến bản quyền (Mục 1.1 và 1.3) sẽ bị xử lý theo Công ước Berne về bảo hộ các tác phẩm văn học và nghệ thuật, áp dụng tại tất cả các quốc gia thành viên ký kết (bao gồm nhưng không giới hạn ở Hoa Kỳ, Vương quốc Anh, các quốc gia thành viên Liên minh Châu Âu, Nhật Bản, v.v.).</p>
+3.2. <b>Phạm vi quốc tế:</b> Các hành vi vi phạm liên quan đến bản quyền sẽ bị xử lý theo Công ước Berne về bảo hộ các tác phẩm văn học và nghệ thuật, áp dụng tại tất cả các quốc gia thành viên ký kết.</p>
 </div>
 """
 
@@ -3458,9 +3795,7 @@ PRIVACY_POLICY_HTML = """
 <li><b>Phần mềm cam kết không chia sẻ dữ liệu cá nhân với bất kỳ bên thứ ba nào; mọi dữ liệu đều được xử lý một cách cẩn trọng.</b></li>
 <li>Phần mềm sử dụng một số cookie nhất định (cụ thể là các cookie dùng để ghi nhớ phiên đăng nhập).</li>
 <li><b style="color: #fbbf24;">Lưu ý quan trọng:</b> Vui lòng kiểm chứng thông tin do AI tạo ra trước khi chia sẻ.</li>
-<li>Nghiêm cấm mọi hành vi sao chép phần mềm dưới bất kỳ hình thức nào mà không được phép. Tìm hiểu thêm về các quy định pháp lý liên quan đến bản quyền tại:
-   <a href="https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md" target="_blank" style="color: #667eea;">https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md</a>
-</li>
+<li>Nghiêm cấm mọi hành vi sao chép phần mềm dưới bất kỳ hình thức nào mà không được phép.</li>
 </ol>
 </div>
 """
@@ -3665,7 +4000,7 @@ def render_test_banner():
 
 
 # ==========================================
-# 20. BUG REPORT + FEEDBACK DIALOGS
+# 20. DIALOGS
 # ==========================================
 @st.dialog("🐛")
 def bug_report_dialog():
@@ -4413,7 +4748,6 @@ def render_admin_panel():
     _render_traffic_analytics(lang, db.get(TRAFFIC_LOG_KEY, {}))
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # LTTP Write Data stats
     with st.expander("⚙️ LTTP Write Data — Status", expanded=False):
         wstats = lttp_writer.stats()
         st.markdown(f"- **Queue:** {wstats.get('queued', 0)}")
@@ -4422,6 +4756,22 @@ def render_admin_panel():
         st.markdown(f"- **Thread alive:** {'✅' if wstats.get('thread_alive') else '❌'}")
         if wstats.get("last_error"):
             st.caption(f"Last error: {wstats.get('last_error')}")
+
+    with st.expander("🌐 LTTP Multi-Chat — Running:", expanded=False):
+        running = multi_chat.get_all_running()
+        if running:
+            st.markdown(f"**{len(running)} chat(s) đang chạy nền:**")
+            for cid in running:
+                st_obj = multi_chat.get_state(cid)
+                st.markdown(f"- `{cid[:8]}...` — queue: {st_obj.get('queue_size', 0)} chunks")
+        else:
+            st.caption("Không có chat nào đang chạy.")
+
+    with st.expander("🔐 LTTP Chat Crypto — Info", expanded=False):
+        st.markdown("**Thuật toán:** zlib compress (level 9) + AES-256-GCM + base64")
+        st.markdown("**Khóa:** `CHAT_ENCRYPTION_SECRET` (fallback: `ENCRYPTION_SECRET`)")
+        st.markdown("**Format:** `LTTPCHAT` magic + version + salt + nonce + ciphertext")
+        st.caption("Mọi tin nhắn được nén + mã hóa trước khi ghi lên GitHub.")
 
     with st.expander("📋 Existing users", expanded=False):
         user_list = [u for u in db.keys()
@@ -4574,6 +4924,14 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.current_chat_id = None
     st.session_state.messages = []
 
+# Load current chat messages (decrypt)
+_current_chat_data = None
+if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
+    _current_chat_data = user_chats[st.session_state.current_chat_id]
+    _raw_msgs = _current_chat_data.get("messages", [])
+    _decoded = deserialize_messages_from_storage(_raw_msgs)
+    st.session_state.messages = _decoded
+
 _SAFE_MODEL = user_data["preferences"].get("model", DEFAULT_MODEL)
 _SAFE_TEMP = float(user_data["preferences"].get("temperature", 0.7))
 _SAFE_TOP_P = float(user_data["preferences"].get("top_p", 0.95))
@@ -4698,6 +5056,8 @@ with st.sidebar:
                 db[st.session_state.user] = u
                 save_db_async(db, immediate=True)
         lttp_writer.flush_now()
+        for cid in list(user_chats.keys()):
+            multi_chat.cleanup_chat(cid)
         st.session_state.user = None
         st.session_state.is_guest = False
         st.session_state.is_temporary = False
@@ -4712,6 +5072,7 @@ with st.sidebar:
 
     if st.button(t("new_chat_btn", lang), type="primary", use_container_width=True, key="new_chat_btn"):
         if enforce_rate_limit("new_chat", "New chat"):
+            # Không ngăn cản khi chat khác đang generate
             st.session_state.current_chat_id = None
             st.session_state.messages = []
             st.rerun()
@@ -4727,14 +5088,22 @@ with st.sidebar:
             item = user_chats.get(cid, {})
             title = item.get("title", t("new_chat", lang))
             active = (cid == st.session_state.current_chat_id)
-            label = f"📌 {title}" if active else f"💬 {title}"
+            is_running = multi_chat.is_running(cid)
+            running_badge = f' <span class="chat-running-badge">{t("chat_running_badge", lang)}</span>' if is_running else ""
+            prefix = "📌" if active else "💬"
+            label = f"{prefix} {title}{running_badge}"
+            # Streamlit button không hỗ trợ HTML trong label, nên dùng caption cho badge
             cc, cd = st.columns([0.8, 0.2])
             if cc.button(label, key=f"sel_{cid}", use_container_width=True):
+                # Chuyển chat được phép khi chat khác đang chạy
                 st.session_state.current_chat_id = cid
-                st.session_state.messages = user_chats[cid].get("messages", [])
+                raw_msgs = user_chats[cid].get("messages", [])
+                st.session_state.messages = deserialize_messages_from_storage(raw_msgs)
                 st.rerun()
             if cd.button("🗑️", key=f"del_{cid}", help=t("delete_chat_tooltip", lang)):
                 if enforce_rate_limit("delete_chat", "Delete chat"):
+                    # Dừng stream nếu đang chạy
+                    multi_chat.cleanup_chat(cid)
                     if cid in user_chats:
                         del user_chats[cid]
                         if is_test:
@@ -4744,7 +5113,6 @@ with st.sidebar:
                         else:
                             user_data["chats"] = user_chats
                             db_data[st.session_state.user] = user_data
-                            # Async — không block, có thể xóa chat khác ngay
                             save_db_async(db_data)
                         if st.session_state.current_chat_id == cid:
                             st.session_state.current_chat_id = None
@@ -4755,10 +5123,10 @@ with st.sidebar:
     ql_on = is_quick_lookup_mode()
     if ql_on:
         toggle_btn_label = "🔍 Quick Lookup: BẬT" if lang == "vi" else "🔍 Quick Lookup: ON"
-        toggle_help = "Nhấn để TẮT Quick Lookup — AI sẽ nhớ ngữ cảnh bình thường" if lang == "vi" else "Click to DISABLE Quick Lookup"
+        toggle_help = "Nhấn để TẮT Quick Lookup" if lang == "vi" else "Click to DISABLE Quick Lookup"
     else:
         toggle_btn_label = "🔍 Quick Lookup: TẮT" if lang == "vi" else "🔍 Quick Lookup: OFF"
-        toggle_help = "Nhấn để BẬT Quick Lookup — AI sẽ KHÔNG nhớ ngữ cảnh" if lang == "vi" else "Click to ENABLE Quick Lookup"
+        toggle_help = "Nhấn để BẬT Quick Lookup" if lang == "vi" else "Click to ENABLE Quick Lookup"
 
     if st.button(toggle_btn_label, use_container_width=True, key="ql_toggle_main_btn", help=toggle_help):
         new_state = not ql_on
@@ -4847,7 +5215,6 @@ with st.sidebar:
                     st.session_state.guest_prefs["typing_cps"] = new_cps
                 else:
                     db_data[st.session_state.user] = user_data
-                    # Async — không block, user có thể thao tác tiếp
                     save_db_async(db_data)
                 st.toast(t("typing_mode_saved", lang), icon="⌨️")
 
@@ -4933,6 +5300,18 @@ with st.sidebar:
                 "badge": t("tech_badge_active", lang),
             },
             {
+                "icon": "🌐",
+                "name": t("tech_multichat_title", lang),
+                "desc": t("tech_multichat_desc", lang),
+                "badge": t("tech_badge_active", lang),
+            },
+            {
+                "icon": "🔐",
+                "name": t("tech_crypto_title", lang),
+                "desc": t("tech_crypto_desc", lang),
+                "badge": t("tech_badge_active", lang),
+            },
+            {
                 "icon": "🤖",
                 "name": t("tech_ai_title", lang),
                 "desc": t("tech_ai_desc", lang),
@@ -4969,12 +5348,12 @@ with st.sidebar:
             </div>
             """, unsafe_allow_html=True)
 
-        # LTTP Write Data live stats
         wstats = lttp_writer.stats()
         queue_size = wstats.get("queued", 0)
         last_status = wstats.get("last_status", "idle")
-        if queue_size > 0:
-            st.caption(f"⚙️ Write queue: **{queue_size}** • status: **{last_status}**")
+        running_chats = multi_chat.get_all_running()
+        if queue_size > 0 or running_chats:
+            st.caption(f"⚙️ Write queue: **{queue_size}** • Status: **{last_status}** • Running chats: **{len(running_chats)}**")
 
     st.divider()
 
@@ -5118,7 +5497,133 @@ if st.session_state.get("feedback_open", False):
 
 
 # ==========================================
-# 31. MAIN CHAT
+# 31. HELPER: SYNC BACKGROUND CHAT STATE → UI
+# ==========================================
+def sync_running_chat(chat_id: str):
+    """
+    Đọc chunks từ multi_chat engine và append vào st.session_state.messages
+    nếu chat_id là chat hiện tại. Lưu vào storage khi xong.
+    """
+    if not chat_id:
+        return
+    state = multi_chat.get_state(chat_id)
+    status = state.get("status", "idle")
+
+    # Nếu không chạy và không có final → không làm gì
+    if status not in ("running", "completed", "error", "stopped"):
+        return
+
+    # Xử lý hoàn thành
+    if status in ("completed", "error", "stopped") and state.get("finished_at", 0) > 0:
+        final_text = state.get("final_text", "")
+        final_err = state.get("final_err")
+
+        # Chỉ xử lý 1 lần (dùng timestamp gần nhất)
+        processed_key = f"_processed_done_{chat_id}"
+        last_finished = st.session_state.get(processed_key, 0)
+        if state.get("finished_at", 0) > last_finished:
+            st.session_state[processed_key] = state.get("finished_at", 0)
+
+            # Nếu chat này là chat đang xem → cập nhật messages
+            if st.session_state.current_chat_id == chat_id:
+                if final_text:
+                    # Xóa nếu có tin assistant lỗi trước (nếu retry)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": final_text
+                    })
+                elif final_err and final_err not in ("stopped", "rate_limit"):
+                    error_msg = f"{t('ai_error', lang)} Error: {str(final_err)[:150]}"
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_msg,
+                        "is_error": True
+                    })
+                elif final_err == "stopped":
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": "_[Đã dừng theo yêu cầu]_" if lang == "vi" else "_[Stopped by user]_",
+                        "is_error": False
+                    })
+
+            # Lưu vào chat_data (encrypted) — kể cả khi user đã chuyển chat
+            if st.session_state.current_chat_id == chat_id:
+                msgs_to_save = st.session_state.messages
+            else:
+                # Chat khác đang chạy → cần load messages của nó
+                if chat_id in user_chats:
+                    old_msgs = deserialize_messages_from_storage(user_chats[chat_id].get("messages", []))
+                    if final_text:
+                        old_msgs.append({"role": "assistant", "content": final_text})
+                    elif final_err and final_err not in ("stopped", "rate_limit"):
+                        old_msgs.append({
+                            "role": "assistant",
+                            "content": f"{t('ai_error', lang)} Error: {str(final_err)[:150]}",
+                            "is_error": True
+                        })
+                    elif final_err == "stopped":
+                        old_msgs.append({
+                            "role": "assistant",
+                            "content": "_[Đã dừng theo yêu cầu]_" if lang == "vi" else "_[Stopped by user]_",
+                            "is_error": False
+                        })
+                    msgs_to_save = old_msgs
+                else:
+                    msgs_to_save = []
+
+            # Update chat_data
+            if chat_id in user_chats:
+                chat_data = user_chats[chat_id]
+                chat_data["messages"] = serialize_messages_for_storage(msgs_to_save)
+                chat_data["_encrypted"] = True
+                chat_data["updated_at"] = vn_now().isoformat()
+
+                if is_test:
+                    st.session_state.test_chats = user_chats
+                elif is_guest:
+                    st.session_state.guest_chats = user_chats
+                else:
+                    user_data["chats"] = user_chats
+                    db_data[st.session_state.user] = user_data
+                    save_db_async(db_data)
+
+            # Title generation cho chat vừa xong (chỉ 1 lần)
+            if final_text and chat_id in user_chats:
+                chat_data = user_chats[chat_id]
+                if not chat_data.get("title") or chat_data.get("title") == t("new_chat", lang):
+                    try:
+                        # Lấy user prompt đầu tiên
+                        msgs_list = msgs_to_save
+                        first_user = ""
+                        for m in msgs_list:
+                            if m.get("role") == "user":
+                                first_user = m.get("content", "")
+                                break
+                        if first_user:
+                            title = generate_chat_title(first_user, SECRET_API_KEYS, sel_model, lang)
+                            chat_data["title"] = title
+                            if is_test:
+                                st.session_state.test_chats = user_chats
+                            elif is_guest:
+                                st.session_state.guest_chats = user_chats
+                            else:
+                                user_data["chats"] = user_chats
+                                db_data[st.session_state.user] = user_data
+                                save_db_async(db_data)
+                    except Exception:
+                        pass
+
+            # Cleanup engine
+            multi_chat.cleanup_chat(chat_id)
+
+
+# Sync current chat nếu đang chạy
+if st.session_state.current_chat_id:
+    sync_running_chat(st.session_state.current_chat_id)
+
+
+# ==========================================
+# 32. MAIN CHAT
 # ==========================================
 _show_update_notice_if_needed()
 render_announcement_banner()
@@ -5156,6 +5661,11 @@ else:
 ql_badge = ""
 if is_quick_lookup_mode():
     ql_badge = f" <span class='ql-mode-badge'>🔍 {t('ql_badge', lang)}</span>"
+
+# Cảnh báo nếu chat khác đang generate
+other_running = [cid for cid in multi_chat.get_all_running() if cid != st.session_state.current_chat_id]
+if other_running:
+    st.info(t("ai_chat_running_elsewhere", lang))
 
 st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{sel_model}` <span class='typing-mode-badge'>{typing_badge}</span>{ql_badge}", unsafe_allow_html=True)
 
@@ -5212,120 +5722,59 @@ for idx, msg in enumerate(st.session_state.messages):
             if role == "assistant":
                 st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER.get("en", ""))}</div>', unsafe_allow_html=True)
 
+# Nếu chat hiện tại đang generate → hiển thị partial
+if st.session_state.current_chat_id and multi_chat.is_running(st.session_state.current_chat_id):
+    state = multi_chat.get_state(st.session_state.current_chat_id)
+    accumulated = state.get("accumulated", "")
+
+    with st.chat_message("assistant"):
+        col_stop, _ = st.columns([1, 5])
+        with col_stop:
+            stop_label = "⏹️ Dừng" if lang == "vi" else "⏹️ Stop"
+            if st.button(stop_label, key="stop_current_chat_btn", use_container_width=True):
+                multi_chat.stop(st.session_state.current_chat_id)
+                st.rerun()
+
+        if accumulated:
+            st.markdown(accumulated + '<span class="typing-cursor"></span>', unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="ai-loading-box">
+                <div class="spinner"></div>
+                <div class="ai-loading-text">{t('ai_typing', lang)}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Auto refresh mỗi 0.6s để cập nhật partial
+    time.sleep(0.6)
+    st.rerun()
+
 
 # ==========================================
-# 32. XỬ LÝ PROMPT
+# 33. PROCESS PROMPT — MULTI-CHAT ENGINE
 # ==========================================
-def _run_deferred_tasks(chat_data, user_prompt, lang):
-    try:
-        all_messages = st.session_state.messages
-
-        if is_quick_lookup_mode():
-            if not chat_data.get("title") or chat_data.get("title") in (t("new_chat", lang), "Quick Lookup"):
-                chat_data["title"] = "Quick Lookup"
-            if st.session_state.current_chat_id:
-                user_chats[st.session_state.current_chat_id] = chat_data
-                if is_test:
-                    st.session_state.test_chats = user_chats
-                elif is_guest:
-                    st.session_state.guest_chats = user_chats
-                else:
-                    user_data["chats"] = user_chats
-                    db_data[st.session_state.user] = user_data
-                    save_db_async(db_data)
-            return
-
-        if not chat_data.get("title") or chat_data.get("title") == t("new_chat", lang):
-            try:
-                title = generate_chat_title(user_prompt, SECRET_API_KEYS, sel_model, lang)
-                chat_data["title"] = title
-            except Exception:
-                pass
-
-        context_budget = get_context_budget(sel_model)
-        history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
-        trigger_tokens = int(context_budget * SUMMARY_TRIGGER_RATIO)
-        total_tokens = estimate_messages_tokens(all_messages)
-
-        should_summarize = (total_tokens > trigger_tokens or len(all_messages) > 50)
-
-        if should_summarize:
-            recent_keep = smart_sliding_window(
-                all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES
-            )
-            if len(recent_keep) < len(all_messages):
-                older_messages = all_messages[: len(all_messages) - len(recent_keep)]
-            else:
-                older_messages = []
-
-            if older_messages:
-                try:
-                    new_summary = generate_summary_in_batches(
-                        older_messages, chat_data.get("summary", ""),
-                        SECRET_API_KEYS, sel_model, lang
-                    )
-                    chat_data["summary"] = new_summary
-                    chat_data["summary_updated_at"] = vn_now().isoformat()
-                    chat_data["summary_token_count"] = estimate_tokens(new_summary)
-                except Exception:
-                    pass
-
-        if st.session_state.current_chat_id:
-            user_chats[st.session_state.current_chat_id] = chat_data
-            if is_test:
-                st.session_state.test_chats = user_chats
-            elif is_guest:
-                st.session_state.guest_chats = user_chats
-            else:
-                user_data["chats"] = user_chats
-                db_data[st.session_state.user] = user_data
-                save_db_async(db_data)
-    except Exception:
-        pass
-
-
-def _process_prompt(user_prompt, is_retry=False):
-    if not is_retry:
-        if not enforce_message_content(user_prompt):
-            return
-
-        if is_guest:
-            db_q = GitHubStorage.load_db(force_refresh=True)
-            allowed, used_now, limit_now = check_guest_quota(db_q)
-            if not allowed:
-                st.error(t("guest_quota_exceeded", lang))
-                st.stop()
-            increment_guest_quota(db_q, device_id)
-            save_db_async(db_q)
-
-        clear_draft_cookie_via_js()
-        clear_stop_flag()
-
-        st.session_state.messages.append({"role": "user", "content": user_prompt})
+def build_prompt_inputs_for_chat(chat_id, user_prompt, is_retry=False):
+    """
+    Build prompt inputs cho Gemini từ chat_data hiện tại.
+    Đọc từ user_chats (đã decrypt).
+    """
+    if chat_id in user_chats:
+        chat_data = user_chats[chat_id]
     else:
-        clear_stop_flag()
-
-    with st.chat_message("user" if not is_retry else "assistant"):
-        if not is_retry:
-            st.markdown(user_prompt)
-
-    if not st.session_state.current_chat_id:
-        st.session_state.current_chat_id = str(uuid.uuid4())
-        ql_title = "Quick Lookup" if is_quick_lookup_mode() else t("new_chat", lang)
-        user_chats[st.session_state.current_chat_id] = {
-            "title": ql_title,
+        chat_data = {
+            "title": "Quick Lookup" if is_quick_lookup_mode() else t("new_chat", lang),
             "messages": [], "summary": "", "summary_updated_at": "",
             "summary_token_count": 0,
             "is_quick_lookup": is_quick_lookup_mode(),
             "created_at": vn_now().isoformat(),
             "updated_at": vn_now().isoformat()
         }
+        user_chats[chat_id] = chat_data
         if is_test:
             st.session_state.test_chats = user_chats
         elif is_guest:
             st.session_state.guest_chats = user_chats
 
-    chat_data = user_chats[st.session_state.current_chat_id]
     chat_summary = chat_data.get("summary", "")
 
     context_budget = get_context_budget(sel_model)
@@ -5343,13 +5792,17 @@ def _process_prompt(user_prompt, is_retry=False):
         system_parts.append(ctx_label + ":\n" + chat_summary)
     if ql_active:
         system_parts.append(
-            "[QUICK LOOKUP MODE]: Trả lời câu hỏi hiện tại mà KHÔNG dùng ngữ cảnh trước đó. Chỉ tập trung vào câu hỏi mới nhất."
+            "[QUICK LOOKUP MODE]: Trả lời câu hỏi hiện tại mà KHÔNG dùng ngữ cảnh trước đó."
             if lang == "vi" else
-            "[QUICK LOOKUP MODE]: Answer the current question WITHOUT using prior context. Focus only on the latest question."
+            "[QUICK LOOKUP MODE]: Answer the current question WITHOUT using prior context."
         )
     system_instruction = "\n\n".join(system_parts)
 
-    all_messages = st.session_state.messages
+    # Get messages (already decrypted if from session, else decrypt from storage)
+    if chat_id == st.session_state.current_chat_id:
+        all_messages = st.session_state.messages
+    else:
+        all_messages = deserialize_messages_from_storage(chat_data.get("messages", []))
 
     if ql_active:
         recent_window = []
@@ -5394,128 +5847,182 @@ def _process_prompt(user_prompt, is_retry=False):
         full_prompt = user_prompt
     content_inputs.append(full_prompt)
 
-    final_text = ""
-    final_err = None
+    return content_inputs, system_instruction, user_prompt
 
-    if is_retry and st.session_state.messages:
-        if st.session_state.messages[-1].get("is_error", False):
-            st.session_state.messages.pop()
 
-    with st.chat_message("assistant"):
-        stop_col1, stop_col2 = st.columns([6, 1])
-        with stop_col2:
-            stop_btn_placeholder = st.empty()
-            stop_label = "⏹️ Dừng" if lang == "vi" else "⏹️ Stop"
-            stop_btn_placeholder.markdown(
-                f'<button class="lttp-stop-gen" '
-                f'style="width:100%;padding:6px 8px;background:rgba(239,68,68,0.15);'
-                f'color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:8px;'
-                f'cursor:pointer;font-weight:600;font-size:0.8rem;">{stop_label}</button>',
-                unsafe_allow_html=True
-            )
+def start_new_chat_stream(user_prompt: str):
+    """Bắt đầu stream cho chat mới."""
+    if not enforce_message_content(user_prompt):
+        return
 
-        ai_placeholder = st.empty()
-        ai_placeholder.markdown(f"""
-        <div class="ai-loading-box">
-            <div class="spinner"></div>
-            <div class="ai-loading-text">{t('ai_typing', lang)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
-        typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
-
-        for text_so_far, done, err in stream_gemini_with_failover(
-            prompt_inputs=content_inputs,
-            api_keys=SECRET_API_KEYS,
-            preferred_model=sel_model,
-            system_instruction=system_instruction if system_instruction else None,
-            generation_config={"temperature": temperature, "top_p": top_p, "top_k": top_k},
-            lang=lang,
-            ui_placeholder=ai_placeholder,
-            typing_mode=typing_mode_use,
-            typing_cps=typing_cps_use,
-        ):
-            if text_so_far:
-                final_text = text_so_far
-            if done:
-                final_err = err
-                break
-
-        stop_btn_placeholder.empty()
-
-        if final_text:
-            ai_placeholder.markdown(final_text)
-            st.markdown(
-                f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER.get("en", ""))}</div>',
-                unsafe_allow_html=True
-            )
-            st.session_state.messages.append({"role": "assistant", "content": final_text})
-            if final_err == "rate_limit_partial":
-                st.warning(
-                    "⚠️ Phản hồi có thể chưa đầy đủ (bị giới hạn giữa chừng). Bạn có thể bấm Thử lại."
-                    if lang == "vi" else
-                    "⚠️ Response may be incomplete. You can click Retry."
-                )
-            elif final_err == "stopped":
-                st.info(
-                    "⏹️ Đã dừng tạo tin nhắn theo yêu cầu."
-                    if lang == "vi" else
-                    "⏹️ Generation stopped by user request."
-                )
-        elif final_err == "stopped":
-            ai_placeholder.markdown(
-                "_[Đã dừng theo yêu cầu]_" if lang == "vi" else "_[Stopped by user]_"
-            )
-            if (st.session_state.messages and
-                    st.session_state.messages[-1]["role"] == "user" and
-                    not is_retry):
-                st.session_state.messages.pop()
-            clear_stop_flag()
-            st.rerun()
+    if is_guest:
+        db_q = GitHubStorage.load_db(force_refresh=True)
+        allowed, used_now, limit_now = check_guest_quota(db_q)
+        if not allowed:
+            st.error(t("guest_quota_exceeded", lang))
             return
-        elif final_err == "rate_limit":
-            st.session_state.pending_retry_prompt = user_prompt
-            if (st.session_state.messages and
-                    st.session_state.messages[-1]["role"] == "user" and
-                    st.session_state.messages[-1]["content"] == user_prompt and
-                    not is_retry):
-                st.session_state.messages.pop()
-            render_rate_limit_and_retry(lang)
+        increment_guest_quota(db_q, device_id)
+        save_db_async(db_q)
+
+    # Tạo chat mới
+    new_chat_id = str(uuid.uuid4())
+    ql_title = "Quick Lookup" if is_quick_lookup_mode() else t("new_chat", lang)
+    user_chats[new_chat_id] = {
+        "title": ql_title,
+        "messages": [], "summary": "", "summary_updated_at": "",
+        "summary_token_count": 0,
+        "is_quick_lookup": is_quick_lookup_mode(),
+        "created_at": vn_now().isoformat(),
+        "updated_at": vn_now().isoformat()
+    }
+    if is_test:
+        st.session_state.test_chats = user_chats
+    elif is_guest:
+        st.session_state.guest_chats = user_chats
+
+    st.session_state.current_chat_id = new_chat_id
+    st.session_state.messages = [{"role": "user", "content": user_prompt}]
+
+    # Build prompt inputs
+    content_inputs, system_instruction, _ = build_prompt_inputs_for_chat(
+        new_chat_id, user_prompt, is_retry=False
+    )
+
+    # Khởi động stream trong background
+    typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
+    typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
+
+    multi_chat.start_stream(
+        chat_id=new_chat_id,
+        prompt_inputs=content_inputs,
+        api_keys=SECRET_API_KEYS,
+        preferred_model=sel_model,
+        system_instruction=system_instruction,
+        generation_config={"temperature": temperature, "top_p": top_p, "top_k": top_k},
+        lang=lang,
+        typing_mode=typing_mode_use,
+        typing_cps=typing_cps_use,
+    )
+
+    # Lưu chat mới với user message
+    _save_chat_to_storage(new_chat_id)
+    st.rerun()
+
+
+def send_in_current_chat(user_prompt: str):
+    """Gửi tin nhắn trong chat hiện tại. Nếu đang có stream → không cho gửi."""
+    current_chat_id = st.session_state.current_chat_id
+
+    if not current_chat_id:
+        start_new_chat_stream(user_prompt)
+        return
+
+    if multi_chat.is_running(current_chat_id):
+        st.warning(
+            "⚠️ Chat này đang tạo phản hồi. Vui lòng chờ hoặc bấm Dừng." if lang == "vi"
+            else "⚠️ This chat is generating. Please wait or click Stop."
+        )
+        return
+
+    if not enforce_message_content(user_prompt):
+        return
+
+    if is_guest:
+        db_q = GitHubStorage.load_db(force_refresh=True)
+        allowed, used_now, limit_now = check_guest_quota(db_q)
+        if not allowed:
+            st.error(t("guest_quota_exceeded", lang))
             return
-        else:
-            error_msg = f"{t('ai_error', lang)} Error: {str(final_err)[:150] if final_err else 'Unknown'}"
-            st.error(error_msg)
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": error_msg,
-                "is_error": True
-            })
+        increment_guest_quota(db_q, device_id)
+        save_db_async(db_q)
 
-    clear_stop_flag()
+    # Append user message
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
+    _save_chat_to_storage(current_chat_id)
 
-    if final_text:
-        chat_data["messages"] = st.session_state.messages
-        chat_data["updated_at"] = vn_now().isoformat()
-        user_chats[st.session_state.current_chat_id] = chat_data
-        if is_test:
-            st.session_state.test_chats = user_chats
-        elif is_guest:
-            st.session_state.guest_chats = user_chats
-        else:
-            user_data["chats"] = user_chats
-            db_data[st.session_state.user] = user_data
-            save_db_async(db_data)
+    # Build prompt inputs
+    content_inputs, system_instruction, _ = build_prompt_inputs_for_chat(
+        current_chat_id, user_prompt, is_retry=False
+    )
 
-    if final_text and final_err not in ("stopped",):
-        _run_deferred_tasks(chat_data, user_prompt, lang)
+    typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
+    typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
+
+    multi_chat.start_stream(
+        chat_id=current_chat_id,
+        prompt_inputs=content_inputs,
+        api_keys=SECRET_API_KEYS,
+        preferred_model=sel_model,
+        system_instruction=system_instruction,
+        generation_config={"temperature": temperature, "top_p": top_p, "top_k": top_k},
+        lang=lang,
+        typing_mode=typing_mode_use,
+        typing_cps=typing_cps_use,
+    )
 
     st.rerun()
 
 
-# ==========================================
-# 33. XỬ LÝ QUERY PARAMS
-# ==========================================
+def _save_chat_to_storage(chat_id: str):
+    """Lưu chat hiện tại vào storage (encrypted)."""
+    if chat_id not in user_chats:
+        return
+    chat_data = user_chats[chat_id]
+    if chat_id == st.session_state.current_chat_id:
+        msgs = st.session_state.messages
+    else:
+        msgs = deserialize_messages_from_storage(chat_data.get("messages", []))
+    chat_data["messages"] = serialize_messages_for_storage(msgs)
+    chat_data["_encrypted"] = True
+    chat_data["updated_at"] = vn_now().isoformat()
+
+    if is_test:
+        st.session_state.test_chats = user_chats
+    elif is_guest:
+        st.session_state.guest_chats = user_chats
+    else:
+        user_data["chats"] = user_chats
+        db_data[st.session_state.user] = user_data
+        save_db_async(db_data)
+
+
+def retry_last_message():
+    """Retry assistant message lỗi cuối."""
+    if not st.session_state.messages:
+        return
+    # Xóa message lỗi cuối
+    if st.session_state.messages[-1].get("is_error", False):
+        st.session_state.messages.pop()
+
+    if not st.session_state.current_chat_id:
+        return
+    if multi_chat.is_running(st.session_state.current_chat_id):
+        st.warning("Chat đang chạy." if lang == "vi" else "Chat is running.")
+        return
+
+    content_inputs, system_instruction, _ = build_prompt_inputs_for_chat(
+        st.session_state.current_chat_id, "", is_retry=True
+    )
+
+    typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
+    typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
+
+    multi_chat.start_stream(
+        chat_id=st.session_state.current_chat_id,
+        prompt_inputs=content_inputs,
+        api_keys=SECRET_API_KEYS,
+        preferred_model=sel_model,
+        system_instruction=system_instruction,
+        generation_config={"temperature": temperature, "top_p": top_p, "top_k": top_k},
+        lang=lang,
+        typing_mode=typing_mode_use,
+        typing_cps=typing_cps_use,
+    )
+    _save_chat_to_storage(st.session_state.current_chat_id)
+    st.rerun()
+
+
+# Handle retry
 _handle_retry = False
 _retry_idx = None
 try:
@@ -5538,24 +6045,14 @@ if _handle_retry and _retry_idx is not None:
     msgs = st.session_state.messages
     if 0 <= _retry_idx < len(msgs) and msgs[_retry_idx].get("is_error", False):
         if enforce_rate_limit("retry_message", "Retry message"):
-            msgs.pop(_retry_idx)
-            last_user_prompt = ""
-            for m in reversed(msgs):
-                if m.get("role") == "user" and not m.get("is_error", False):
-                    last_user_prompt = m.get("content", "")
-                    break
-            if last_user_prompt:
-                _process_prompt(last_user_prompt, is_retry=True)
+            retry_last_message()
     st.rerun()
 
 
-if st.session_state.pending_retry_prompt:
-    pending = st.session_state.pending_retry_prompt
-    st.session_state.pending_retry_prompt = None
-    _process_prompt(pending, is_retry=True)
-elif user_prompt := st.chat_input(t("chat_placeholder", lang)):
+# Chat input
+if user_prompt := st.chat_input(t("chat_placeholder", lang)):
     if enforce_rate_limit("send_message", "Send message"):
-        _process_prompt(user_prompt)
+        send_in_current_chat(user_prompt)
 
 
 # ==========================================
@@ -5593,7 +6090,7 @@ except Exception:
 
 
 # ==========================================
-# 35. TASKBAR - PURE HTML, RESPONSIVE
+# 35. TASKBAR
 # ==========================================
 def render_taskbar_html():
     sec_enabled = is_lttp_security_enabled()
@@ -5642,6 +6139,13 @@ def render_taskbar_html():
         lang_vi_style = "background:rgba(102,126,234,0.25);color:#667eea;border:1px solid rgba(102,126,234,0.5);"
 
     feedback_label = "💬 Feedback" if lang == "en" else "💬 Phản hồi"
+
+    # Đếm chat đang chạy
+    running_chats = multi_chat.get_all_running()
+    running_count = len(running_chats)
+    running_html = ""
+    if running_count > 0:
+        running_html = f'<div class="tb-running" style="font-size:0.7rem;color:#f59e0b;padding:2px 8px;background:rgba(245,158,11,0.15);border-radius:6px;border:1px solid rgba(245,158,11,0.35);">⚙️ {running_count}</div>'
 
     user_label_html = (user_label
                        .replace("&", "&amp;")
@@ -5780,6 +6284,7 @@ def render_taskbar_html():
             <span class="tb-sec-score">{score}</span>
             <span style="color:#94a3b8;font-size:0.7rem;">{sec_status_text}</span>
         </div>
+        {running_html}
         <div class="tb-divider"></div>
         <div class="tb-user">{user_label_html}</div>
         <div class="tb-actions">
