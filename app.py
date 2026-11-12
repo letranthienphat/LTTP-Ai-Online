@@ -32,7 +32,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.45.0"
+APP_VERSION = "1.46.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -82,13 +82,13 @@ LTTP_SECURITY_ENABLED_COOKIE = "LTTP_sec_enabled"
 
 # ========== TỐI ƯU TỐC ĐỘ & CHỐNG NGẮT ==========
 SUMMARY_TRIGGER_RATIO = 0.95
-GEMINI_REQUEST_TIMEOUT = 45          # Tăng mạnh từ 8 → 45s để tránh cắt giữa chừng
-GEMINI_STREAM_MAX_RETRIES = 2        # Retry stream nếu bị đứt giữa chừng
-GEMINI_RETRY_BACKOFF = 1.5           # Backoff giữa retry
+GEMINI_REQUEST_TIMEOUT = 45
+GEMINI_STREAM_MAX_RETRIES = 2
+GEMINI_RETRY_BACKOFF = 1.5
 MODEL_LIST_CACHE_SECONDS = 600
 DEFER_TITLE_AND_SUMMARY = True
 STREAM_FIRST_TOKEN_FAST = True
-STREAM_INACTIVITY_TIMEOUT = 30       # Nếu 30s không có token mới → coi như stream chết
+STREAM_INACTIVITY_TIMEOUT = 30
 # ===================================================
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
@@ -108,13 +108,12 @@ MODEL_CONTEXT_BUDGET = {
     "gemini-3.5-flash-lite": 800_000, "gemini-3.1-flash-lite": 800_000,
     "gemini-3.1-pro-preview": 1_500_000, "gemini-2.5-flash": 800_000,
     "gemini-2.5-flash-lite": 800_000, "gemini-2.5-pro": 1_500_000,
-    "gemini-2.0-flash": 800_000, "gemini-1.5-flash": 800_000,
-    "gemini-1.5-pro": 1_500_000,
+    "gemini-1.5-flash": 800_000, "gemini-1.5-pro": 1_500_000,
 }
 DEFAULT_CONTEXT_BUDGET = 800_000
-HISTORY_BUDGET_RATIO = 0.40          # Tăng từ 0.30 → 0.40 để giữ history lâu hơn
-MIN_RECENT_MESSAGES = 6              # Tăng từ 4 → 6
-MAX_RECENT_MESSAGES = 40             # Tăng từ 20 → 40 để AI nhớ lâu hơn
+HISTORY_BUDGET_RATIO = 0.40
+MIN_RECENT_MESSAGES = 6
+MAX_RECENT_MESSAGES = 40
 SUMMARY_BATCH_SIZE = 30
 
 RATE_LIMITS = {
@@ -134,6 +133,7 @@ RATE_LIMITS = {
     "custom_instruction": (5, 300),
     "security_toggle":    (10, 60),
     "security_scan":      (5, 120),
+    "retry_message":      (5, 60),
 }
 
 SEVERITY_LEVELS = {"low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -237,25 +237,33 @@ if not device_id:
 
 DEFAULT_MODEL = "gemini-3.5-flash"
 
+# ========== DANH SÁCH MODEL — ĐÃ BỎ 2.0 HOÀN TOÀN ==========
 FAILOVER_MODEL_CHAIN = [
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",
 ]
 
 FALLBACK_MODELS = [
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
     "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
-    "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-    "gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro",
+    "gemini-1.5-flash", "gemini-1.5-pro",
 ]
 
 LEGACY_MODEL_MAP = {
-    "gemini-2.5-flash": "gemini-3.5-flash", "gemini-2.5-pro": "gemini-3.5-flash",
-    "gemini-2.0-flash": "gemini-3.5-flash", "gemini-1.5-flash": "gemini-3.5-flash",
-    "gemini-1.5-pro": "gemini-3.5-flash", "gemini-1.0-pro": "gemini-3.5-flash",
+    "gemini-2.0-flash": "gemini-3.5-flash",
+    "gemini-2.0-flash-lite": "gemini-3.5-flash-lite",
+    "gemini-2.0-pro": "gemini-3.5-flash",
+    "gemini-2.5-flash": "gemini-3.5-flash",
+    "gemini-2.5-pro": "gemini-3.5-flash",
+    "gemini-1.5-flash": "gemini-3.5-flash",
+    "gemini-1.5-pro": "gemini-3.5-flash",
+    "gemini-1.0-pro": "gemini-3.5-flash",
     "gemini-pro": "gemini-3.5-flash",
 }
+# ======================================================
 
 RATE_LIMIT_RETRY_DELAY = 60
 
@@ -690,6 +698,38 @@ st.markdown("""
         border-color: rgba(239,68,68,0.7) !important;
     }
 
+    /* Retry button */
+    .lttp-retry-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        margin-top: 8px;
+        background: rgba(102,126,234,0.12);
+        border: 1px solid rgba(102,126,234,0.35);
+        border-radius: 8px;
+        color: #667eea;
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+    .lttp-retry-btn:hover {
+        background: rgba(102,126,234,0.25);
+        border-color: rgba(102,126,234,0.6);
+    }
+
+    .lttp-error-card {
+        padding: 12px 16px;
+        background: rgba(239,68,68,0.08);
+        border: 1px solid rgba(239,68,68,0.3);
+        border-left: 4px solid #ef4444;
+        border-radius: 10px;
+        font-size: 0.88rem;
+        color: #ef4444;
+        margin: 6px 0;
+    }
+
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -815,7 +855,11 @@ def get_available_models_cached() -> list:
             dyn = []
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
-                    dyn.append(m.name.replace("models/", ""))
+                    name = m.name.replace("models/", "")
+                    # BỎ HOÀN TOÀN 2.0
+                    if "gemini-2.0" in name:
+                        continue
+                    dyn.append(name)
             if dyn:
                 models = list(dict.fromkeys(dyn + FALLBACK_MODELS))
         except Exception:
@@ -828,16 +872,12 @@ def get_available_models_cached() -> list:
 def smart_sliding_window(messages: list, budget_tokens: int,
                           min_msgs: int = MIN_RECENT_MESSAGES,
                           max_msgs: int = MAX_RECENT_MESSAGES) -> list:
-    """
-    FIX: Nếu không có message nào vượt budget thì lấy TOÀN BỘ (không cắt oan).
-    Chỉ cắt khi thực sự cần thiết.
-    """
     if not messages:
         return []
     total_tokens = sum(estimate_tokens(m.get("content", "")) + 4 for m in messages)
     if total_tokens <= budget_tokens and len(messages) <= max_msgs:
         return messages[:]
-    
+
     selected = []
     accumulated = 0
     for m in reversed(messages):
@@ -855,9 +895,6 @@ def smart_sliding_window(messages: list, budget_tokens: int,
 
 
 def truncate_message_smart(content: str, max_tokens: int) -> str:
-    """
-    FIX: Cắt theo ranh giới từ, không cắt giữa câu → tránh AI hiểu lơ mơ.
-    """
     if not content:
         return content
     cur_tokens = estimate_tokens(content)
@@ -868,7 +905,6 @@ def truncate_message_smart(content: str, max_tokens: int) -> str:
     tail_chars = max_chars - head_chars
     head = content[:head_chars]
     tail = content[-tail_chars:] if tail_chars > 0 else ""
-    # Cắt về ranh giới từ gần nhất
     if head and " " in head:
         head = head.rsplit(" ", 1)[0]
     if tail and " " in tail:
@@ -889,7 +925,7 @@ def fetch_changelog_cached() -> tuple:
         resp = requests.get(
             CHANGELOG_URL,
             timeout=5,
-            headers={"User-Agent": "LTTP-AI-Online/1.45.0"}
+            headers={"User-Agent": "LTTP-AI-Online/1.46.0"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -1332,7 +1368,7 @@ def enforce_message_content(text: str) -> bool:
 
 
 # ==========================================
-# 5. JAVASCRIPT INJECTION (đã bỏ version scanner)
+# 5. JAVASCRIPT INJECTION
 # ==========================================
 def inject_js(js_code: str):
     wrapped = "<script>\n(function() {\n" + js_code + "\n})();\n</script>"
@@ -1399,6 +1435,32 @@ def inject_stop_button_listener():
         '    for (let i = 0; i < 5 && el; i++) {\n'
         '        if (el.classList && el.classList.contains("lttp-stop-gen")) {\n'
         '            document.cookie = "LTTP_stop_flag=1; path=/; max-age=120";\n'
+        '            break;\n'
+        '        }\n'
+        '        el = el.parentElement;\n'
+        '    }\n'
+        '}, true);\n'
+    )
+    inject_js(js)
+
+
+def inject_retry_button_listener():
+    """Lắng nghe click vào nút retry → set query param để Python xử lý."""
+    js = (
+        'if (window.__lttp_retry_listener_installed) return;\n'
+        'window.__lttp_retry_listener_installed = true;\n'
+        'document.addEventListener("click", function(e) {\n'
+        '    let el = e.target;\n'
+        '    for (let i = 0; i < 5 && el; i++) {\n'
+        '        if (el && el.dataset && el.dataset.lttpRetryIndex !== undefined) {\n'
+        '            const idx = el.dataset.lttpRetryIndex;\n'
+        '            try {\n'
+        '                const url = new URL(window.location.href);\n'
+        '                url.searchParams.set("__lttp_retry", idx);\n'
+        '                window.location.href = url.toString();\n'
+        '            } catch(err) {\n'
+        '                console.warn("Retry error:", err);\n'
+        '            }\n'
         '            break;\n'
         '        }\n'
         '        el = el.parentElement;\n'
@@ -1611,7 +1673,7 @@ def clear_stop_flag():
 
 
 # ==========================================
-# 6. LỖI 429
+# 6. LỖI 429 + INCOMPLETE
 # ==========================================
 def is_rate_limit_error(error: Exception) -> bool:
     if google_exceptions is not None:
@@ -1641,7 +1703,6 @@ def is_rate_limit_error(error: Exception) -> bool:
 
 
 def is_incomplete_error(error: Exception) -> bool:
-    """Phát hiện lỗi stream bị đứt giữa chừng (không phải rate limit, không phải stop)."""
     err_str = str(error).lower()
     incomplete_keywords = [
         "incomplete", "truncated", "connection", "timeout", "timed out",
@@ -1652,7 +1713,7 @@ def is_incomplete_error(error: Exception) -> bool:
 
 
 # ==========================================
-# 7. GỌI GEMINI - SỬA LỖI NGẮT GIỮA CHỪNG
+# 7. GỌI GEMINI
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -1666,43 +1727,39 @@ def _call_stream_single(
     model_name, api_k, prompt_inputs, system_instruction, generation_config,
     lang, ui_placeholder, typing_mode, typing_cps, accumulated, check_stop
 ):
-    """
-    Gọi 1 lần stream. Trả về (accumulated, done_reason, err).
-    done_reason: "complete" | "stopped" | "error" | "rate_limit"
-    """
     genai.configure(api_key=api_k)
     model = genai.GenerativeModel(
         model_name=model_name,
         system_instruction=system_instruction if system_instruction else None,
         generation_config=generation_config or {}
     )
-    
+
     response = model.generate_content(
         prompt_inputs,
         stream=True,
         request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
     )
-    
+
     display_buffer = ""
     pending_buffer = ""
     last_release_time = time.time()
     chars_per_sec = max(1, int(typing_cps))
     chunk_count = 0
-    
+
     for chunk in response:
         if check_stop():
             return accumulated, "stopped", None
-        
+
         try:
             chunk_text = getattr(chunk, "text", None)
         except Exception:
             chunk_text = None
         if not chunk_text:
             continue
-        
+
         chunk_count += 1
         accumulated += chunk_text
-        
+
         if typing_mode == TYPING_MODE_SMOOTH:
             if ui_placeholder is not None:
                 display = accumulated + '<span class="typing-cursor"></span>'
@@ -1720,17 +1777,16 @@ def _call_stream_single(
             if ui_placeholder is not None:
                 disp = display_buffer + '<span class="typing-cursor"></span>'
                 ui_placeholder.markdown(disp, unsafe_allow_html=True)
-    
-    # Flush pending buffer cuối
+
     if typing_mode == TYPING_MODE_CONTROLLED and pending_buffer:
         display_buffer += pending_buffer
         pending_buffer = ""
         if ui_placeholder is not None:
             ui_placeholder.markdown(display_buffer, unsafe_allow_html=True)
-    
+
     if chunk_count == 0:
         return accumulated, "error", "Empty response"
-    
+
     return accumulated, "complete", None
 
 
@@ -1741,12 +1797,6 @@ def stream_gemini_with_failover(
     typing_mode=TYPING_MODE_SMOOTH,
     typing_cps=DEFAULT_TYPING_CPS,
 ):
-    """
-    TỐI ƯU + CHỐNG NGẮT:
-    - Timeout 45s (đủ cho response dài)
-    - Retry stream nếu bị đứt giữa chừng (tối đa 2 lần)
-    - Failover model nếu fail hoàn toàn
-    """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
@@ -1764,7 +1814,6 @@ def stream_gemini_with_failover(
             if was_stopped:
                 break
 
-            # Retry stream nếu bị đứt giữa chừng
             for attempt in range(GEMINI_STREAM_MAX_RETRIES + 1):
                 accumulated = ""
                 try:
@@ -1781,13 +1830,13 @@ def stream_gemini_with_failover(
                         accumulated="",
                         check_stop=check_stop_flag,
                     )
-                    
+
                     if reason == "complete" and accumulated:
                         if ui_placeholder is not None:
                             ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
                         yield accumulated, True, None
                         return
-                    
+
                     if reason == "stopped":
                         was_stopped = True
                         if ui_placeholder is not None and accumulated:
@@ -1802,31 +1851,26 @@ def stream_gemini_with_failover(
                         else:
                             yield "", True, "stopped"
                         return
-                    
+
                     if reason == "error":
                         last_error = err
-                        # Nếu là lỗi rate limit → break inner retry, thử key khác
                         if err and is_rate_limit_error(Exception(err)):
                             saw_rate_limit = True
                             break
-                        # Nếu là lỗi incomplete → retry
                         if err and is_incomplete_error(Exception(err)) and attempt < GEMINI_STREAM_MAX_RETRIES:
                             time.sleep(GEMINI_RETRY_BACKOFF * (attempt + 1))
                             continue
-                        # Lỗi khác → thử key/model khác
                         saw_other_error = True
                         break
-                    
+
                 except Exception as ex:
                     last_error = str(ex)
                     if is_rate_limit_error(ex):
                         saw_rate_limit = True
                         break
-                    # Retry nếu là lỗi incomplete/timeout
                     if is_incomplete_error(ex) and attempt < GEMINI_STREAM_MAX_RETRIES:
                         time.sleep(GEMINI_RETRY_BACKOFF * (attempt + 1))
                         continue
-                    # Lỗi khác → next key/model
                     saw_other_error = True
                     break
 
@@ -2472,6 +2516,9 @@ TRANSLATIONS = {
         "ai_thinking": "LTTP AI is thinking...",
         "ai_typing": "LTTP AI is typing...",
         "ai_error": "❌ Could not generate AI response.",
+        "ai_retry_btn": "🔄 Retry",
+        "ai_retry_tooltip": "Retry this message",
+        "ai_retry_sending": "Retrying...",
         "device_id": "Device ID", "online": "Online", "language": "🌐 Language",
         "guest_btn": "👤 Continue as Guest",
         "guest_mode": "Guest Mode",
@@ -2716,6 +2763,9 @@ TRANSLATIONS = {
         "ai_thinking": "LTTP AI đang suy nghĩ...",
         "ai_typing": "LTTP AI đang gõ...",
         "ai_error": "❌ Không thể tạo phản hồi từ AI.",
+        "ai_retry_btn": "🔄 Thử lại",
+        "ai_retry_tooltip": "Gửi lại tin nhắn này",
+        "ai_retry_sending": "Đang thử lại...",
         "device_id": "Device ID", "online": "Online", "language": "🌐 Ngôn ngữ",
         "guest_btn": "👤 Tiếp tục với tư cách Khách",
         "guest_mode": "Chế độ Khách",
@@ -3035,6 +3085,7 @@ if "test_prefs" not in st.session_state:
 # ==========================================
 inject_scroll_guard()
 inject_stop_button_listener()
+inject_retry_button_listener()
 load_quick_lookup_from_cookie()
 load_lttp_security_from_cookie()
 
@@ -3183,7 +3234,7 @@ def render_test_banner():
 
 
 # ==========================================
-# 20. BUG REPORT DIALOG
+# 20. BUG REPORT + FEEDBACK DIALOGS
 # ==========================================
 @st.dialog("🐛")
 def bug_report_dialog():
@@ -4668,11 +4719,25 @@ if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
             st.toast(t("draft_discarded_toast", lang), icon="🗑️")
             time.sleep(0.3); st.rerun()
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg["role"] == "assistant":
-            st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER.get("en", ""))}</div>', unsafe_allow_html=True)
+# Render messages
+for idx, msg in enumerate(st.session_state.messages):
+    role = msg["role"]
+    content = msg.get("content", "")
+    is_error_msg = msg.get("is_error", False)
+    with st.chat_message(role):
+        if is_error_msg:
+            # Hiển thị lỗi + nút thử lại
+            st.markdown(f'<div class="lttp-error-card">{content}</div>', unsafe_allow_html=True)
+            retry_label = t("ai_retry_btn", lang)
+            st.markdown(
+                f'<button class="lttp-retry-btn" data-lttp-retry-index="{idx}">'
+                f'{retry_label}</button>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(content)
+            if role == "assistant":
+                st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER.get("en", ""))}</div>', unsafe_allow_html=True)
 
 
 # ==========================================
@@ -4746,28 +4811,37 @@ def _run_deferred_tasks(chat_data, user_prompt, lang):
         pass
 
 
-def _process_prompt(user_prompt):
-    if not enforce_message_content(user_prompt):
-        return
+def _process_prompt(user_prompt, is_retry=False):
+    """
+    Xử lý prompt. Nếu is_retry=True, KHÔNG append user message mới —
+    chỉ gọi AI lại với history hiện tại.
+    """
+    if not is_retry:
+        if not enforce_message_content(user_prompt):
+            return
 
-    if is_guest:
-        db_q = GitHubStorage.load_db(force_refresh=True)
-        allowed, used_now, limit_now = check_guest_quota(db_q)
-        if not allowed:
-            st.error(t("guest_quota_exceeded", lang))
-            st.stop()
-        increment_guest_quota(db_q, device_id)
-        try:
-            GitHubStorage.save_db(db_q)
-        except Exception:
-            pass
+        if is_guest:
+            db_q = GitHubStorage.load_db(force_refresh=True)
+            allowed, used_now, limit_now = check_guest_quota(db_q)
+            if not allowed:
+                st.error(t("guest_quota_exceeded", lang))
+                st.stop()
+            increment_guest_quota(db_q, device_id)
+            try:
+                GitHubStorage.save_db(db_q)
+            except Exception:
+                pass
 
-    clear_draft_cookie_via_js()
-    clear_stop_flag()
+        clear_draft_cookie_via_js()
+        clear_stop_flag()
 
-    st.session_state.messages.append({"role": "user", "content": user_prompt})
-    with st.chat_message("user"):
-        st.markdown(user_prompt)
+        st.session_state.messages.append({"role": "user", "content": user_prompt})
+    else:
+        clear_stop_flag()
+
+    with st.chat_message("user" if not is_retry else "assistant"):
+        if not is_retry:
+            st.markdown(user_prompt)
 
     if not st.session_state.current_chat_id:
         st.session_state.current_chat_id = str(uuid.uuid4())
@@ -4810,11 +4884,33 @@ def _process_prompt(user_prompt):
     system_instruction = "\n\n".join(system_parts)
 
     all_messages = st.session_state.messages
+
+    # Khi retry: bỏ message lỗi cuối (assistant error) trước khi build history
+    if is_retry:
+        # Tìm message user gần nhất phía trước để build lại
+        # all_messages vẫn chứa user prompt gốc
+        pass
+
     if ql_active:
         recent_window = []
     else:
         recent_window = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
-        if recent_window and recent_window[-1].get("content") == user_prompt:
+        # Bỏ message cuối nếu nó trùng user_prompt (chỉ khi không phải retry)
+        if not is_retry and recent_window and recent_window[-1].get("content") == user_prompt:
+            recent_window = recent_window[:-1]
+        # Bỏ message assistant error nếu có
+        recent_window = [m for m in recent_window if not m.get("is_error", False)]
+
+    # Lấy user_prompt cuối cùng nếu là retry
+    if is_retry:
+        last_user_content = ""
+        for m in reversed(all_messages):
+            if m.get("role") == "user" and not m.get("is_error", False):
+                last_user_content = m.get("content", "")
+                break
+        user_prompt = last_user_content
+        # Bỏ message user cuối khỏi window (vì sẽ append ở dưới)
+        if recent_window and recent_window[-1].get("role") == "user":
             recent_window = recent_window[:-1]
 
     content_inputs = []
@@ -4844,6 +4940,11 @@ def _process_prompt(user_prompt):
 
     final_text = ""
     final_err = None
+
+    # Nếu retry: xóa message lỗi cuối trước khi gọi lại
+    if is_retry and st.session_state.messages:
+        if st.session_state.messages[-1].get("is_error", False):
+            st.session_state.messages.pop()
 
     with st.chat_message("assistant"):
         stop_col1, stop_col2 = st.columns([6, 1])
@@ -4897,9 +4998,9 @@ def _process_prompt(user_prompt):
             st.session_state.messages.append({"role": "assistant", "content": final_text})
             if final_err == "rate_limit_partial":
                 st.warning(
-                    "⚠️ Phản hồi có thể chưa đầy đủ (bị giới hạn giữa chừng)."
+                    "⚠️ Phản hồi có thể chưa đầy đủ (bị giới hạn giữa chừng). Bạn có thể bấm Thử lại."
                     if lang == "vi" else
-                    "⚠️ Response may be incomplete."
+                    "⚠️ Response may be incomplete. You can click Retry."
                 )
             elif final_err == "stopped":
                 st.info(
@@ -4911,7 +5012,9 @@ def _process_prompt(user_prompt):
             ai_placeholder.markdown(
                 "_[Đã dừng theo yêu cầu]_" if lang == "vi" else "_[Stopped by user]_"
             )
-            if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+            if (st.session_state.messages and
+                    st.session_state.messages[-1]["role"] == "user" and
+                    not is_retry):
                 st.session_state.messages.pop()
             clear_stop_flag()
             st.rerun()
@@ -4920,14 +5023,19 @@ def _process_prompt(user_prompt):
             st.session_state.pending_retry_prompt = user_prompt
             if (st.session_state.messages and
                     st.session_state.messages[-1]["role"] == "user" and
-                    st.session_state.messages[-1]["content"] == user_prompt):
+                    st.session_state.messages[-1]["content"] == user_prompt and
+                    not is_retry):
                 st.session_state.messages.pop()
             render_rate_limit_and_retry(lang)
             return
         else:
             error_msg = f"{t('ai_error', lang)} Error: {str(final_err)[:150] if final_err else 'Unknown'}"
             st.error(error_msg)
-            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": error_msg,
+                "is_error": True
+            })
 
     clear_stop_flag()
 
@@ -4950,17 +5058,90 @@ def _process_prompt(user_prompt):
     st.rerun()
 
 
+# ==========================================
+# 33. XỬ LÝ QUERY PARAMS (RETRY / LANG / FEEDBACK)
+# ==========================================
+_handle_retry = False
+_retry_idx = None
+try:
+    qp = st.query_params
+    _qp_retry = qp.get("__lttp_retry")
+    if _qp_retry is not None:
+        try:
+            _retry_idx = int(_qp_retry)
+            _handle_retry = True
+        except Exception:
+            _retry_idx = None
+        try:
+            del st.query_params["__lttp_retry"]
+        except Exception:
+            pass
+except Exception:
+    pass
+
+if _handle_retry and _retry_idx is not None:
+    # Xác định vị trí message lỗi và user message ngay trước nó
+    msgs = st.session_state.messages
+    if 0 <= _retry_idx < len(msgs) and msgs[_retry_idx].get("is_error", False):
+        if enforce_rate_limit("retry_message", "Retry message"):
+            # Xóa message lỗi
+            msgs.pop(_retry_idx)
+            # Tìm user prompt gần nhất
+            last_user_prompt = ""
+            for m in reversed(msgs):
+                if m.get("role") == "user" and not m.get("is_error", False):
+                    last_user_prompt = m.get("content", "")
+                    break
+            if last_user_prompt:
+                _process_prompt(last_user_prompt, is_retry=True)
+    st.rerun()
+
+
 if st.session_state.pending_retry_prompt:
     pending = st.session_state.pending_retry_prompt
     st.session_state.pending_retry_prompt = None
-    _process_prompt(pending)
+    _process_prompt(pending, is_retry=True)
 elif user_prompt := st.chat_input(t("chat_placeholder", lang)):
     if enforce_rate_limit("send_message", "Send message"):
         _process_prompt(user_prompt)
 
 
 # ==========================================
-# 33. TASKBAR - PURE HTML
+# 34. HANDLE LANG / FEEDBACK QUERY PARAMS
+# ==========================================
+try:
+    qp = st.query_params
+    _qp_lang = qp.get("__lttp_lang")
+    _qp_fb = qp.get("__lttp_fb")
+
+    if _qp_lang in ("en", "vi") and _qp_lang != st.session_state.language:
+        st.session_state.language = _qp_lang
+        if not is_guest and not is_test and st.session_state.user:
+            try:
+                user_data["language"] = _qp_lang
+                db_data[st.session_state.user] = user_data
+                safe_save_db(db_data)
+            except Exception:
+                pass
+        try:
+            del st.query_params["__lttp_lang"]
+        except Exception:
+            pass
+        st.rerun()
+
+    if _qp_fb == "1":
+        try:
+            del st.query_params["__lttp_fb"]
+        except Exception:
+            pass
+        st.session_state.feedback_open = True
+        st.rerun()
+except Exception:
+    pass
+
+
+# ==========================================
+# 35. TASKBAR - PURE HTML
 # ==========================================
 def render_taskbar_html():
     sec_enabled = is_lttp_security_enabled()
@@ -5176,37 +5357,3 @@ def render_taskbar_html():
 
 
 render_taskbar_html()
-
-
-# ==========================================
-# 34. HANDLE LANG / FEEDBACK QUERY PARAMS
-# ==========================================
-try:
-    qp = st.query_params
-    _qp_lang = qp.get("__lttp_lang")
-    _qp_fb = qp.get("__lttp_fb")
-
-    if _qp_lang in ("en", "vi") and _qp_lang != st.session_state.language:
-        st.session_state.language = _qp_lang
-        if not is_guest and not is_test and st.session_state.user:
-            try:
-                user_data["language"] = _qp_lang
-                db_data[st.session_state.user] = user_data
-                safe_save_db(db_data)
-            except Exception:
-                pass
-        try:
-            del st.query_params["__lttp_lang"]
-        except Exception:
-            pass
-        st.rerun()
-
-    if _qp_fb == "1":
-        try:
-            del st.query_params["__lttp_fb"]
-        except Exception:
-            pass
-        st.session_state.feedback_open = True
-        st.rerun()
-except Exception:
-    pass
