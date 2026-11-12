@@ -169,41 +169,6 @@
         "is_quick_lookup": false,
         "created_at": "2026-11-05T21:16:15.995210+07:00",
         "updated_at": "2026-11-05T21:24:45.505692+07:00"
-      },
-      "f106cce2-7312-4d2d-a1ad-d52e63e4d0fc": {
-        "title": "Khả năng hỗ trợ",
-        "messages": [
-          {
-            "role": "user",
-            "content": "bạn có thể giúp tôi làm gì?"
-          },
-          {
-            "role": "assistant",
-            "content": "Xin chào! Tôi là **LTTP AI Online** — trợ lý AI do tác giả LTTP phát triển. Tôi có thể hỗ trợ bạn trong nhiều công việc và lĩnh vực khác nhau, bao gồm:\n\n1. **Giải đáp thắc mắc & Tra cứu thông tin:**\n   - Giải thích các khái niệm phức tạp (khoa học, lịch sử, kinh tế, công nghệ, đời sống...).\n   - Trả lời các câu hỏi thường gặp trong nhiều lĩnh vực.\n\n2. **Hỗ trợ công việc & Văn phòng:**\n   - Soạn thảo email, văn bản, hợp đồng mẫu, báo cáo, đề xuất.\n   - Tóm tắt tài liệu, sách hoặc bài viết dài.\n   - Lập kế hoạch công việc, quản lý thời gian, lên lịch trình du lịch/làm việc.\n\n3. **Hỗ trợ Lập trình & Kỹ thuật:**\n   - Viết mã nguồn (code) trên nhiều ngôn ngữ (Python, JavaScript, C++, HTML/CSS, SQL,...).\n   - Tìm và sửa lỗi (debug) trong đoạn code của bạn.\n   - Giải thích tư duy thuật toán và cấu trúc dữ liệu.\n\n4. **Sáng tạo nội dung & Marketing:**\n   - Viết bài chuẩn SEO, bài đăng mạng xã hội (Facebook, LinkedIn, TikTok...).\n   - Lập dàn ý và viết kịch bản video, bài phát biểu, truyện, thơ.\n   - Gợi ý ý tưởng mới (brainstorming) cho dự án hoặc sản phẩm.\n\n5. **Học tập & Học ngoại ngữ:**\n   - Dịch thuật chính xác giữa nhiều ngôn ngữ khác nhau.\n   - Luyện tập ngữ pháp, từ vựng, viết luận.\n   - Giải thích và hướng dẫn giải các bài tập.\n\nBạn đang cần hỗ trợ về công việc hoặc chủ đề nào cụ thể? Hãy chia sẻ với tôi nhé!"
-          },
-          {
-            "role": "user",
-            "content": "chó Rottweler có tuổi thọ bao nhiêu? Con cía"
-          },
-          {
-            "role": "assistant",
-            "content": "Giống chó **Rottweiler con cái** thường có tuổi thọ trung bình từ **8 đến 10 năm**. Nếu được chăm sóc chu đáo, có chế độ dinh dưỡng lành mạnh và theo dõi y tế tốt, nhiều cá thể Rottweiler cái có thể sống tới **11 - 12 năm**.\n\nSo với chó Rottweiler đực, chó cái thường có xu hướng sống lâu hơn một chút nếu được **triệt sản đúng thời điểm** (giúp phòng ngừa các bệnh nguy hiểm như viêm tử cung, ung thư tuyến vú).\n\n---\n\n### Một số yếu tố giúp kéo dài tuổi thọ cho chó Rottweiler cái:\n\n1. **Triệt sản đúng lúc:** Triệt sản sau khi cơ thể hoàn thiện (thường từ 1 - 2 tuổi tùy tư vấn của bác sĩ thú y) giúp ngăn ngừa các bệnh về cơ quan sinh sản và cân bằng tâm lý.\n2. **Kiểm soát cân nặng:** Rottweiler là giống chó to lớn, rất dễ bị béo phì. Việc thừa cân sẽ gây áp lực lên tim mạch và các khớp xương (đặc biệt là bệnh loạn sản hông/khớp gối).\n3. **Chế độ vận động hợp lý:** Cho chó vận động, đi dạo mỗi ngày để giữ cơ bắp săn chắc và giải tỏa năng lượng, tránh căng thẳng.\n4. **Khám sức khỏe định kỳ:** Rottweiler có nguy cơ mắc một số bệnh di truyền hoặc nguy hiểm như ung thư xương, xoắn dạ dày chướng hơi, bệnh tim và các bệnh về khớp. Khám định kỳ 6 tháng/lần giúp phát hiện bệnh sớm.\n5. **Tiêm phòng & Tẩy giun đầy đủ:** Đảm bảo tiêm đủ các mũi vắc-xin định kỳ hàng năm và phòng chống ký sinh trùng (ve, rận, giun tim).\n\nBạn đang nuôi hoặc có ý định nuôi một bé Rottweiler cái đúng không? Nếu cần tư vấn thêm về chế độ ăn hay cách chăm sóc bé, bạn cứ hỏi nhé!"
-          },
-          {
-            "role": "user",
-            "content": "nó gầy và ăn cơm không "
-          },
-          {
-            "role": "assistant",
-            "content": "Tình trạng chó Rottweiler **gầy và chỉ ăn cơm không** (thiếu chất) là vấn đề rất cần được điều chỉnh lại ngay, đặc biệt đối với một giống chó lớn và mạnh mẽ như Rottweiler. \n\nChó Rottweiler cần một chế độ dinh dưỡng rất giàu protein (chất đạm) và năng lượng để phát triển cơ bắp, khung xương. Nếu bạn chỉ cho chúng ăn cơm không, chúng sẽ không đủ chất dinh dưỡng để duy trì sức khỏe, dẫn đến gầy còm, rụng lông, mệt mỏi và chậm phát triển (nếu là chó đang tuổi lớn).\n\nDưới đây là những việc bạn nên làm ngay để cải thiện tình trạng của bé:\n\n### 1. Bổ sung nguồn Protein (Chất đạm) cho bữa ăn\nĐừng chỉ cho ăn cơm trắng. Bạn cần trộn cơm với các loại thức ăn giàu đạm như:\n* **Thịt:** Thịt bò, thịt heo, thịt gà (thịt nạc hoặc thịt có dính ít mỡ để tăng năng lượng).\n* **Nội tạng (vừa phải):** Gan, tim, phổi heo/bò (nhưng không nên cho ăn quá nhiều vì dễ đi ngoài).\n* **Trứng:** Trứng gà luộc (khoảng 2-3 quả/tuần tùy độ tuổi và kích thước của chó) rất tốt cho lông và cơ bắp.\n* **Cá:** Cá biển hoặc cá đồng nấu chín, gỡ bỏ xương sắc.\n\n### 2. Sử dụng thức ăn chuyên dụng (nếu có thể)\n* Nếu không có nhiều thời gian nấu nướng, bạn có thể kết hợp hoặc chuyển sang dùng **hạt khô chuyên dụng cho chó lớn (Large Breed)**. Thức ăn hạt đã được tính toán cân đối dinh dưỡng (đạm, béo, vitamin, canxi).\n* Nếu bé chưa quen ăn hạt, hãy ngâm mềm hạt vào nước ấm hoặc nước hầm xương rồi trộn ít với cơm, sau đó giảm dần lượng cơm và tăng lượng hạt lên.\n\n### 3. Bổ sung Canxi và Khoáng chất\n* Rottweiler là giống chó có khung xương rất nặng, dễ mắc các bệnh về xương khớp khi lớn. Ngoài thức ăn, bạn nên mua thêm các loại **vitamin tổng hợp hoặc bột canxi dành riêng cho chó** (nên hỏi ý kiến bác sĩ thú y về liều lượng theo độ tuổi và cân nặng).\n\n### 4. Kiểm tra sức khỏe (Rất quan trọng)\nNếu bạn đã cho ăn đủ chất mà bé vẫn gầy và không tăng cân, hãy nghĩ đến các nguyên nhân y tế:\n* **Nhiễm giun sán:** Giun sán trong đường ruột sẽ hút hết chất dinh dưỡng khiến chó ăn nhiều mà vẫn gầy. Bạn cần **tẩy giun định kỳ** cho bé.\n* **Mắc bệnh tiêu hóa:** Hệ tiêu hóa kém khiến thức ăn không được hấp thu.\n* **Bệnh lý khác:** Sốt, nhiễm ký sinh trùng máu (ve rận), hoặc các bệnh truyền nhiễm. \n\n👉 **Lời khuyên lúc này:** \nHãy lập tức thay đổi khẩu phần ăn bằng cách thêm thịt/thức ăn giàu đạm vào cơm, mua thuốc tẩy giun ngay cho bé nếu lâu chưa tẩy. Nếu sau 1-2 tuần tình trạng gầy không cải thiện hoặc bé có biểu hiện mệt mỏi, nôn mửa, tiêu chảy, bạn nên đưa bé đến **phòng khám thú y** để bác sĩ kiểm tra tổng quát nhé.\n\nBạn có thể cho tôi biết bé hiện tại được mấy tháng tuổi và nặng khoảng bao nhiêu kg không, để tôi tư vấn kỹ hơn về lượng thức ăn phù hợp?"
-          }
-        ],
-        "summary": "",
-        "summary_updated_at": "",
-        "summary_token_count": 0,
-        "is_quick_lookup": false,
-        "created_at": "2026-11-12T18:18:57.146097+07:00",
-        "updated_at": "2026-11-12T18:23:18.610891+07:00"
       }
     },
     "remembered_devices": [
