@@ -65,6 +65,16 @@
           "device": "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b"
         }
       ]
+    },
+    "2026-11-13": {
+      "visits": [
+        {
+          "time": "2026-11-13 07:22:21",
+          "label": "guest",
+          "role": "guest",
+          "device": "55250d40-4d01-4589-8de1-675fec5da509"
+        }
+      ]
     }
   },
   "__bug_reports__": [],
