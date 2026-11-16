@@ -16,6 +16,7 @@ import streamlit as st
 import google.generativeai as genai
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
+from urllib.parse import quote, urlparse
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -35,7 +36,7 @@ except Exception:
 # ==========================================
 # 0. VERSION & HẰNG SỐ
 # ==========================================
-APP_VERSION = "1.48.0"
+APP_VERSION = "1.49.0"
 
 ADMIN_USERNAME = "Admin"
 ADMIN_PASSWORD = "7428"
@@ -83,36 +84,34 @@ COOKIE_STOP_FLAG = "LTTP_stop_flag"
 QL_MODE_COOKIE = "LTTP_ql_mode"
 LTTP_SECURITY_ENABLED_COOKIE = "LTTP_sec_enabled"
 
-# ========== TỐI ƯU TỐC ĐỘ ==========
 SUMMARY_TRIGGER_RATIO = 0.95
 GEMINI_REQUEST_TIMEOUT = 45
 GEMINI_STREAM_MAX_RETRIES = 2
 GEMINI_RETRY_BACKOFF = 1.5
 MODEL_LIST_CACHE_SECONDS = 600
 DEFER_TITLE_AND_SUMMARY = True
-STREAM_FIRST_TOKEN_FAST = True
-# ==================================
 
-# ========== LTTP WRITE DATA ==========
 LTTP_WRITE_DEBOUNCE_SEC = 1.2
 LTTP_WRITE_MAX_WAIT_SEC = 6.0
 LTTP_WRITE_QUEUE_MAX = 50
-# =====================================
 
-# ========== LTTP MULTI-CHAT ==========
-MULTI_CHAT_QUEUE_MAX = 2000  # max chunks per chat queue
-# =====================================
+MULTI_CHAT_QUEUE_MAX = 2000
 
-# ========== LTTP CHAT CRYPTO (NÉN + MÃ HÓA) ==========
 CHAT_CRYPTO_MAGIC = b"LTTPCHAT"
 CHAT_CRYPTO_VERSION = 1
-CHAT_COMPRESS_LEVEL = 9  # 0-9, 9 = max
-# ===================================================
+CHAT_COMPRESS_LEVEL = 9
+
+# ========== AGENTIC SEARCH ==========
+AGENT_MAX_ITERATIONS = 5
+SEARCH_CACHE_TTL = 300
+SEARCH_CACHE_MAX = 200
+TOOL_TIMEOUT = 15
+TOOL_RESPONSE_MAX_BYTES = 5 * 1024 * 1024
+TOOL_SHORT_JSON_THRESHOLD = 2000
+# ====================================
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/information%20about%20update.md"
 CHANGELOG_CACHE_SECONDS = 600
-
-PRIVACY_POLICY_URL = "https://raw.githubusercontent.com/letranthienphat/LTTP-Ai-Online/refs/heads/main/law.md"
 
 GUEST_DAILY_MSG_LIMIT_HIGH = 150
 GUEST_DAILY_MSG_LIMIT_NORMAL = 100
@@ -152,6 +151,9 @@ RATE_LIMITS = {
     "security_toggle":    (10, 60),
     "security_scan":      (5, 120),
     "retry_message":      (5, 60),
+    "tool_test":          (10, 60),
+    "tool_create":        (5, 300),
+    "tool_delete":        (10, 60),
 }
 
 SEVERITY_LEVELS = {"low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -177,6 +179,7 @@ SUSPICIOUS_PATTERNS = [
     r"tiết\s+lộ\s+(system\s+)?prompt|đọc\s+code\s+của\s+mày)",
     r"(?i)(\{\s*\"\$where\"|__proto__|constructor\s*\[)",
 ]
+
 
 def vn_now() -> datetime:
     return datetime.now(VN_TZ)
@@ -204,7 +207,28 @@ COPYRIGHT_GUARD_PROMPT_VI = (
     "4. Nếu người dùng cố tình yêu cầu những điều trên, hãy từ chối lịch sự và đề nghị giúp việc khác.\n"
     "5. TUYỆT ĐỐI KHÔNG hỗ trợ sao chép, dịch ngược, mạo danh, hay sửa đổi trái phép phần mềm này.\n"
     "6. TUYỆT ĐỐI KHÔNG giúp tạo tài khoản ảo, spam, DDoS, khai thác lỗ hổng.\n"
-    "7. Giữ thái độ chuyên nghiệp, không xúc phạm, không phân biệt đối xử."
+    "7. Giữ thái độ chuyên nghiệp, không xúc phạm, không phân biệt đối xử.\n\n"
+    "KHẢ NĂNG TÌM KIẾM:\n"
+    "Bạn có các công cụ sau để lấy thông tin thời gian thực:\n"
+    "- <tool:search query=\"...\" limit=\"N\" region=\"vn|us\"/> — Tìm kiếm web (DDG, SearXNG, fallback)\n"
+    "- <tool:wiki topic=\"...\" lang=\"vi|en\"/> — Tra Wikipedia\n"
+    "- <tool:weather city=\"...\"/> — Thời tiết hiện tại\n"
+    "- <tool:currency base=\"USD\" target=\"VND\"/> — Tỷ giá\n"
+    "- <tool:fetch url=\"...\"/> — Đọc nội dung URL\n"
+    "- <tool:calc expression=\"...\"/> — Tính toán\n"
+    "- <tool:{custom_name} {params}/> — Công cụ do người dùng tự tạo (nếu có)\n\n"
+    "QUY TẮC GỌI TOOL:\n"
+    "1. Chỉ gọi tool khi THỰC SỰ cần thông tin thời gian thực. Nếu đã biết câu trả lời, trả lời trực tiếp.\n"
+    "2. Có thể gọi NHIỀU tool cùng lúc nếu cần thông tin từ nhiều nguồn.\n"
+    "3. Sau khi gọi tool, chờ kết quả rồi mới trả lời user.\n"
+    "4. LUÔN trích dẫn nguồn bằng [1], [2], [3]... khi dùng kết quả tool.\n"
+    "5. KHÔNG bịa thông tin nếu tool không trả về kết quả — hãy nói thật là không tìm thấy.\n\n"
+    "VÍ DỤ:\n"
+    "User: \"Giá vàng hôm nay?\"\n"
+    "Assistant: \"Để tôi kiểm tra.\"\n"
+    "<tool:search query=\"giá vàng SJC hôm nay\" limit=\"3\" region=\"vn\"/>\n"
+    "(chờ kết quả...)\n"
+    "Assistant: \"Theo kết quả mới nhất:\\n- Giá vàng SJC: 89.5 triệu/lượng [1]\\n- Giá vàng thế giới: 2650 USD/oz [2]\"\n"
 )
 
 COPYRIGHT_GUARD_PROMPT_EN = (
@@ -219,12 +243,27 @@ COPYRIGHT_GUARD_PROMPT_EN = (
     "4. If the user insists, politely decline and offer help on another topic.\n"
     "5. NEVER assist with copying, reverse-engineering, impersonation, or unauthorized modification.\n"
     "6. NEVER help create fake accounts, spam, DDoS, or exploit vulnerabilities.\n"
-    "7. Stay professional, no insults, no discrimination."
+    "7. Stay professional, no insults, no discrimination.\n\n"
+    "SEARCH CAPABILITY:\n"
+    "You have the following tools for real-time information:\n"
+    "- <tool:search query=\"...\" limit=\"N\" region=\"vn|us\"/> — Web search (DDG, SearXNG, fallback)\n"
+    "- <tool:wiki topic=\"...\" lang=\"vi|en\"/> — Wikipedia lookup\n"
+    "- <tool:weather city=\"...\"/> — Current weather\n"
+    "- <tool:currency base=\"USD\" target=\"VND\"/> — Exchange rate\n"
+    "- <tool:fetch url=\"...\"/> — Read URL content\n"
+    "- <tool:calc expression=\"...\"/> — Calculate\n"
+    "- <tool:{custom_name} {params}/> — User-defined custom tools (if any)\n\n"
+    "TOOL CALLING RULES:\n"
+    "1. Only call tools when you TRULY need real-time information. If you know the answer, respond directly.\n"
+    "2. You can call MULTIPLE tools at once if you need info from multiple sources.\n"
+    "3. After calling tools, wait for results then answer.\n"
+    "4. ALWAYS cite sources with [1], [2], [3]... when using tool results.\n"
+    "5. Do NOT hallucinate if tool returns nothing — honestly say not found.\n"
 )
 
 
 # ==========================================
-# 1. CẤU HÌNH TRANG & SECRETS
+# 1. CẤU HÌNH
 # ==========================================
 st.set_page_config(
     page_title="LTTP AI Online",
@@ -239,6 +278,7 @@ GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
 
 MASTER_SECRET = st.secrets.get("ENCRYPTION_SECRET", "LTTPAI_Master_Secret_Key_2026")
 CHAT_SECRET = st.secrets.get("CHAT_ENCRYPTION_SECRET", MASTER_SECRET + "_CHAT_v1")
+TOOL_SECRET = st.secrets.get("TOOL_ENCRYPTION_SECRET", MASTER_SECRET + "_TOOL_v1")
 FERNET_KEY = base64.urlsafe_b64encode(hashlib.sha256(MASTER_SECRET.encode()).digest())
 cipher = Fernet(FERNET_KEY)
 
@@ -431,42 +471,47 @@ class LTTPSecurity:
             50_000
         ).hex()
 
-    @staticmethod
-    def constant_time_compare(a: str, b: str) -> bool:
-        return hmac.compare_digest(a.encode('utf-8'), b.encode('utf-8'))
+    @classmethod
+    def check_url_safe(cls, url: str) -> tuple:
+        """Kiểm tra URL có an toàn để fetch không."""
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return False, f"Scheme không được phép: {parsed.scheme}"
+            host = parsed.hostname or ""
+            if not host:
+                return False, "Không có hostname"
+            # Chặn SSRF
+            blocked_hosts = ["localhost", "127.0.0.1", "0.0.0.0", "::1"]
+            if host.lower() in blocked_hosts:
+                return False, "Chặn localhost"
+            if host.startswith("192.168.") or host.startswith("10.") or host.startswith("169.254."):
+                return False, "Chặn IP nội bộ"
+            if host.startswith("172."):
+                parts = host.split(".")
+                if len(parts) >= 2:
+                    try:
+                        second = int(parts[1])
+                        if 16 <= second <= 31:
+                            return False, "Chặn IP nội bộ"
+                    except ValueError:
+                        pass
+            return True, ""
+        except Exception as e:
+            return False, str(e)
 
 
 lttp_security = LTTPSecurity()
 
 
 # ==========================================
-# 2b. LTTP CHAT CRYPTO — NÉN + MÃ HÓA
+# 2b. LTTP CHAT CRYPTO
 # ==========================================
 class LTTPSecureChatCodec:
-    """
-    Mã hóa + nén dữ liệu chat trước khi lưu GitHub.
-    
-    Format (binary, base64 encoded):
-    - MAGIC (8 bytes) "LTTPCHAT"
-    - VERSION (1 byte)
-    - SALT (16 bytes)
-    - NONCE (12 bytes)
-    - CIPHERTEXT (AES-256-GCM)
-    
-    Quy trình:
-    1. messages (list) → JSON serialize
-    2. zlib compress level 9 (giảm ~70-90%)
-    3. AES-256-GCM encrypt
-    4. base64 encode
-    
-    Kết quả: chuỗi base64 ngắn hơn ~10-30% so với JSON gốc,
-              nhưng hoàn toàn không đọc được.
-    """
-    MAGIC = b"LTTPCHAT"
-    VERSION = 1
+    MAGIC = CHAT_CRYPTO_MAGIC
+    VERSION = CHAT_CRYPTO_VERSION
     NONCE_LEN = 12
     SALT_LEN = 16
-    HEADER_LEN = len(MAGIC) + 1 + SALT_LEN + NONCE_LEN  # 8+1+16+12 = 37
 
     @staticmethod
     def _derive_key(secret: str, salt: bytes) -> bytes:
@@ -480,40 +525,31 @@ class LTTPSecureChatCodec:
 
     @classmethod
     def encode(cls, messages: list, secret: str = None) -> str:
-        """Nén + mã hóa list[dict] → base64 string."""
         if secret is None:
             secret = CHAT_SECRET
         if not messages:
             return ""
         try:
-            # 1. JSON
             json_bytes = json.dumps(messages, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-            # 2. Compress
             compressed = zlib.compress(json_bytes, level=CHAT_COMPRESS_LEVEL)
-            # 3. Encrypt
             salt = os.urandom(cls.SALT_LEN)
             key = cls._derive_key(secret, salt)
             nonce = os.urandom(cls.NONCE_LEN)
             aesgcm = AESGCM(key)
             ciphertext = aesgcm.encrypt(nonce, compressed, None)
-            # 4. Header + payload
             header = cls.MAGIC + bytes([cls.VERSION]) + salt + nonce
-            payload = header + ciphertext
-            return base64.urlsafe_b64encode(payload).decode('ascii')
+            return base64.urlsafe_b64encode(header + ciphertext).decode('ascii')
         except Exception:
             return ""
 
     @classmethod
     def decode(cls, encoded: str, secret: str = None) -> list:
-        """Giải mã + giải nén → list[dict]."""
         if secret is None:
             secret = CHAT_SECRET
         if not encoded:
             return []
         try:
             raw = base64.urlsafe_b64decode(encoded.encode('ascii'))
-            if len(raw) < cls.HEADER_LEN + 16:
-                return []
             if not raw.startswith(cls.MAGIC):
                 return []
             version = raw[len(cls.MAGIC)]
@@ -535,7 +571,6 @@ class LTTPSecureChatCodec:
 
     @classmethod
     def is_encoded(cls, val) -> bool:
-        """Kiểm tra 1 string có phải là chat đã mã hóa không."""
         if not isinstance(val, str) or not val:
             return False
         try:
@@ -549,14 +584,11 @@ chat_codec = LTTPSecureChatCodec()
 
 
 # ==========================================
-# 2c. LTTP WRITE DATA — ASYNC WRITER
+# 2c. LTTP WRITE DATA
 # ==========================================
 class LTTPWriteData:
-    VERSION = "1.0.0"
-
     _lock = threading.Lock()
     _queue = deque()
-    _last_enqueued = 0.0
     _last_flushed = 0.0
     _last_error = ""
     _last_status = "idle"
@@ -565,16 +597,11 @@ class LTTPWriteData:
     _stop_event = threading.Event()
 
     @classmethod
-    def enqueue(cls, data: dict, immediate: bool = False) -> None:
+    def enqueue(cls, data: dict, immediate: bool = False):
         with cls._lock:
-            cls._queue.append({
-                "ts": time.time(),
-                "data": data,
-                "immediate": immediate,
-            })
+            cls._queue.append({"ts": time.time(), "data": data, "immediate": immediate})
             if len(cls._queue) > LTTP_WRITE_QUEUE_MAX:
                 cls._queue = deque(list(cls._queue)[-LTTP_WRITE_QUEUE_MAX:])
-            cls._last_enqueued = time.time()
             cls._last_status = "queued"
         cls._ensure_thread()
 
@@ -602,24 +629,18 @@ class LTTPWriteData:
             if not cls._queue:
                 return
             now = time.time()
-            oldest_ts = cls._queue[0]["ts"]
-            age = now - oldest_ts
-            has_immediate = any(item.get("immediate") for item in cls._queue)
-
-            should_flush = (
-                has_immediate
-                or age > LTTP_WRITE_DEBOUNCE_SEC
-                or (now - cls._last_flushed) > LTTP_WRITE_MAX_WAIT_SEC
-                or len(cls._queue) > LTTP_WRITE_QUEUE_MAX - 5
-            )
-            if not should_flush:
+            oldest = cls._queue[0]["ts"]
+            age = now - oldest
+            has_immediate = any(i.get("immediate") for i in cls._queue)
+            should = (has_immediate or age > LTTP_WRITE_DEBOUNCE_SEC
+                      or (now - cls._last_flushed) > LTTP_WRITE_MAX_WAIT_SEC
+                      or len(cls._queue) > LTTP_WRITE_QUEUE_MAX - 5)
+            if not should:
                 return
-
             latest = cls._queue[-1]["data"]
             cls._queue.clear()
             cls._last_flushed = now
             cls._last_status = "flushing"
-
         try:
             ok, msg = GitHubStorage.save_db(latest)
             with cls._lock:
@@ -647,11 +668,8 @@ class LTTPWriteData:
             with cls._lock:
                 cls._last_flushed = time.time()
                 cls._last_status = "saved" if ok else "error"
-                cls._last_error = "" if ok else msg[:200]
             return ok, msg
         except Exception as e:
-            with cls._lock:
-                cls._last_error = str(e)[:200]
             return False, str(e)
 
     @classmethod
@@ -662,49 +680,21 @@ class LTTPWriteData:
                 "last_status": cls._last_status,
                 "last_error": cls._last_error,
                 "flush_count": cls._flush_count,
-                "last_flushed": cls._last_flushed,
                 "thread_alive": cls._thread.is_alive() if cls._thread else False,
             }
-
-    @classmethod
-    def shutdown(cls):
-        cls._stop_event.set()
-        try:
-            cls.flush_now()
-        except Exception:
-            pass
 
 
 lttp_writer = LTTPWriteData()
 
 
 # ==========================================
-# 2d. LTTP MULTI-CHAT ENGINE — CHAT CHẠY SONG SONG
+# 2d. MULTI-CHAT ENGINE
 # ==========================================
 class LTTPMultiChatEngine:
-    """
-    Cho phép stream AI chạy nền trong thread riêng, không block UI.
-    
-    Kiến trúc:
-    - Mỗi chat có 1 "state" với:
-        * status: idle | running | completed | error | stopped
-        * queue: deque chứa (accumulated, done, err)
-        * accumulated: str tích lũy
-        * started_at, finished_at
-        * final_text, final_err
-    - Method start_stream(chat_id, ...) → spawn thread
-    - Method get_state(chat_id) → trả về snapshot
-    - Method stop(chat_id) → set stop event
-    - Method consume_queue(chat_id) → lấy hết chunks mới
-    
-    Thread an toàn: dùng lock per state.
-    """
-    VERSION = "1.0.0"
-
     _lock = threading.Lock()
-    _states = {}  # chat_id -> state dict
-    _threads = {}  # chat_id -> threading.Thread
-    _stop_events = {}  # chat_id -> threading.Event
+    _states = {}
+    _threads = {}
+    _stop_events = {}
 
     @classmethod
     def _create_state(cls):
@@ -724,16 +714,16 @@ class LTTPMultiChatEngine:
         with cls._lock:
             if chat_id not in cls._states:
                 cls._states[chat_id] = cls._create_state()
-            st_obj = cls._states[chat_id]
+            s = cls._states[chat_id]
             return {
-                "status": st_obj["status"],
-                "accumulated": st_obj["accumulated"],
-                "started_at": st_obj["started_at"],
-                "finished_at": st_obj["finished_at"],
-                "final_text": st_obj["final_text"],
-                "final_err": st_obj["final_err"],
-                "last_update": st_obj["last_update"],
-                "queue_size": len(st_obj["queue"]),
+                "status": s["status"],
+                "accumulated": s["accumulated"],
+                "started_at": s["started_at"],
+                "finished_at": s["finished_at"],
+                "final_text": s["final_text"],
+                "final_err": s["final_err"],
+                "last_update": s["last_update"],
+                "queue_size": len(s["queue"]),
             }
 
     @classmethod
@@ -745,7 +735,6 @@ class LTTPMultiChatEngine:
 
     @classmethod
     def consume_chunks(cls, chat_id: str) -> list:
-        """Lấy tất cả chunk mới trong queue, clear queue."""
         with cls._lock:
             if chat_id not in cls._states:
                 return []
@@ -768,9 +757,7 @@ class LTTPMultiChatEngine:
         system_instruction, generation_config, lang,
         typing_mode, typing_cps,
     ):
-        """Spawn thread để stream AI cho chat_id. Trả về True nếu start được."""
         with cls._lock:
-            # Nếu đã chạy → không start lại
             if chat_id in cls._states and cls._states[chat_id]["status"] == "running":
                 return False
             cls._states[chat_id] = cls._create_state()
@@ -788,7 +775,7 @@ class LTTPMultiChatEngine:
                     system_instruction=system_instruction,
                     generation_config=generation_config,
                     lang=lang,
-                    ui_placeholder=None,  # Không render trực tiếp trong thread
+                    ui_placeholder=None,
                     typing_mode=typing_mode,
                     typing_cps=typing_cps,
                     stop_event=stop_evt,
@@ -796,22 +783,21 @@ class LTTPMultiChatEngine:
                     with cls._lock:
                         if chat_id not in cls._states:
                             return
-                        st_obj = cls._states[chat_id]
-                        # Cap queue để tránh tràn RAM
-                        if len(st_obj["queue"]) < MULTI_CHAT_QUEUE_MAX:
-                            st_obj["queue"].append((accumulated, done, err))
-                        st_obj["accumulated"] = accumulated
-                        st_obj["last_update"] = time.time()
+                        s = cls._states[chat_id]
+                        if len(s["queue"]) < MULTI_CHAT_QUEUE_MAX:
+                            s["queue"].append((accumulated, done, err))
+                        s["accumulated"] = accumulated
+                        s["last_update"] = time.time()
                         if done:
-                            st_obj["final_text"] = accumulated
-                            st_obj["final_err"] = err
-                            st_obj["finished_at"] = time.time()
+                            s["final_text"] = accumulated
+                            s["final_err"] = err
+                            s["finished_at"] = time.time()
                             if err == "stopped":
-                                st_obj["status"] = "stopped"
+                                s["status"] = "stopped"
                             elif err is None:
-                                st_obj["status"] = "completed"
+                                s["status"] = "completed"
                             else:
-                                st_obj["status"] = "error"
+                                s["status"] = "error"
             except Exception as e:
                 with cls._lock:
                     if chat_id in cls._states:
@@ -827,7 +813,6 @@ class LTTPMultiChatEngine:
 
     @classmethod
     def cleanup_chat(cls, chat_id: str):
-        """Xóa state khi user xóa chat hoặc logout."""
         with cls._lock:
             if chat_id in cls._stop_events:
                 cls._stop_events[chat_id].set()
@@ -845,56 +830,736 @@ multi_chat = LTTPMultiChatEngine()
 
 
 # ==========================================
-# 2e. CUSTOM CSS
+# 2e. LTTP TOOL ENGINE
+# ==========================================
+class LTTPToolEngine:
+    """
+    Agentic search engine.
+    AI phân loại query → gọi tool → nhận kết quả → trả lời.
+    """
+    VERSION = "1.0.0"
+
+    _cache_lock = threading.Lock()
+    _cache = {}
+
+    # ---------- TOOL DEFINITIONS ----------
+    TOOL_CATEGORIES = {
+        "search": "Tìm kiếm web (DuckDuckGo, SearXNG, fallback)",
+        "wiki": "Tra cứu Wikipedia",
+        "weather": "Thời tiết hiện tại",
+        "currency": "Tỷ giá ngoại tệ",
+        "fetch": "Đọc nội dung URL",
+        "calc": "Tính toán biểu thức",
+    }
+
+    # ---------- CACHE ----------
+    @classmethod
+    def _cache_get(cls, key: str):
+        with cls._cache_lock:
+            entry = cls._cache.get(key)
+            if not entry:
+                return None
+            if time.time() - entry["ts"] > SEARCH_CACHE_TTL:
+                del cls._cache[key]
+                return None
+            return entry["data"]
+
+    @classmethod
+    def _cache_set(cls, key: str, data):
+        with cls._cache_lock:
+            if len(cls._cache) > SEARCH_CACHE_MAX:
+                oldest = min(cls._cache.items(), key=lambda x: x[1]["ts"])
+                del cls._cache[oldest[0]]
+            cls._cache[key] = {"ts": time.time(), "data": data}
+
+    @classmethod
+    def _cache_clear(cls):
+        with cls._cache_lock:
+            cls._cache.clear()
+
+    # ---------- QUERY CLASSIFIER ----------
+    @classmethod
+    def classify_query(cls, user_message: str, api_keys: list, model: str, lang: str) -> dict:
+        """
+        Dùng AI nhỏ để phân loại query → quyết định tool nào cần gọi.
+        Trả về dict: {
+            "needs_tools": bool,
+            "tools": [{"name": "search", "reason": "..."}],
+            "reasoning": str
+        }
+        """
+        if not user_message or len(user_message.strip()) < 3:
+            return {"needs_tools": False, "tools": [], "reasoning": "Query quá ngắn"}
+
+        classifier_prompt = (
+            "Bạn là module phân loại query. Nhiệm vụ: đọc câu hỏi và quyết định "
+            "AI có cần gọi tool tìm kiếm không.\n\n"
+            "CÁC TOOL CÓ SẴN:\n"
+            "- search: tìm kiếm web (giá vàng, tin tức, chứng khoán, sự kiện, "
+            "thông tin mới sau 2024...)\n"
+            "- wiki: tra Wikipedia (khái niệm, định nghĩa, nhân vật lịch sử, khoa học)\n"
+            "- weather: thời tiết hiện tại (hôm nay, tuần này, ở đâu đó...)\n"
+            "- currency: tỷ giá (USD, EUR sang VND...)\n"
+            "- calc: tính toán (biểu thức toán học rõ ràng)\n"
+            "- fetch: đọc URL (khi user cung cấp link cụ thể)\n\n"
+            "KHÔNG CẦN TOOL khi:\n"
+            "- Câu hỏi kiến thức chung AI đã biết\n"
+            "- Viết code, văn bản, sáng tạo\n"
+            "- Chào hỏi, trò chuyện\n"
+            "- Giải thích khái niệm cơ bản\n\n"
+            "CẦN TOOL khi:\n"
+            "- Hỏi thông tin thời gian thực (giá cả, tin tức, thời tiết)\n"
+            "- Hỏi dữ liệu cụ thể cần verify\n"
+            "- Tính toán phức tạp cần chính xác\n"
+            "- User đưa link muốn đọc nội dung\n\n"
+            f'Câu hỏi: "{user_message}"\n\n'
+            "Trả về JSON (KHÔNG markdown, KHÔNG giải thích thêm):\n"
+            '{"needs_tools": true/false, "tools": [{"name": "search", '
+            '"query": "...", "reason": "..."}], "reasoning": "..."}'
+        )
+
+        try:
+            response, err = call_gemini_with_failover(
+                prompt_inputs=[classifier_prompt],
+                api_keys=api_keys,
+                preferred_model="gemini-3.5-flash-lite",
+                generation_config={"temperature": 0.1, "max_output_tokens": 300},
+                lang=lang,
+            )
+            if response:
+                # Parse JSON
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group(0))
+                    return {
+                        "needs_tools": bool(result.get("needs_tools", False)),
+                        "tools": result.get("tools", []),
+                        "reasoning": result.get("reasoning", ""),
+                    }
+        except Exception:
+            pass
+
+        # Fallback: keyword-based classification
+        return cls._classify_fallback(user_message)
+
+    @classmethod
+    def _classify_fallback(cls, msg: str) -> dict:
+        msg_lower = msg.lower()
+        tools = []
+
+        weather_kw = ["thời tiết", "nhiệt độ", "mưa", "nắng", "weather", "temperature"]
+        if any(k in msg_lower for k in weather_kw):
+            tools.append({"name": "weather", "city": msg, "reason": "weather keyword"})
+
+        currency_kw = ["tỷ giá", "usd", "eur", "đô la", "ngoại tệ", "exchange rate"]
+        if any(k in msg_lower for k in currency_kw):
+            tools.append({"name": "currency", "base": "USD", "target": "VND",
+                          "reason": "currency keyword"})
+
+        # Giá cả, tin tức, sự kiện → search
+        search_kw = [
+            "giá", "tin tức", "mới nhất", "hôm nay", "bây giờ", "hiện tại",
+            "sự kiện", "chứng khoán", "cổ phiếu", "bitcoin", "vàng",
+            "bóng đá", "thể thao", "thời sự", "tai nạn", "dịch bệnh"
+        ]
+        if any(k in msg_lower for k in search_kw):
+            tools.append({"name": "search", "query": msg, "limit": 3,
+                          "region": "vn", "reason": "news/price keyword"})
+
+        # URL → fetch
+        if re.search(r'https?://\S+', msg):
+            urls = re.findall(r'https?://\S+', msg)
+            if urls:
+                tools.append({"name": "fetch", "url": urls[0],
+                              "reason": "URL detected"})
+
+        # Calc
+        if re.search(r'\d+\s*[\+\-\*/]\s*\d+', msg):
+            tools.append({"name": "calc", "expression": msg,
+                          "reason": "arithmetic expression"})
+
+        # Định nghĩa → wiki
+        wiki_kw = ["là gì", "định nghĩa", "khái niệm", "what is", "who is", "ai là"]
+        if any(k in msg_lower for k in wiki_kw):
+            tools.append({"name": "wiki", "topic": msg, "lang": "vi",
+                          "reason": "definition keyword"})
+
+        return {
+            "needs_tools": len(tools) > 0,
+            "tools": tools,
+            "reasoning": "fallback keyword classifier" if tools else "no keyword match",
+        }
+
+    # ---------- TOOL EXECUTORS ----------
+    @classmethod
+    def exec_search(cls, query: str, limit: int = 3, region: str = "vn") -> list:
+        """
+        Tìm kiếm qua: DuckDuckGo HTML → SearXNG → trả kết quả.
+        Cache theo (query, limit, region).
+        """
+        cache_key = f"search:{query}:{limit}:{region}"
+        cached = cls._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        results = []
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0"
+
+        # 1. DuckDuckGo HTML
+        try:
+            encoded_q = quote(query)
+            ddg_url = f"https://html.duckduckgo.com/html/?q={encoded_q}"
+            resp = requests.get(
+                ddg_url,
+                headers={"User-Agent": ua},
+                timeout=TOOL_TIMEOUT,
+                allow_redirects=True,
+            )
+            if resp.status_code == 200:
+                html = resp.text
+                # Parse kết quả DDG HTML
+                result_blocks = re.findall(
+                    r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                    r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
+                    html, re.DOTALL
+                )
+                for url, title, snippet in result_blocks[:limit]:
+                    title_clean = re.sub(r'<[^>]+>', '', title).strip()
+                    snippet_clean = re.sub(r'<[^>]+>', '', snippet).strip()
+                    if title_clean and url:
+                        results.append({
+                            "title": title_clean,
+                            "url": url,
+                            "snippet": snippet_clean[:300],
+                            "source": "DuckDuckGo",
+                        })
+        except Exception:
+            pass
+
+        # 2. SearXNG public fallback
+        if not results:
+            searxng_instances = [
+                "https://searx.be",
+                "https://searx.tiekoetter.com",
+            ]
+            for instance in searxng_instances:
+                try:
+                    resp = requests.get(
+                        f"{instance}/search",
+                        params={"q": query, "format": "json", "language": "vi"},
+                        headers={"User-Agent": ua},
+                        timeout=TOOL_TIMEOUT,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        for r in data.get("results", [])[:limit]:
+                            results.append({
+                                "title": r.get("title", ""),
+                                "url": r.get("url", ""),
+                                "snippet": (r.get("content", "") or "")[:300],
+                                "source": f"SearXNG ({urlparse(instance).netloc})",
+                            })
+                        if results:
+                            break
+                except Exception:
+                    continue
+
+        cls._cache_set(cache_key, results)
+        return results
+
+    @classmethod
+    def exec_wiki(cls, topic: str, lang: str = "vi") -> dict:
+        """Tra Wikipedia."""
+        cache_key = f"wiki:{topic}:{lang}"
+        cached = cls._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        result = {"found": False, "title": "", "extract": "", "url": ""}
+
+        # Thử lang trước, nếu không có thì thử lang kia
+        langs_to_try = [lang, "en" if lang == "vi" else "vi"]
+        for try_lang in langs_to_try:
+            try:
+                url = f"https://{try_lang}.wikipedia.org/api/rest_v1/page/summary/{quote(topic)}"
+                resp = requests.get(
+                    url,
+                    headers={"User-Agent": "LTTP-AI-Online/1.49.0"},
+                    timeout=TOOL_TIMEOUT,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result = {
+                        "found": True,
+                        "title": data.get("title", ""),
+                        "extract": data.get("extract", ""),
+                        "url": data.get("content_urls", {}).get("desktop", {}).get("page", ""),
+                        "lang": try_lang,
+                    }
+                    break
+            except Exception:
+                continue
+
+        cls._cache_set(cache_key, result)
+        return result
+
+    @classmethod
+    def exec_weather(cls, city: str) -> dict:
+        """Thời tiết qua Open-Meteo (free, không cần API key)."""
+        cache_key = f"weather:{city}"
+        cached = cls._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        result = {"found": False}
+        try:
+            # Geocoding
+            geo_resp = requests.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": city, "count": 1, "language": "vi"},
+                timeout=TOOL_TIMEOUT,
+            )
+            if geo_resp.status_code == 200:
+                geo_data = geo_resp.json()
+                if geo_data.get("results"):
+                    loc = geo_data["results"][0]
+                    lat, lon = loc["latitude"], loc["longitude"]
+                    name = loc.get("name", city)
+
+                    # Weather
+                    w_resp = requests.get(
+                        "https://api.open-meteo.com/v1/forecast",
+                        params={
+                            "latitude": lat, "longitude": lon,
+                            "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
+                            "timezone": "auto",
+                        },
+                        timeout=TOOL_TIMEOUT,
+                    )
+                    if w_resp.status_code == 200:
+                        w = w_resp.json().get("current", {})
+                        result = {
+                            "found": True,
+                            "city": name,
+                            "temperature": w.get("temperature_2m"),
+                            "humidity": w.get("relative_humidity_2m"),
+                            "wind": w.get("wind_speed_10m"),
+                            "code": w.get("weather_code"),
+                            "time": w.get("time"),
+                        }
+        except Exception:
+            pass
+
+        cls._cache_set(cache_key, result)
+        return result
+
+    @classmethod
+    def exec_currency(cls, base: str = "USD", target: str = "VND") -> dict:
+        """Tỷ giá qua exchangerate.host (free)."""
+        cache_key = f"currency:{base}:{target}"
+        cached = cls._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        result = {"found": False, "base": base, "target": target}
+        try:
+            resp = requests.get(
+                "https://api.exchangerate.host/convert",
+                params={"from": base, "to": target, "amount": 1},
+                timeout=TOOL_TIMEOUT,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success") and data.get("result"):
+                    result = {
+                        "found": True,
+                        "base": base,
+                        "target": target,
+                        "rate": data["result"],
+                        "date": data.get("date", ""),
+                    }
+        except Exception:
+            pass
+
+        cls._cache_set(cache_key, result)
+        return result
+
+    @classmethod
+    def exec_fetch(cls, url: str) -> dict:
+        """Fetch URL, extract nội dung chính."""
+        safe, reason = LTTPSecurity.check_url_safe(url)
+        if not safe:
+            return {"found": False, "error": f"URL bị chặn: {reason}"}
+
+        cache_key = f"fetch:{url}"
+        cached = cls._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        result = {"found": False}
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=TOOL_TIMEOUT,
+                stream=True,
+            )
+            if resp.status_code == 200:
+                # Giới hạn size
+                content = b""
+                for chunk in resp.iter_content(8192):
+                    content += chunk
+                    if len(content) > TOOL_RESPONSE_MAX_BYTES:
+                        break
+                html = content.decode("utf-8", errors="ignore")
+
+                # Extract title
+                title_m = re.search(r'<title[^>]*>(.*?)</title>', html, re.I | re.S)
+                title = re.sub(r'<[^>]+>', '', title_m.group(1)).strip() if title_m else ""
+
+                # Strip junk
+                clean = html
+                for junk in ("script", "style", "nav", "footer", "aside", "iframe"):
+                    clean = re.sub(rf'<{junk}[^>]*>.*?</{junk}>', '', clean,
+                                   flags=re.I | re.S)
+                text = re.sub(r'<[^>]+>', ' ', clean)
+                text = re.sub(r'\s+', ' ', text).strip()
+
+                result = {
+                    "found": True,
+                    "url": url,
+                    "title": title,
+                    "text": text[:4000],
+                    "length": len(text),
+                }
+        except Exception as e:
+            result = {"found": False, "error": str(e)[:200]}
+
+        cls._cache_set(cache_key, result)
+        return result
+
+    @classmethod
+    def exec_calc(cls, expression: str) -> dict:
+        """Tính toán an toàn."""
+        import ast
+        import operator
+
+        ops = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+            ast.Mod: operator.mod,
+            ast.USub: operator.neg,
+            ast.UAdd: operator.pos,
+        }
+
+        def safe_eval(node):
+            if isinstance(node, ast.Num):
+                return node.n
+            elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return node.value
+            elif isinstance(node, ast.BinOp):
+                return ops[type(node.op)](safe_eval(node.left), safe_eval(node.right))
+            elif isinstance(node, ast.UnaryOp):
+                return ops[type(node.op)](safe_eval(node.operand))
+            else:
+                raise ValueError("Không hỗ trợ")
+
+        try:
+            # Chỉ lấy phần biểu thức
+            expr = expression.strip()
+            # Loại bỏ chữ
+            expr = re.sub(r'[^\d\+\-\*/\.\(\)\s%\^]', '', expr).strip()
+            if not expr:
+                return {"found": False, "error": "Không có biểu thức"}
+            expr = expr.replace("^", "**")
+            tree = ast.parse(expr, mode='eval')
+            result = safe_eval(tree.body)
+            return {"found": True, "expression": expr, "result": result}
+        except Exception as e:
+            return {"found": False, "error": str(e)[:100]}
+
+    @classmethod
+    def exec_custom_tool(cls, tool: dict, params: dict) -> dict:
+        """
+        Thực thi custom tool do user tạo.
+        tool = {name, url, method, headers, params, json_path, ...}
+        """
+        url_template = tool.get("url", "")
+        method = tool.get("method", "GET").upper()
+
+        # Replace {query} và các placeholder khác
+        url = url_template
+        for k, v in params.items():
+            url = url.replace(f"{{{k}}}", quote(str(v)))
+
+        safe, reason = LTTPSecurity.check_url_safe(url)
+        if not safe:
+            return {"found": False, "error": f"URL bị chặn: {reason}"}
+
+        # Merge params
+        base_params = {}
+        params_str = tool.get("params", "").strip()
+        if params_str:
+            for pair in params_str.split("&"):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    base_params[k.strip()] = v.strip()
+        base_params.update(params)
+
+        headers = {"User-Agent": "LTTP-AI-Online/1.49.0"}
+        headers_str = tool.get("headers", "").strip()
+        if headers_str:
+            for line in headers_str.split("\n"):
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    headers[k.strip()] = v.strip()
+
+        try:
+            if method == "GET":
+                resp = requests.get(url, headers=headers, params=base_params,
+                                     timeout=TOOL_TIMEOUT, stream=True)
+            else:
+                resp = requests.post(url, headers=headers, json=base_params,
+                                      timeout=TOOL_TIMEOUT, stream=True)
+
+            if resp.status_code != 200:
+                return {"found": False, "error": f"HTTP {resp.status_code}"}
+
+            content = b""
+            for chunk in resp.iter_content(8192):
+                content += chunk
+                if len(content) > TOOL_RESPONSE_MAX_BYTES:
+                    break
+
+            text = content.decode("utf-8", errors="ignore")
+
+            # Nếu là JSON
+            response_format = tool.get("response_format", "json").lower()
+            if response_format == "json":
+                try:
+                    data = json.loads(text)
+                    # Hybrid: nếu JSON ngắn → trả nguyên, dài → extract path
+                    if len(text) <= TOOL_SHORT_JSON_THRESHOLD:
+                        return {"found": True, "raw": data, "length": len(text),
+                                "mode": "raw_short"}
+                    else:
+                        json_path = tool.get("json_path", "").strip()
+                        if json_path:
+                            extracted = cls._apply_json_path(data, json_path)
+                            return {"found": True, "extracted": extracted[:20],
+                                    "length": len(text), "mode": "path_extract"}
+                        else:
+                            return {"found": True, "raw": data, "length": len(text),
+                                    "mode": "raw_long_truncated", "truncated": True}
+                except json.JSONDecodeError:
+                    pass
+
+            # Nếu HTML → strip
+            clean = text
+            for junk in ("script", "style"):
+                clean = re.sub(rf'<{junk}[^>]*>.*?</{junk}>', '', clean, flags=re.I | re.S)
+            clean = re.sub(r'<[^>]+>', ' ', clean)
+            clean = re.sub(r'\s+', ' ', clean).strip()
+
+            return {"found": True, "text": clean[:4000], "length": len(text)}
+
+        except Exception as e:
+            return {"found": False, "error": str(e)[:200]}
+
+    @staticmethod
+    def _apply_json_path(data, path: str):
+        """
+        Apply đơn giản: "data.items[].title" → list các title.
+        """
+        try:
+            parts = re.split(r'\.(?![^\[]*\])', path)
+            current = data
+            for part in parts:
+                # Check array notation
+                array_match = re.match(r'^(\w+)\[\]$', part)
+                if array_match:
+                    field = array_match.group(1)
+                    if isinstance(current, dict) and field in current:
+                        return current[field]
+                    return []
+                if isinstance(current, dict) and part in current:
+                    current = current[part]
+                else:
+                    return []
+            return current if isinstance(current, list) else [current]
+        except Exception:
+            return []
+
+    @classmethod
+    def execute_tool_call(cls, tool_name: str, params: dict, custom_tools: list) -> dict:
+        """Dispatch tool call."""
+        try:
+            if tool_name == "search":
+                results = cls.exec_search(
+                    query=params.get("query", ""),
+                    limit=int(params.get("limit", 3)),
+                    region=params.get("region", "vn"),
+                )
+                return {"tool": "search", "query": params.get("query"), "results": results,
+                        "found": len(results) > 0}
+            elif tool_name == "wiki":
+                return {"tool": "wiki", **cls.exec_wiki(
+                    topic=params.get("topic", ""),
+                    lang=params.get("lang", "vi"),
+                )}
+            elif tool_name == "weather":
+                return {"tool": "weather", **cls.exec_weather(
+                    city=params.get("city", ""),
+                )}
+            elif tool_name == "currency":
+                return {"tool": "currency", **cls.exec_currency(
+                    base=params.get("base", "USD"),
+                    target=params.get("target", "VND"),
+                )}
+            elif tool_name == "fetch":
+                return {"tool": "fetch", **cls.exec_fetch(
+                    url=params.get("url", ""),
+                )}
+            elif tool_name == "calc":
+                return {"tool": "calc", **cls.exec_calc(
+                    expression=params.get("expression", ""),
+                )}
+            else:
+                # Custom tool
+                for ct in custom_tools:
+                    if ct.get("name") == tool_name:
+                        return {"tool": tool_name,
+                                **cls.exec_custom_tool(ct, params)}
+                return {"tool": tool_name, "found": False,
+                        "error": f"Tool không tồn tại: {tool_name}"}
+        except Exception as e:
+            return {"tool": tool_name, "found": False, "error": str(e)[:200]}
+
+    # ---------- PARSE TOOL CALLS ----------
+    @classmethod
+    def parse_tool_calls(cls, text: str) -> list:
+        """Parse <tool:name attr="value"/> từ response AI."""
+        pattern = r'<tool:(\w+)((?:\s+\w+="[^"]*")*)\s*/>'
+        calls = []
+        for match in re.finditer(pattern, text):
+            tool_name = match.group(1)
+            attrs_str = match.group(2)
+            attrs = {}
+            for am in re.finditer(r'(\w+)="([^"]*)"', attrs_str):
+                attrs[am.group(1)] = am.group(2)
+            calls.append({
+                "name": tool_name,
+                "params": attrs,
+                "raw": match.group(0),
+            })
+        return calls
+
+    @classmethod
+    def strip_tool_calls(cls, text: str) -> str:
+        """Xóa tool calls khỏi text hiển thị."""
+        return re.sub(r'<tool:\w+(?:\s+\w+="[^"]*")*\s*/>', '', text).strip()
+
+    # ---------- FORMAT RESULTS ----------
+    @classmethod
+    def format_results_for_ai(cls, results: list) -> str:
+        """Format kết quả tool để feed lại cho AI."""
+        parts = []
+        for i, r in enumerate(results, 1):
+            tool = r.get("tool", "?")
+            parts.append(f"=== Tool {i}: {tool} ===")
+            if not r.get("found"):
+                parts.append(f"❌ Không tìm thấy: {r.get('error', 'unknown')}")
+                parts.append("")
+                continue
+
+            if tool == "search":
+                for j, item in enumerate(r.get("results", []), 1):
+                    parts.append(f"[{j}] {item.get('title', '')}")
+                    parts.append(f"    URL: {item.get('url', '')}")
+                    parts.append(f"    {item.get('snippet', '')}")
+            elif tool == "wiki":
+                parts.append(f"Tiêu đề: {r.get('title', '')}")
+                parts.append(f"Nội dung: {r.get('extract', '')[:1500]}")
+                parts.append(f"URL: {r.get('url', '')}")
+            elif tool == "weather":
+                parts.append(f"Thành phố: {r.get('city', '')}")
+                parts.append(f"Nhiệt độ: {r.get('temperature', '?')}°C")
+                parts.append(f"Độ ẩm: {r.get('humidity', '?')}%")
+                parts.append(f"Gió: {r.get('wind', '?')} km/h")
+            elif tool == "currency":
+                parts.append(f"1 {r.get('base')} = {r.get('rate')} {r.get('target')}")
+                parts.append(f"Ngày: {r.get('date', '')}")
+            elif tool == "fetch":
+                parts.append(f"Tiêu đề: {r.get('title', '')}")
+                parts.append(f"Nội dung: {r.get('text', '')[:2000]}")
+            elif tool == "calc":
+                parts.append(f"Biểu thức: {r.get('expression', '')}")
+                parts.append(f"Kết quả: {r.get('result', '')}")
+            else:
+                # Custom tool
+                if "text" in r:
+                    parts.append(f"Nội dung: {r['text'][:1500]}")
+                elif "extracted" in r:
+                    parts.append(f"Đã trích xuất {len(r['extracted'])} items:")
+                    for item in r["extracted"][:10]:
+                        parts.append(f"  - {str(item)[:200]}")
+                elif "raw" in r:
+                    raw_str = json.dumps(r["raw"], ensure_ascii=False)
+                    parts.append(f"Raw JSON: {raw_str[:1500]}")
+            parts.append("")
+
+        return "\n".join(parts)
+
+
+tool_engine = LTTPToolEngine()
+
+
+# ==========================================
+# 2f. CUSTOM CSS
 # ==========================================
 st.markdown("""
 <style>
     html, body, [data-testid="stAppViewContainer"], section.main {
         overflow-anchor: none !important;
     }
-
     .main-header {
         background: linear-gradient(90deg, #667eea, #764ba2, #f093fb, #f5576c, #4facfe, #00f2fe, #667eea);
         background-size: 400% 400%;
         -webkit-background-clip: text;
         background-clip: text;
         -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        font-size: 2.5rem;
-        margin-bottom: 0.2rem;
-        animation: gradientShift 8s ease infinite;
-        line-height: 1.1;
+        font-weight: 800; font-size: 2.5rem; margin-bottom: 0.2rem;
+        animation: gradientShift 8s ease infinite; line-height: 1.1;
     }
     @keyframes gradientShift {
         0% { background-position: 0% 50%; }
         50% { background-position: 100% 50%; }
         100% { background-position: 0% 50%; }
     }
-
     .ai-loading-box {
         display: flex; align-items: center; gap: 12px;
-        padding: 12px 18px;
-        background: rgba(102, 126, 234, 0.08);
+        padding: 12px 18px; background: rgba(102, 126, 234, 0.08);
         border: 1px solid rgba(102, 126, 234, 0.2);
         border-radius: 12px; margin-bottom: 15px;
     }
     .spinner {
-        flex-shrink: 0;
-        width: 22px; height: 22px;
+        flex-shrink: 0; width: 22px; height: 22px;
         border: 3px solid rgba(102, 126, 234, 0.2);
-        border-top: 3px solid #667eea;
-        border-radius: 50%; animation: spin 0.8s linear infinite;
+        border-top: 3px solid #667eea; border-radius: 50%;
+        animation: spin 0.8s linear infinite;
     }
     .ai-loading-text {
         color: #667eea; font-weight: 600; font-size: 0.95rem;
         background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #667eea 100%);
-        background-size: 200% auto;
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-size: 200% auto; -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         animation: shine 2s linear infinite;
     }
     .typing-cursor {
-        display: inline-block;
-        width: 8px; height: 1.1em;
+        display: inline-block; width: 8px; height: 1.1em;
         background: #667eea; margin-left: 2px; vertical-align: text-bottom;
         animation: blink 1s step-end infinite;
     }
@@ -906,14 +1571,12 @@ st.markdown("""
         animation: pulse 1.6s infinite; margin-right: 6px;
     }
     .rate-limit-box {
-        padding: 14px 18px;
-        background: rgba(251, 191, 36, 0.1);
+        padding: 14px 18px; background: rgba(251, 191, 36, 0.1);
         border: 1px solid rgba(251, 191, 36, 0.35);
         border-radius: 12px; margin-bottom: 15px;
     }
     .rate-limit-text { color: #fbbf24; font-weight: 600; font-size: 0.95rem; }
     .rate-limit-countdown { color: #f59e0b; font-weight: 800; font-size: 1.1rem; }
-
     @keyframes spin { 0%{transform:rotate(0deg);} 100%{transform:rotate(360deg);} }
     @keyframes shine { to { background-position: 200% center; } }
     @keyframes pulse {
@@ -927,7 +1590,6 @@ st.markdown("""
         padding: 10px 14px; border-radius: 10px; margin-bottom: 12px;
     }
     .stButton button { width: 100%; }
-
     .badge-test { background: rgba(168,85,247,0.15); color:#a855f7; }
     .badge-guest { background: rgba(148,163,184,0.15); color:#94a3b8; }
     .status-badge {
@@ -935,7 +1597,6 @@ st.markdown("""
         border-radius: 6px; font-size: 0.75rem;
         font-weight: 600; margin-left: 6px;
     }
-
     .ai-disclaimer {
         font-size: 0.78rem; font-style: italic;
         color: rgba(148,163,184,0.85);
@@ -950,7 +1611,6 @@ st.markdown("""
         font-weight: 600; color:#667eea;
         text-align: center; margin-bottom: 10px;
     }
-
     .announcement-banner {
         padding: 16px 20px;
         background: linear-gradient(135deg, rgba(102,126,234,0.12), rgba(118,75,162,0.12));
@@ -961,8 +1621,7 @@ st.markdown("""
     .announcement-header {
         display: flex; align-items: center; gap: 8px;
         font-size: 1.05rem; font-weight: 800;
-        color: #667eea; margin-bottom: 8px;
-        flex-wrap: wrap;
+        color: #667eea; margin-bottom: 8px; flex-wrap: wrap;
     }
     .announcement-body {
         font-size: 0.95rem; color: #e2e8f0;
@@ -973,7 +1632,6 @@ st.markdown("""
         color: #94a3b8; font-style: italic;
         border-top: 1px dashed rgba(148,163,184,0.25); padding-top: 8px;
     }
-
     .maintenance-banner {
         padding: 18px 22px;
         background: linear-gradient(90deg, rgba(239,68,68,0.15), rgba(220,38,38,0.1));
@@ -986,8 +1644,7 @@ st.markdown("""
         margin-top: 14px; padding: 12px 16px;
         background: rgba(251,191,36,0.1);
         border-left: 4px solid #fbbf24;
-        border-radius: 8px;
-        font-size: 0.95rem; color: #fbbf24;
+        border-radius: 8px; font-size: 0.95rem; color: #fbbf24;
         font-style: italic; text-align: left;
     }
     .test-notice {
@@ -1001,30 +1658,25 @@ st.markdown("""
     .blocked-banner {
         padding: 18px 22px;
         background: linear-gradient(90deg, rgba(239,68,68,0.2), rgba(220,38,38,0.15));
-        border: 2px solid #ef4444;
-        border-radius: 12px; margin-bottom: 16px;
+        border: 2px solid #ef4444; border-radius: 12px; margin-bottom: 16px;
         text-align: center; color: #ef4444;
         font-weight: 800; font-size: 1.1rem;
     }
     .admin-panel {
-        padding: 16px;
-        background: rgba(251,191,36,0.05);
+        padding: 16px; background: rgba(251,191,36,0.05);
         border: 1px solid rgba(251,191,36,0.25);
         border-radius: 12px; margin-bottom: 16px;
     }
     .stat-card {
-        padding: 14px 18px;
-        background: rgba(102,126,234,0.08);
+        padding: 14px 18px; background: rgba(102,126,234,0.08);
         border: 1px solid rgba(102,126,234,0.2);
         border-radius: 10px; text-align: center;
     }
     .stat-value { font-size:1.8rem; font-weight:800; color:#667eea; line-height:1.1; }
     .stat-label { font-size:0.8rem; color:#94a3b8; margin-top:4px; font-weight:500; }
-
     .alert-card {
         padding: 12px 14px; margin-bottom: 10px;
-        border-radius: 10px;
-        border-left: 4px solid #94a3b8;
+        border-radius: 10px; border-left: 4px solid #94a3b8;
         background: rgba(255,255,255,0.02);
     }
     .alert-card.low { border-left-color: #94a3b8; }
@@ -1033,14 +1685,11 @@ st.markdown("""
     .alert-card.critical { border-left-color: #ef4444; background: rgba(239,68,68,0.07); }
     .alert-meta { font-size: 0.78rem; color: #94a3b8; margin-bottom: 4px; }
     .alert-msg { font-size: 0.9rem; color: #e2e8f0; word-break: break-word; }
-
     .guest-banner {
-        padding: 10px 14px;
-        background: rgba(148,163,184,0.1);
+        padding: 10px 14px; background: rgba(148,163,184,0.1);
         border: 1px solid rgba(148,163,184,0.3);
         border-radius: 10px; font-size: 0.85rem;
-        color: #94a3b8; text-align: center;
-        margin-bottom: 12px;
+        color: #94a3b8; text-align: center; margin-bottom: 12px;
     }
     .traffic-row {
         padding: 6px 10px; margin: 3px 0;
@@ -1080,7 +1729,6 @@ st.markdown("""
         border-left: 3px solid #10b981;
         border-radius: 6px; font-size: 0.88rem; color:#10b981;
     }
-
     .typing-mode-badge {
         display: inline-block; padding: 2px 8px;
         border-radius: 6px; font-size: 0.72rem;
@@ -1099,46 +1747,30 @@ st.markdown("""
         padding: 12px 16px;
         background: rgba(102,126,234,0.06);
         border-left: 3px solid #667eea;
-        border-radius: 8px;
-        font-size: 0.85rem;
-        color: #e2e8f0;
-        white-space: pre-wrap;
-        word-break: break-word;
-        max-height: 500px;
-        overflow-y: auto;
-        line-height: 1.6;
+        border-radius: 8px; font-size: 0.85rem;
+        color: #e2e8f0; white-space: pre-wrap;
+        word-break: break-word; max-height: 500px;
+        overflow-y: auto; line-height: 1.6;
     }
     .quota-warning {
-        padding: 10px 14px;
-        background: rgba(251,191,36,0.1);
+        padding: 10px 14px; background: rgba(251,191,36,0.1);
         border: 1px solid rgba(251,191,36,0.35);
-        border-radius: 10px;
-        font-size: 0.85rem;
-        color: #fbbf24;
-        margin-bottom: 12px;
+        border-radius: 10px; font-size: 0.85rem;
+        color: #fbbf24; margin-bottom: 12px;
     }
-    .lttp-stop-gen {
-        transition: all 0.2s ease;
-    }
+    .lttp-stop-gen { transition: all 0.2s ease; }
     .lttp-stop-gen:hover {
         background: rgba(239,68,68,0.25) !important;
         border-color: rgba(239,68,68,0.7) !important;
     }
-
     .lttp-retry-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 5px 12px;
-        margin-top: 8px;
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 5px 12px; margin-top: 8px;
         background: rgba(102,126,234,0.12);
         border: 1px solid rgba(102,126,234,0.35);
-        border-radius: 8px;
-        color: #667eea;
-        font-size: 0.8rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.15s ease;
+        border-radius: 8px; color: #667eea;
+        font-size: 0.8rem; font-weight: 600;
+        cursor: pointer; transition: all 0.15s ease;
     }
     .lttp-retry-btn:hover {
         background: rgba(102,126,234,0.25);
@@ -1150,56 +1782,31 @@ st.markdown("""
         border: 1px solid rgba(239,68,68,0.3);
         border-left: 4px solid #ef4444;
         border-radius: 10px;
-        font-size: 0.88rem;
-        color: #ef4444;
-        margin: 6px 0;
+        font-size: 0.88rem; color: #ef4444; margin: 6px 0;
     }
-
     .tech-card {
-        padding: 12px 14px;
-        margin: 8px 0;
+        padding: 12px 14px; margin: 8px 0;
         background: linear-gradient(135deg, rgba(102,126,234,0.08), rgba(118,75,162,0.08));
         border: 1px solid rgba(102,126,234,0.25);
         border-left: 4px solid #667eea;
         border-radius: 10px;
     }
     .tech-card-title {
-        font-weight: 800;
-        color: #667eea;
-        font-size: 0.92rem;
+        font-weight: 800; color: #667eea; font-size: 0.92rem;
         margin-bottom: 4px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex-wrap: wrap;
+        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     }
-    .tech-card-desc {
-        font-size: 0.82rem;
-        color: #cbd5e1;
-        line-height: 1.5;
-    }
+    .tech-card-desc { font-size: 0.82rem; color: #cbd5e1; line-height: 1.5; }
     .tech-card-tag {
-        display: inline-block;
-        padding: 1px 7px;
-        margin-left: 4px;
-        border-radius: 6px;
-        font-size: 0.65rem;
-        font-weight: 700;
-        background: rgba(16,185,129,0.15);
-        color: #10b981;
+        display: inline-block; padding: 1px 7px; margin-left: 4px;
+        border-radius: 6px; font-size: 0.65rem; font-weight: 700;
+        background: rgba(16,185,129,0.15); color: #10b981;
         border: 1px solid rgba(16,185,129,0.3);
     }
-
-    /* Multi-chat running badge */
     .chat-running-badge {
-        display: inline-block;
-        padding: 1px 6px;
-        margin-left: 4px;
-        border-radius: 4px;
-        font-size: 0.62rem;
-        font-weight: 700;
-        background: rgba(245,158,11,0.2);
-        color: #f59e0b;
+        display: inline-block; padding: 1px 6px; margin-left: 4px;
+        border-radius: 4px; font-size: 0.62rem; font-weight: 700;
+        background: rgba(245,158,11,0.2); color: #f59e0b;
         border: 1px solid rgba(245,158,11,0.4);
         animation: pulseBadge 1.5s ease-in-out infinite;
     }
@@ -1207,18 +1814,46 @@ st.markdown("""
         0%,100% { opacity: 1; }
         50% { opacity: 0.6; }
     }
-
-    /* Encrypted data notice */
-    .encrypted-notice {
-        padding: 8px 12px;
-        background: rgba(16,185,129,0.06);
-        border: 1px solid rgba(16,185,129,0.25);
+    .tool-call-card {
+        padding: 10px 12px; margin: 6px 0;
+        background: rgba(102,126,234,0.06);
+        border: 1px solid rgba(102,126,234,0.2);
+        border-left: 3px solid #667eea;
         border-radius: 8px;
-        font-size: 0.78rem;
-        color: #10b981;
-        margin: 6px 0;
+        font-size: 0.85rem;
     }
-
+    .tool-call-title {
+        font-weight: 700; color: #667eea;
+        margin-bottom: 4px;
+        display: flex; align-items: center; gap: 6px;
+    }
+    .tool-call-result {
+        font-size: 0.8rem; color: #cbd5e1;
+        line-height: 1.5; margin-top: 4px;
+    }
+    .tool-call-error {
+        color: #ef4444;
+    }
+    .custom-tool-card {
+        padding: 12px 14px; margin: 8px 0;
+        background: rgba(102,126,234,0.05);
+        border: 1px solid rgba(102,126,234,0.25);
+        border-radius: 10px;
+    }
+    .custom-tool-card.off {
+        opacity: 0.55;
+        background: rgba(148,163,184,0.05);
+        border-color: rgba(148,163,184,0.2);
+    }
+    .custom-tool-name {
+        font-weight: 800; color: #667eea;
+        font-size: 0.9rem; margin-bottom: 4px;
+    }
+    .custom-tool-url {
+        font-family: monospace; font-size: 0.75rem;
+        color: #94a3b8; margin-bottom: 6px;
+        word-break: break-all;
+    }
     section[data-testid="stChatInput"] button[aria-label*="upload" i],
     section[data-testid="stChatInput"] button[aria-label*="Attach" i],
     section[data-testid="stChatInput"] button[aria-label*="file" i],
@@ -1235,7 +1870,6 @@ st.markdown("""
         opacity: 0 !important;
         pointer-events: none !important;
     }
-
     @media (max-width: 1024px) {
         .main-header { font-size: 2rem !important; }
         section.main .block-container {
@@ -1245,16 +1879,11 @@ st.markdown("""
             padding-bottom: 70px !important;
             max-width: 100% !important;
         }
-        .stat-card { padding: 12px 14px !important; }
-        .stat-value { font-size: 1.5rem !important; }
-        .stat-label { font-size: 0.75rem !important; }
     }
-
     @media (max-width: 768px) {
         .main-header { font-size: 1.6rem !important; }
         .stButton button {
-            min-height: 44px !important;
-            font-size: 0.95rem !important;
+            min-height: 44px !important; font-size: 0.95rem !important;
             padding: 8px 12px !important;
         }
         section.main .block-container {
@@ -1263,50 +1892,12 @@ st.markdown("""
             padding-top: 0.8rem !important;
             padding-bottom: 75px !important;
         }
-        .user-card { padding: 8px 10px !important; }
-        .ai-loading-box { padding: 10px 14px !important; gap: 8px !important; }
-        .spinner { width: 18px !important; height: 18px !important; }
-        .ai-loading-text { font-size: 0.85rem !important; }
-        .stat-card { padding: 10px 12px !important; }
-        .stat-value { font-size: 1.3rem !important; }
-        .stat-label { font-size: 0.7rem !important; }
-
-        section[data-testid="stChatInput"] textarea {
-            font-size: 16px !important;
-        }
+        section[data-testid="stChatInput"] textarea { font-size: 16px !important; }
         section[data-testid="stSidebar"] .stButton button {
-            padding: 8px 10px !important;
-            font-size: 0.88rem !important;
+            padding: 8px 10px !important; font-size: 0.88rem !important;
             min-height: 40px !important;
         }
-
-        [data-testid="stChatMessage"] {
-            padding: 6px 8px !important;
-        }
-
-        [data-testid="stDataFrame"], .stDataFrame {
-            overflow-x: auto !important;
-        }
-
-        details > summary {
-            font-size: 0.9rem !important;
-        }
-
-        button[data-baseweb="tab"] {
-            font-size: 0.85rem !important;
-            padding: 8px 10px !important;
-        }
-
-        .announcement-banner {
-            padding: 12px 14px !important;
-        }
-        .announcement-header { font-size: 0.95rem !important; }
-
-        .tech-card { padding: 10px 12px !important; margin: 6px 0 !important; }
-        .tech-card-title { font-size: 0.85rem !important; }
-        .tech-card-desc { font-size: 0.78rem !important; }
     }
-
     @media (max-width: 480px) {
         .main-header { font-size: 1.4rem !important; }
         section.main .block-container {
@@ -1314,14 +1905,7 @@ st.markdown("""
             padding-right: 0.4rem !important;
             padding-bottom: 80px !important;
         }
-        .stat-value { font-size: 1.15rem !important; }
-        .stat-label { font-size: 0.65rem !important; }
-        .stButton button {
-            font-size: 0.88rem !important;
-            min-height: 42px !important;
-        }
     }
-
     @media (min-width: 1200px) {
         section.main .block-container {
             padding-left: 2rem !important;
@@ -1330,17 +1914,9 @@ st.markdown("""
             padding-bottom: 70px !important;
         }
     }
-
     img { max-width: 100% !important; height: auto !important; }
-
-    *, *::before, *::after {
-        box-sizing: border-box;
-    }
-    pre, code {
-        overflow-x: auto !important;
-        max-width: 100%;
-        word-wrap: break-word;
-    }
+    *, *::before, *::after { box-sizing: border-box; }
+    pre, code { overflow-x: auto !important; max-width: 100%; word-wrap: break-word; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1348,18 +1924,6 @@ st.markdown("""
 # ==========================================
 # 3. HÀM TIỆN ÍCH
 # ==========================================
-def encrypt_key(raw_key: str) -> str:
-    if not raw_key:
-        return ""
-    return LTTPSecurity.encrypt(raw_key, MASTER_SECRET, use_aes=True)
-
-
-def decrypt_key(encrypted_key: str) -> str:
-    if not encrypted_key:
-        return ""
-    return LTTPSecurity.decrypt(encrypted_key, MASTER_SECRET)
-
-
 def hash_password(password: str) -> str:
     return LTTPSecurity.hash_secure(password, "LTTP_USER_PWD")
 
@@ -1395,10 +1959,7 @@ def estimate_tokens(text: str) -> int:
 def estimate_messages_tokens(messages: list) -> int:
     if not messages:
         return 0
-    total = 0
-    for m in messages:
-        total += estimate_tokens(m.get("content", "")) + 4
-    return total
+    return sum(estimate_tokens(m.get("content", "")) + 4 for m in messages)
 
 
 def get_context_budget(model_name: str) -> int:
@@ -1439,10 +2000,9 @@ def smart_sliding_window(messages: list, budget_tokens: int,
                           max_msgs: int = MAX_RECENT_MESSAGES) -> list:
     if not messages:
         return []
-    total_tokens = sum(estimate_tokens(m.get("content", "")) + 4 for m in messages)
-    if total_tokens <= budget_tokens and len(messages) <= max_msgs:
+    total = sum(estimate_tokens(m.get("content", "")) + 4 for m in messages)
+    if total <= budget_tokens and len(messages) <= max_msgs:
         return messages[:]
-
     selected = []
     accumulated = 0
     for m in reversed(messages):
@@ -1462,8 +2022,8 @@ def smart_sliding_window(messages: list, budget_tokens: int,
 def truncate_message_smart(content: str, max_tokens: int) -> str:
     if not content:
         return content
-    cur_tokens = estimate_tokens(content)
-    if cur_tokens <= max_tokens:
+    cur = estimate_tokens(content)
+    if cur <= max_tokens:
         return content
     max_chars = int(max_tokens * CHARS_PER_TOKEN)
     head_chars = int(max_chars * 0.6)
@@ -1478,49 +2038,7 @@ def truncate_message_smart(content: str, max_tokens: int) -> str:
 
 
 # ==========================================
-# 3b. CHAT STORAGE HELPERS (encrypted)
-# ==========================================
-def serialize_messages_for_storage(messages: list) -> str:
-    """Nén + mã hóa messages trước khi lưu. Trả về base64 string."""
-    return chat_codec.encode(messages)
-
-
-def deserialize_messages_from_storage(stored) -> list:
-    """
-    Đọc messages từ storage.
-    - Nếu stored là str (encrypted) → decode
-    - Nếu stored là list (legacy plaintext) → trả nguyên (sẽ migrate khi save)
-    """
-    if isinstance(stored, list):
-        return stored
-    if isinstance(stored, str):
-        if not stored:
-            return []
-        decoded = chat_codec.decode(stored)
-        if decoded:
-            return decoded
-        return []
-    return []
-
-
-def prepare_chat_for_save(chat_data: dict) -> dict:
-    """
-    Chuẩn bị chat_data để lưu:
-    - Nếu messages là list → nén + mã hóa
-    - Trả về dict mới với messages đã encrypt
-    """
-    result = dict(chat_data)
-    msgs = chat_data.get("messages", [])
-    if isinstance(msgs, list):
-        result["messages"] = serialize_messages_for_storage(msgs)
-        result["_encrypted"] = True
-    elif isinstance(msgs, str):
-        result["_encrypted"] = chat_codec.is_encoded(msgs)
-    return result
-
-
-# ==========================================
-# 3c. CHANGELOG / QUICK LOOKUP / GUEST QUOTA
+# 3b. HELPERS
 # ==========================================
 def fetch_changelog_cached() -> tuple:
     now = time.time()
@@ -1530,9 +2048,8 @@ def fetch_changelog_cached() -> tuple:
         return cached
     try:
         resp = requests.get(
-            CHANGELOG_URL,
-            timeout=5,
-            headers={"User-Agent": "LTTP-AI-Online/1.48.0"}
+            CHANGELOG_URL, timeout=5,
+            headers={"User-Agent": "LTTP-AI-Online/1.49.0"}
         )
         if resp.status_code == 200:
             content = resp.text.strip()
@@ -1566,7 +2083,9 @@ def count_high_frequency_users(db_data: dict) -> int:
                     continue
                 updated = chat.get("updated_at", "")
                 if updated and updated >= yesterday:
-                    msgs = deserialize_messages_from_storage(chat.get("messages", []))
+                    msgs = chat.get("messages", [])
+                    if isinstance(msgs, str):
+                        msgs = chat_codec.decode(msgs)
                     if isinstance(msgs, list):
                         msg_count += sum(1 for m in msgs if isinstance(m, dict) and m.get("role") == "user")
             if msg_count >= HIGH_FREQ_MSG_THRESHOLD:
@@ -1670,7 +2189,24 @@ def load_lttp_security_from_cookie():
 
 
 # ==========================================
-# 4. SECURITY
+# 3c. CHAT STORAGE
+# ==========================================
+def serialize_messages_for_storage(messages: list) -> str:
+    return chat_codec.encode(messages)
+
+
+def deserialize_messages_from_storage(stored) -> list:
+    if isinstance(stored, list):
+        return stored
+    if isinstance(stored, str):
+        if not stored:
+            return []
+        return chat_codec.decode(stored) or []
+    return []
+
+
+# ==========================================
+# 4. SECURITY (rate limit, spam)
 # ==========================================
 def _get_rl_key(action: str) -> str:
     return f"_rl_{action}"
@@ -1701,24 +2237,24 @@ def detect_spam_content(text: str) -> tuple:
     if len(t) < MIN_MSG_LEN:
         return False, "low", ""
     if len(t) > MAX_MSG_LEN:
-        return True, "high", f"Message quá dài ({len(t)} ký tự > {MAX_MSG_LEN})"
+        return True, "high", f"Message quá dài ({len(t)} > {MAX_MSG_LEN})"
     if len(t) >= 20:
         from collections import Counter
         c = Counter(t)
-        most_common_count = c.most_common(1)[0][1]
-        repeat_ratio = most_common_count / len(t)
-        if repeat_ratio > MAX_REPEAT_RATIO and most_common_count > MAX_REPEAT_CHARS:
-            return True, "medium", f"Ký tự lặp quá nhiều (tỷ lệ {repeat_ratio:.2f})"
-    unique_chars = len(set(t))
-    if len(t) >= 20 and unique_chars < MIN_UNIQUE_CHARS:
-        return True, "medium", f"Quá ít ký tự khác nhau ({unique_chars})"
+        most = c.most_common(1)[0][1]
+        ratio = most / len(t)
+        if ratio > MAX_REPEAT_RATIO and most > MAX_REPEAT_CHARS:
+            return True, "medium", f"Lặp ký tự (tỷ lệ {ratio:.2f})"
+    unique = len(set(t))
+    if len(t) >= 20 and unique < MIN_UNIQUE_CHARS:
+        return True, "medium", f"Ít ký tự khác nhau ({unique})"
     entropy = LTTPSecurity.compute_entropy(t)
     if len(t) >= 30 and entropy < 2.0:
         return True, "medium", f"Entropy thấp ({entropy:.2f})"
     for pat in SUSPICIOUS_PATTERNS:
         try:
             if re.search(pat, t):
-                return True, "high", f"Pattern đáng ngờ: {pat[:50]}"
+                return True, "high", f"Pattern: {pat[:50]}"
         except re.error:
             continue
     return False, "low", ""
@@ -1727,13 +2263,13 @@ def detect_spam_content(text: str) -> tuple:
 def get_device_block_status(db_data: dict, device: str) -> dict:
     blocklist = db_data.get(BLOCKLIST_KEY, {})
     if not isinstance(blocklist, dict):
-        return {"blocked": False, "until_ts": 0, "reason": "", "severity": ""}
-    entry = blocklist.get(device, None)
+        return {"blocked": False}
+    entry = blocklist.get(device)
     if not entry:
-        return {"blocked": False, "until_ts": 0, "reason": "", "severity": ""}
+        return {"blocked": False}
     until_ts = float(entry.get("until_ts", 0))
     if until_ts <= time.time():
-        return {"blocked": False, "until_ts": 0, "reason": "", "severity": ""}
+        return {"blocked": False}
     return {
         "blocked": True,
         "until_ts": until_ts,
@@ -1742,16 +2278,15 @@ def get_device_block_status(db_data: dict, device: str) -> dict:
     }
 
 
-def block_device(db_data: dict, device: str, reason: str, severity: str, duration_override: int = None):
+def block_device(db_data: dict, device: str, reason: str, severity: str,
+                  duration_override: int = None):
     blocklist = db_data.get(BLOCKLIST_KEY, {})
     if not isinstance(blocklist, dict):
         blocklist = {}
     duration = duration_override if duration_override is not None else BLOCK_DURATIONS.get(severity, 300)
-    until_ts = time.time() + duration
     blocklist[device] = {
-        "until_ts": until_ts,
-        "reason": reason,
-        "severity": severity,
+        "until_ts": time.time() + duration,
+        "reason": reason, "severity": severity,
         "blocked_at": _now_vn_iso(),
     }
     db_data[BLOCKLIST_KEY] = blocklist
@@ -1777,10 +2312,8 @@ def log_security_event(db_data: dict, event_type: str, severity: str,
             "guest" if st.session_state.get("is_guest") else
             ("test" if is_temporary_session() else "unknown")
         ),
-        "event": event_type,
-        "severity": severity,
-        "message": message[:500],
-        "extra": extra or {},
+        "event": event_type, "severity": severity,
+        "message": message[:500], "extra": extra or {},
     }
     log.insert(0, entry)
     if len(log) > SECURITY_LOG_MAX:
@@ -1802,10 +2335,8 @@ def raise_security_alert(db_data: dict, severity: str, title: str,
             "guest" if st.session_state.get("is_guest") else
             ("test" if is_temporary_session() else "unknown")
         ),
-        "severity": severity,
-        "title": title,
-        "detail": detail[:1000],
-        "extra": extra or {},
+        "severity": severity, "title": title,
+        "detail": detail[:1000], "extra": extra or {},
         "acknowledged": False,
     }
     alerts.insert(0, alert)
@@ -1822,8 +2353,7 @@ def log_lttp_security_scan(db_data: dict, findings: dict):
     if not isinstance(history, list):
         history = []
     entry = {
-        "id": str(uuid.uuid4()),
-        "ts": _now_vn_iso(),
+        "id": str(uuid.uuid4()), "ts": _now_vn_iso(),
         "user": st.session_state.get("user") or (
             "guest" if st.session_state.get("is_guest") else
             ("test" if is_temporary_session() else "unknown")
@@ -1839,73 +2369,37 @@ def log_lttp_security_scan(db_data: dict, findings: dict):
 
 
 def run_lttp_security_scan(db_data: dict) -> dict:
-    findings = {
-        "layers": [],
-        "issues": [],
-        "score": 100,
-    }
-
+    findings = {"layers": [], "issues": [], "score": 100}
     try:
         _ = AESGCM(os.urandom(32))
         findings["layers"].append({"name": "AES-256-GCM", "status": "active", "desc": "Hardware-accelerated encryption"})
     except Exception:
-        findings["layers"].append({"name": "AES-256-GCM", "status": "inactive", "desc": "Fallback to LTTP-Cipher"})
-        findings["issues"].append({"severity": "medium", "msg": "AES-256 không khả dụng, dùng LTTP-Cipher fallback"})
+        findings["layers"].append({"name": "AES-256-GCM", "status": "inactive", "desc": "Fallback LTTP-Cipher"})
+        findings["issues"].append({"severity": "medium", "msg": "AES-256 fallback"})
         findings["score"] -= 5
-
-    findings["layers"].append({"name": "LTTP-Cipher", "status": "active", "desc": "Backup encryption for legacy devices"})
-    findings["layers"].append({"name": "HMAC-SHA256", "status": "active", "desc": "Integrity verification"})
-    findings["layers"].append({"name": "Payload Obfuscation", "status": "active", "desc": "Anti-reverse-engineering"})
-    findings["layers"].append({"name": "Replay Prevention", "status": "active", "desc": "Nonce + timestamp"})
-    findings["layers"].append({"name": "Entropy Detection", "status": "active", "desc": "Anomaly detection"})
-    findings["layers"].append({"name": "Chat Codec (zlib + AES-GCM)", "status": "active", "desc": "Messages compressed and encrypted before storage"})
-    findings["layers"].append({"name": "Multi-Chat Engine", "status": "active", "desc": "Threaded streaming per chat"})
-
+    findings["layers"].append({"name": "LTTP-Cipher", "status": "active", "desc": "Backup encryption"})
+    findings["layers"].append({"name": "HMAC-SHA256", "status": "active", "desc": "Integrity"})
+    findings["layers"].append({"name": "Payload Obfuscation", "status": "active", "desc": "Anti-reverse"})
+    findings["layers"].append({"name": "Chat Codec", "status": "active", "desc": "zlib + AES-GCM"})
+    findings["layers"].append({"name": "Agentic Search", "status": "active", "desc": "AI classifier + tools"})
+    findings["layers"].append({"name": "Multi-Chat", "status": "active", "desc": "Threaded streams"})
     try:
-        test_data = "LTTP_SECURITY_TEST_" + str(uuid.uuid4())
+        test_data = "TEST_" + str(uuid.uuid4())
         enc = LTTPSecurity.encrypt(test_data, MASTER_SECRET)
         dec = LTTPSecurity.decrypt(enc, MASTER_SECRET)
         if dec == test_data:
-            findings["layers"].append({"name": "Encryption Roundtrip", "status": "pass", "desc": "Encrypt/decrypt OK"})
+            findings["layers"].append({"name": "Crypto Roundtrip", "status": "pass", "desc": "OK"})
         else:
-            findings["issues"].append({"severity": "high", "msg": "Encryption roundtrip failed"})
+            findings["issues"].append({"severity": "high", "msg": "Crypto roundtrip failed"})
             findings["score"] -= 20
     except Exception as e:
-        findings["issues"].append({"severity": "high", "msg": f"Encryption error: {str(e)[:80]}"})
+        findings["issues"].append({"severity": "high", "msg": f"Crypto error: {str(e)[:80]}"})
         findings["score"] -= 20
-
-    # Test chat codec
-    try:
-        test_msgs = [{"role": "user", "content": "test " * 100}, {"role": "assistant", "content": "reply " * 100}]
-        enc_chat = chat_codec.encode(test_msgs)
-        dec_chat = chat_codec.decode(enc_chat)
-        if dec_chat == test_msgs:
-            orig_size = len(json.dumps(test_msgs, ensure_ascii=False))
-            enc_size = len(enc_chat)
-            reduction = 100 - (enc_size / orig_size * 100) if orig_size > 0 else 0
-            findings["layers"].append({
-                "name": "Chat Codec Roundtrip",
-                "status": "pass",
-                "desc": f"Compress+Encrypt OK (reduction: {reduction:.0f}%)"
-            })
-        else:
-            findings["issues"].append({"severity": "high", "msg": "Chat codec roundtrip failed"})
-            findings["score"] -= 15
-    except Exception as e:
-        findings["issues"].append({"severity": "high", "msg": f"Chat codec error: {str(e)[:80]}"})
-        findings["score"] -= 15
-
-    blocklist = db_data.get(BLOCKLIST_KEY, {})
-    blocked_count = sum(1 for e in blocklist.values() if float(e.get("until_ts", 0)) > time.time())
-    if blocked_count > 0:
-        findings["issues"].append({"severity": "low", "msg": f"Có {blocked_count} thiết bị đang bị chặn"})
-
     alerts = db_data.get(SECURITY_ALERTS_KEY, [])
-    active_alerts = [a for a in alerts if not a.get("acknowledged", False)]
-    if len(active_alerts) > 0:
-        findings["issues"].append({"severity": "medium", "msg": f"Có {len(active_alerts)} cảnh báo chưa xử lý"})
-        findings["score"] -= min(len(active_alerts), 15)
-
+    active = [a for a in alerts if not a.get("acknowledged", False)]
+    if active:
+        findings["issues"].append({"severity": "medium", "msg": f"{len(active)} cảnh báo chưa xử lý"})
+        findings["score"] -= min(len(active), 15)
     findings["score"] = max(0, findings["score"])
     return findings
 
@@ -1915,43 +2409,28 @@ def enforce_rate_limit(action: str, human_name: str) -> bool:
     if allowed:
         return True
     max_actions, window = RATE_LIMITS[action]
-    over_ratio = count / max_actions
-    if over_ratio >= 3.0:
+    over = count / max_actions
+    if over >= 3.0:
         severity = "critical"
-    elif over_ratio >= 2.0:
+    elif over >= 2.0:
         severity = "high"
-    elif over_ratio >= 1.5:
+    elif over >= 1.5:
         severity = "medium"
     else:
         severity = "low"
     db = GitHubStorage.load_db()
-    log_security_event(
-        db, f"rate_limit:{action}", severity,
-        f"Vượt rate limit '{human_name}' ({count}/{max_actions} trong {window}s)",
-        {"retry_after": retry_after}
-    )
+    log_security_event(db, f"rate_limit:{action}", severity,
+                       f"Vượt rate limit '{human_name}' ({count}/{max_actions}/{window}s)",
+                       {"retry_after": retry_after})
     if severity in ("high", "critical"):
-        block_device(db, device_id,
-                     f"Rate limit '{action}' vượt ngưỡng ({count}/{max_actions})",
-                     severity)
-        raise_security_alert(
-            db, severity,
-            f"🚫 Auto-block: {human_name}",
-            f"Device vượt rate limit {count}/{max_actions} trong {window}s.",
-            {"action": action, "count": count, "max": max_actions}
-        )
-    elif severity == "medium":
-        raise_security_alert(
-            db, severity,
-            f"⚠️ Cảnh báo: {human_name}",
-            f"Device liên tục vượt rate limit ({count}/{max_actions}).",
-            {"action": action, "count": count, "max": max_actions}
-        )
+        block_device(db, device_id, f"Rate limit {action}", severity)
+        raise_security_alert(db, severity, f"🚫 Auto-block: {human_name}",
+                              f"Rate limit {count}/{max_actions}")
     save_db_async(db, immediate=True)
     st.error(
-        f"⚠️ Bạn đã thao tác quá nhanh. Vui lòng thử lại sau **{retry_after}s**."
+        f"⚠️ Thao tác quá nhanh. Thử lại sau **{retry_after}s**."
         if st.session_state.get("language", "en") == "vi" else
-        f"⚠️ You are doing this too fast. Please retry in **{retry_after}s**."
+        f"⚠️ Too fast. Retry in **{retry_after}s**."
     )
     return False
 
@@ -1961,44 +2440,31 @@ def enforce_message_content(text: str) -> bool:
     if not is_spam:
         return True
     db = GitHubStorage.load_db()
-    log_security_event(
-        db, "suspicious_message", severity,
-        f"Nội dung đáng ngờ: {reason}",
-        {"preview": text[:200]}
-    )
+    log_security_event(db, "suspicious_message", severity,
+                       f"Đáng ngờ: {reason}", {"preview": text[:200]})
     if severity in ("high", "critical"):
-        block_device(db, device_id, f"Nội dung vi phạm: {reason}", severity)
-        raise_security_alert(
-            db, severity,
-            "🚫 Auto-block: Nội dung tin nhắn đáng ngờ",
-            f"Lý do: {reason}\n\nPreview: {text[:300]}",
-            {"reason": reason}
-        )
+        block_device(db, device_id, f"Vi phạm: {reason}", severity)
+        raise_security_alert(db, severity, "🚫 Auto-block", f"{reason}")
         save_db_async(db, immediate=True)
         st.error(
-            "🚫 Tin nhắn của bạn chứa nội dung không được phép. Tài khoản đã bị tạm khoá."
+            "🚫 Tin nhắn chứa nội dung không được phép."
             if st.session_state.get("language", "en") == "vi" else
-            "🚫 Your message contains disallowed content. Account temporarily blocked."
+            "🚫 Message contains disallowed content."
         )
         return False
     if severity == "medium":
-        raise_security_alert(
-            db, severity,
-            "⚠️ Tin nhắn đáng ngờ",
-            f"Lý do: {reason}\n\nPreview: {text[:300]}",
-            {"reason": reason}
-        )
+        raise_security_alert(db, severity, "⚠️ Tin nhắn đáng ngờ", reason)
         save_db_async(db, immediate=True)
         st.warning(
-            "⚠️ Tin nhắn của bạn có nội dung bất thường và đã được ghi lại."
+            "⚠️ Tin nhắn có nội dung bất thường."
             if st.session_state.get("language", "en") == "vi" else
-            "⚠️ Your message contains unusual content and has been logged."
+            "⚠️ Unusual content."
         )
     return True
 
 
 # ==========================================
-# 5. JAVASCRIPT INJECTION
+# 5. JS INJECTION
 # ==========================================
 def inject_js(js_code: str):
     wrapped = "<script>\n(function() {\n" + js_code + "\n})();\n</script>"
@@ -2012,8 +2478,7 @@ def inject_js(js_code: str):
         html_template = (
             "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-            "</head>"
-            "<body style=\"margin:0;padding:0;\">" + wrapped + "</body></html>"
+            "</head><body style=\"margin:0;padding:0;\">" + wrapped + "</body></html>"
         )
         try:
             _legacy_html(html_template, height=0, scrolling=False)
@@ -2089,9 +2554,7 @@ def inject_retry_button_listener():
         '                const url = new URL(window.location.href);\n'
         '                url.searchParams.set("__lttp_retry", idx);\n'
         '                window.location.href = url.toString();\n'
-        '            } catch(err) {\n'
-        '                console.warn("Retry error:", err);\n'
-        '            }\n'
+        '            } catch(err) {}\n'
         '            break;\n'
         '        }\n'
         '        el = el.parentElement;\n'
@@ -2103,11 +2566,10 @@ def inject_retry_button_listener():
 
 def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
     if not enabled:
-        js_clear = (
+        inject_js(
             'document.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
             'document.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
         )
-        inject_js(js_clear)
         return
     js = (
         'if (window.__lttp_draft_tracker_installed) return;\n'
@@ -2117,11 +2579,9 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         'const IDLE_MS = ' + str(idle_sec * 1000) + ';\n'
         'const DRAFT_COOKIE = "' + COOKIE_DRAFT + '";\n'
         'const TS_COOKIE = "' + COOKIE_DRAFT_TS + '";\n'
-        'let lastSavedText = "";\n'
-        'let lastIdleSavedText = "";\n'
-        'let typingTimer = null;\n'
-        'let periodicTimer = null;\n'
-        'let currentTextarea = null;\n'
+        'let lastSaved = "";\nlet lastIdle = "";\n'
+        'let typingTimer = null;\nlet periodicTimer = null;\n'
+        'let currentTA = null;\n'
         'function countWords(s) {\n'
         '    if (!s) return 0;\n'
         '    return s.trim().split(/\\s+/).filter(Boolean).length;\n'
@@ -2132,10 +2592,10 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         '        const trimmed = encoded.length > 3500 ? encoded.slice(0, 3500) : encoded;\n'
         '        document.cookie = DRAFT_COOKIE + "=" + trimmed + "; path=/; max-age=86400";\n'
         '        document.cookie = TS_COOKIE + "=" + Date.now() + "; path=/; max-age=86400";\n'
-        '        lastSavedText = text;\n'
+        '        lastSaved = text;\n'
         '    } catch (e) {}\n'
         '}\n'
-        'function attachToTextarea() {\n'
+        'function attach() {\n'
         '    const candidates = document.querySelectorAll(\n'
         '        "textarea[data-testid=\\"stChatInputTextArea\\"], " +\n'
         '        "section[data-testid=\\"stChatInput\\"] textarea, " +\n'
@@ -2147,8 +2607,8 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         '    for (const c of candidates) {\n'
         '        if (c.offsetParent !== null) { ta = c; break; }\n'
         '    }\n'
-        '    if (!ta || ta === currentTextarea) return;\n'
-        '    currentTextarea = ta;\n'
+        '    if (!ta || ta === currentTA) return;\n'
+        '    currentTA = ta;\n'
         '    const handler = function() {\n'
         '        const text = ta.value || "";\n'
         '        const words = countWords(text);\n'
@@ -2157,33 +2617,32 @@ def inject_smart_draft_tracker(enabled, min_words, interval_sec, idle_sec):
         '        if (words > MIN_WORDS) {\n'
         '            periodicTimer = setInterval(function() {\n'
         '                const cur = ta.value || "";\n'
-        '                if (cur && cur !== lastSavedText) { saveDraft(cur); }\n'
+        '                if (cur && cur !== lastSaved) { saveDraft(cur); }\n'
         '            }, INTERVAL_MS);\n'
         '        }\n'
         '        typingTimer = setTimeout(function() {\n'
         '            const cur = ta.value || "";\n'
-        '            if (cur && cur !== lastIdleSavedText) {\n'
+        '            if (cur && cur !== lastIdle) {\n'
         '                saveDraft(cur);\n'
-        '                lastIdleSavedText = cur;\n'
+        '                lastIdle = cur;\n'
         '            }\n'
         '        }, IDLE_MS);\n'
         '    };\n'
-        '    ta.removeEventListener("input", ta._lttpHandler);\n'
-        '    ta._lttpHandler = handler;\n'
+        '    ta.removeEventListener("input", ta._lttpH);\n'
+        '    ta._lttpH = handler;\n'
         '    ta.addEventListener("input", handler);\n'
         '}\n'
-        'attachToTextarea();\n'
-        'setInterval(attachToTextarea, 2000);\n'
+        'attach();\n'
+        'setInterval(attach, 2000);\n'
     )
     inject_js(js)
 
 
 def clear_draft_cookie_via_js():
-    js_clear = (
+    inject_js(
         'document.cookie = "' + COOKIE_DRAFT + '=; max-age=0; path=/";\n'
         'document.cookie = "' + COOKIE_DRAFT_TS + '=; max-age=0; path=/";\n'
     )
-    inject_js(js_clear)
 
 
 def inject_screenshot_capture(max_chunks: int):
@@ -2229,12 +2688,8 @@ def inject_screenshot_capture(max_chunks: int):
         '                document.cookie = "' + BR_COOKIE_PREFIX + '" + i + "=" + chunks[i] + "; path=/; max-age=300";\n'
         '            }\n'
         '            document.cookie = "' + BR_META_COOKIE + '=" + maxToStore + "; path=/; max-age=300";\n'
-        '        }).catch(function(err) {\n'
-        '            console.warn("Screenshot error:", err);\n'
-        '        });\n'
-        '    } catch (e) {\n'
-        '        console.warn("Screenshot outer error:", e);\n'
-        '    }\n'
+        '        }).catch(function(err) {});\n'
+        '    } catch (e) {}\n'
         '};\n'
         'window.__lttp_do_screenshot();\n'
     )
@@ -2279,8 +2734,7 @@ def get_saved_draft():
         ts = cookies.get(COOKIE_DRAFT_TS)
         if raw:
             from urllib.parse import unquote
-            text = unquote(raw)
-            return text, ts
+            return unquote(raw), ts
     except Exception:
         pass
     return None, None
@@ -2288,12 +2742,9 @@ def get_saved_draft():
 
 def check_stop_flag() -> bool:
     try:
-        v = cookies.get(COOKIE_STOP_FLAG)
-        if v == "1":
-            return True
+        return cookies.get(COOKIE_STOP_FLAG) == "1"
     except Exception:
-        pass
-    return False
+        return False
 
 
 def clear_stop_flag():
@@ -2304,7 +2755,7 @@ def clear_stop_flag():
 
 
 # ==========================================
-# 6. LỖI 429 + INCOMPLETE
+# 6. ERROR DETECTION
 # ==========================================
 def is_rate_limit_error(error: Exception) -> bool:
     if google_exceptions is not None:
@@ -2335,16 +2786,14 @@ def is_rate_limit_error(error: Exception) -> bool:
 
 def is_incomplete_error(error: Exception) -> bool:
     err_str = str(error).lower()
-    incomplete_keywords = [
-        "incomplete", "truncated", "connection", "timeout", "timed out",
-        "reset", "broken pipe", "incomplete chunk", "stream", "interrupted",
-        "server disconnected", "eof", "unexpected end"
-    ]
-    return any(k in err_str for k in incomplete_keywords)
+    kws = ["incomplete", "truncated", "connection", "timeout", "timed out",
+           "reset", "broken pipe", "stream", "interrupted",
+           "server disconnected", "eof", "unexpected end"]
+    return any(k in err_str for k in kws)
 
 
 # ==========================================
-# 7. GỌI GEMINI — STREAM MƯỢT + SUPPORT STOP_EVENT
+# 7. GEMINI CALL
 # ==========================================
 def _build_model_chain(preferred_model: str) -> list:
     chain = [preferred_model]
@@ -2362,13 +2811,6 @@ def stream_gemini_with_failover(
     typing_cps=DEFAULT_TYPING_CPS,
     stop_event=None,
 ):
-    """
-    Stream Gemini.
-    
-    Nếu stop_event được truyền (dùng cho multi-chat background thread):
-    - Kiểm tra stop_event thay vì cookie
-    - Không dùng ui_placeholder
-    """
     if not api_keys:
         yield "", True, "no_api_keys"
         return
@@ -2390,7 +2832,6 @@ def stream_gemini_with_failover(
         for api_k in api_keys:
             if was_stopped:
                 break
-
             for attempt in range(GEMINI_STREAM_MAX_RETRIES + 1):
                 accumulated = ""
                 try:
@@ -2400,13 +2841,10 @@ def stream_gemini_with_failover(
                         system_instruction=system_instruction if system_instruction else None,
                         generation_config=generation_config or {}
                     )
-
                     response = model.generate_content(
-                        prompt_inputs,
-                        stream=True,
+                        prompt_inputs, stream=True,
                         request_options={"timeout": GEMINI_REQUEST_TIMEOUT}
                     )
-
                     chunk_count = 0
 
                     if typing_mode == TYPING_MODE_INSTANT:
@@ -2414,15 +2852,10 @@ def stream_gemini_with_failover(
                             if _check_stop():
                                 was_stopped = True
                                 if ui_placeholder is not None and accumulated:
-                                    stop_note = (
-                                        "\n\n_[Đã dừng theo yêu cầu]_"
-                                        if lang == "vi" else
-                                        "\n\n_[Stopped by user]_"
-                                    )
+                                    stop_note = "\n\n_[Đã dừng]_" if lang == "vi" else "\n\n_[Stopped]_"
                                     ui_placeholder.markdown(accumulated + stop_note, unsafe_allow_html=True)
                                 yield accumulated, True, "stopped"
                                 return
-
                             try:
                                 ct = getattr(chunk, "text", None)
                             except Exception:
@@ -2434,7 +2867,6 @@ def stream_gemini_with_failover(
                             if ui_placeholder is not None:
                                 ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
                             yield accumulated, False, None
-
                         if accumulated:
                             if ui_placeholder is not None:
                                 ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
@@ -2442,7 +2874,7 @@ def stream_gemini_with_failover(
                             return
                         else:
                             saw_other_error = True
-                            last_error = "Empty response"
+                            last_error = "Empty"
                             break
 
                     if typing_mode == TYPING_MODE_SMOOTH:
@@ -2450,15 +2882,10 @@ def stream_gemini_with_failover(
                             if _check_stop():
                                 was_stopped = True
                                 if ui_placeholder is not None and accumulated:
-                                    stop_note = (
-                                        "\n\n_[Đã dừng theo yêu cầu]_"
-                                        if lang == "vi" else
-                                        "\n\n_[Stopped by user]_"
-                                    )
+                                    stop_note = "\n\n_[Đã dừng]_" if lang == "vi" else "\n\n_[Stopped]_"
                                     ui_placeholder.markdown(accumulated + stop_note, unsafe_allow_html=True)
                                 yield accumulated, True, "stopped"
                                 return
-
                             try:
                                 ct = getattr(chunk, "text", None)
                             except Exception:
@@ -2471,7 +2898,6 @@ def stream_gemini_with_failover(
                                 display = accumulated + '<span class="typing-cursor"></span>'
                                 ui_placeholder.markdown(display, unsafe_allow_html=True)
                             yield accumulated, False, None
-
                         if accumulated:
                             if ui_placeholder is not None:
                                 ui_placeholder.markdown(accumulated, unsafe_allow_html=True)
@@ -2479,32 +2905,27 @@ def stream_gemini_with_failover(
                             return
                         else:
                             saw_other_error = True
-                            last_error = "Empty response"
+                            last_error = "Empty"
                             break
 
+                    # CONTROLLED mode
                     if typing_mode == TYPING_MODE_CONTROLLED:
                         chars_per_sec = max(1, int(typing_cps))
                         received_buffer = ""
                         shown_len = 0
                         next_release_ts = time.time()
-                        interval_per_char = 1.0 / chars_per_sec
-                        min_render_interval = 0.05
-                        last_render_ts = 0.0
+                        interval = 1.0 / chars_per_sec
+                        min_render = 0.05
+                        last_render = 0.0
                         display_text = ""
-
                         for chunk in response:
                             if _check_stop():
                                 was_stopped = True
                                 if ui_placeholder is not None and display_text:
-                                    stop_note = (
-                                        "\n\n_[Đã dừng theo yêu cầu]_"
-                                        if lang == "vi" else
-                                        "\n\n_[Stopped by user]_"
-                                    )
+                                    stop_note = "\n\n_[Đã dừng]_" if lang == "vi" else "\n\n_[Stopped]_"
                                     ui_placeholder.markdown(display_text + stop_note, unsafe_allow_html=True)
                                 yield display_text, True, "stopped"
                                 return
-
                             try:
                                 ct = getattr(chunk, "text", None)
                             except Exception:
@@ -2513,53 +2934,40 @@ def stream_gemini_with_failover(
                                 continue
                             chunk_count += 1
                             received_buffer += ct
-
                             now = time.time()
                             while shown_len < len(received_buffer) and now >= next_release_ts:
-                                allowed_chars = max(1, int((now - next_release_ts) / interval_per_char) + 1)
-                                allowed_chars = min(allowed_chars, len(received_buffer) - shown_len)
-                                shown_len += allowed_chars
-                                next_release_ts += allowed_chars * interval_per_char
+                                allowed = max(1, int((now - next_release_ts) / interval) + 1)
+                                allowed = min(allowed, len(received_buffer) - shown_len)
+                                shown_len += allowed
+                                next_release_ts += allowed * interval
                                 if next_release_ts > now:
                                     break
-
-                            if now - last_render_ts >= min_render_interval:
+                            if now - last_render >= min_render:
                                 display_text = received_buffer[:shown_len]
                                 if ui_placeholder is not None:
                                     disp = display_text + '<span class="typing-cursor"></span>'
                                     ui_placeholder.markdown(disp, unsafe_allow_html=True)
-                                last_render_ts = now
+                                last_render = now
                                 yield display_text, False, None
-
                         while shown_len < len(received_buffer):
                             if _check_stop():
                                 was_stopped = True
-                                if ui_placeholder is not None and display_text:
-                                    stop_note = (
-                                        "\n\n_[Đã dừng theo yêu cầu]_"
-                                        if lang == "vi" else
-                                        "\n\n_[Stopped by user]_"
-                                    )
-                                    ui_placeholder.markdown(display_text + stop_note, unsafe_allow_html=True)
                                 yield display_text, True, "stopped"
                                 return
-
                             now = time.time()
                             remaining = len(received_buffer) - shown_len
-                            time_until_next = next_release_ts - now
-                            if time_until_next > 0:
-                                time.sleep(min(time_until_next, 0.05))
+                            wait = next_release_ts - now
+                            if wait > 0:
+                                time.sleep(min(wait, 0.05))
                                 continue
-
-                            batch_size = min(remaining, max(1, chars_per_sec // 10))
-                            shown_len += batch_size
-                            next_release_ts += batch_size * interval_per_char
+                            batch = min(remaining, max(1, chars_per_sec // 10))
+                            shown_len += batch
+                            next_release_ts += batch * interval
                             display_text = received_buffer[:shown_len]
                             if ui_placeholder is not None:
                                 disp = display_text + '<span class="typing-cursor"></span>'
                                 ui_placeholder.markdown(disp, unsafe_allow_html=True)
                             yield display_text, False, None
-
                         if display_text:
                             if ui_placeholder is not None:
                                 ui_placeholder.markdown(display_text, unsafe_allow_html=True)
@@ -2567,12 +2975,12 @@ def stream_gemini_with_failover(
                             return
                         else:
                             saw_other_error = True
-                            last_error = "Empty response"
+                            last_error = "Empty"
                             break
 
                     if chunk_count == 0:
                         saw_other_error = True
-                        last_error = "Empty response"
+                        last_error = "Empty"
                         break
                     else:
                         if ui_placeholder is not None:
@@ -2594,7 +3002,6 @@ def stream_gemini_with_failover(
     if was_stopped:
         yield "", True, "stopped"
         return
-
     if saw_rate_limit and not saw_other_error:
         yield "", True, "rate_limit"
     elif saw_rate_limit and saw_other_error:
@@ -2633,7 +3040,7 @@ def call_gemini_with_failover(
                 if text:
                     return text, None
                 saw_other_error = True
-                last_error = "Empty response"
+                last_error = "Empty"
                 continue
             except Exception as ex:
                 last_error = str(ex)
@@ -2653,19 +3060,14 @@ def call_gemini_with_failover(
 
 
 def render_rate_limit_and_retry(lang="en"):
-    if lang == "vi":
-        title = "⏳ Hệ thống đang nhận quá nhiều yêu cầu"
-        subtitle = "Vui lòng thử lại sau. Hệ thống sẽ tự động gửi lại câu hỏi của bạn."
-    else:
-        title = "⏳ System is receiving too many requests"
-        subtitle = "Please try again later. Your question will be automatically retried."
+    title = "⏳ Hệ thống đang nhận quá nhiều yêu cầu" if lang == "vi" else "⏳ Too many requests"
+    subtitle = "Vui lòng thử lại sau." if lang == "vi" else "Please retry later."
     box = st.empty()
-    total = RATE_LIMIT_RETRY_DELAY
-    for remaining in range(total, 0, -1):
+    for remaining in range(RATE_LIMIT_RETRY_DELAY, 0, -1):
         box.markdown("""
         <div class="rate-limit-box">
             <div class="rate-limit-text">__T__</div>
-            <div style="margin-top:6px; font-size:0.9rem; opacity:0.85;">__S__</div>
+            <div style="margin-top:6px;font-size:0.9rem;opacity:0.85;">__S__</div>
             <div style="margin-top:8px;"><span class="rate-limit-countdown">__R__s</span></div>
         </div>
         """.replace("__T__", title).replace("__S__", subtitle).replace("__R__", str(remaining)),
@@ -2676,14 +3078,13 @@ def render_rate_limit_and_retry(lang="en"):
 
 
 # ==========================================
-# 8. MIGRATION (giờ có migrate chat encryption)
+# 8. MIGRATION
 # ==========================================
 def migrate_user_data(db_data: dict) -> tuple:
     migrated = False
     if SYSTEM_CONFIG_KEY not in db_data:
         db_data[SYSTEM_CONFIG_KEY] = {
-            "maintenance_mode": False,
-            "maintenance_note": "",
+            "maintenance_mode": False, "maintenance_note": "",
             "announcement": {"enabled": False, "title": "", "body": "", "updated_at": ""}
         }
         migrated = True
@@ -2696,9 +3097,6 @@ def migrate_user_data(db_data: dict) -> tuple:
             }
             migrated = True
         else:
-            if "whitelist_users" in cfg:
-                del cfg["whitelist_users"]
-                migrated = True
             for k, dv in [("maintenance_mode", False), ("maintenance_note", "")]:
                 if k not in cfg:
                     cfg[k] = dv
@@ -2706,43 +3104,13 @@ def migrate_user_data(db_data: dict) -> tuple:
             if "announcement" not in cfg:
                 cfg["announcement"] = {"enabled": False, "title": "", "body": "", "updated_at": ""}
                 migrated = True
-            else:
-                ann = cfg["announcement"]
-                if not isinstance(ann, dict):
-                    cfg["announcement"] = {"enabled": False, "title": "", "body": "", "updated_at": ""}
-                    migrated = True
-                else:
-                    for k, dv in [("enabled", False), ("title", ""), ("body", ""), ("updated_at", "")]:
-                        if k not in ann:
-                            ann[k] = dv
-                            migrated = True
-
-    for key in (TRAFFIC_LOG_KEY,):
+    for key, dv in [(TRAFFIC_LOG_KEY, {}), (BUG_REPORTS_KEY, []),
+                    (FEEDBACK_KEY, []), (SECURITY_LOG_KEY, []),
+                    (SECURITY_ALERTS_KEY, []), (BLOCKLIST_KEY, {}),
+                    (GUEST_QUOTAS_KEY, {}), (LTTP_SECURITY_KEY, {"history": []})]:
         if key not in db_data:
-            db_data[key] = {}
+            db_data[key] = dv
             migrated = True
-    if BUG_REPORTS_KEY not in db_data:
-        db_data[BUG_REPORTS_KEY] = []
-        migrated = True
-    if FEEDBACK_KEY not in db_data:
-        db_data[FEEDBACK_KEY] = []
-        migrated = True
-    if SECURITY_LOG_KEY not in db_data:
-        db_data[SECURITY_LOG_KEY] = []
-        migrated = True
-    if SECURITY_ALERTS_KEY not in db_data:
-        db_data[SECURITY_ALERTS_KEY] = []
-        migrated = True
-    if BLOCKLIST_KEY not in db_data:
-        db_data[BLOCKLIST_KEY] = {}
-        migrated = True
-    if GUEST_QUOTAS_KEY not in db_data:
-        db_data[GUEST_QUOTAS_KEY] = {}
-        migrated = True
-    if LTTP_SECURITY_KEY not in db_data:
-        db_data[LTTP_SECURITY_KEY] = {"history": []}
-        migrated = True
-
     for username, uinfo in db_data.items():
         if username in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY, BUG_REPORTS_KEY,
                         FEEDBACK_KEY, SECURITY_LOG_KEY, SECURITY_ALERTS_KEY, BLOCKLIST_KEY,
@@ -2752,15 +3120,15 @@ def migrate_user_data(db_data: dict) -> tuple:
             continue
         for k, dv in [("custom_instructions", ""), ("chats", {}),
                       ("remembered_devices", []), ("language", "en"),
-                      ("terms_accepted", False), ("terms_accepted_at", "")]:
+                      ("terms_accepted", False), ("terms_accepted_at", ""),
+                      ("custom_tools", [])]:
             if k not in uinfo:
                 uinfo[k] = dv
                 migrated = True
         if "preferences" not in uinfo:
             uinfo["preferences"] = {
                 "model": DEFAULT_MODEL, "temperature": 0.7,
-                "top_p": 0.95, "top_k": 40,
-                "smart_draft": True,
+                "top_p": 0.95, "top_k": 40, "smart_draft": True,
                 "typing_mode": DEFAULT_TYPING_MODE,
                 "typing_cps": DEFAULT_TYPING_CPS
             }
@@ -2772,8 +3140,7 @@ def migrate_user_data(db_data: dict) -> tuple:
                 uinfo["preferences"] = prefs
                 migrated = True
             for k, dv in [("model", DEFAULT_MODEL), ("temperature", 0.7),
-                          ("top_p", 0.95), ("top_k", 40),
-                          ("smart_draft", True),
+                          ("top_p", 0.95), ("top_k", 40), ("smart_draft", True),
                           ("typing_mode", DEFAULT_TYPING_MODE),
                           ("typing_cps", DEFAULT_TYPING_CPS)]:
                 if k not in prefs:
@@ -2783,15 +3150,14 @@ def migrate_user_data(db_data: dict) -> tuple:
             if old_model in LEGACY_MODEL_MAP:
                 prefs["model"] = LEGACY_MODEL_MAP[old_model]
                 migrated = True
-
         if "draft" in uinfo:
             del uinfo["draft"]
             migrated = True
-
         for cid, chat in uinfo.get("chats", {}).items():
             if not isinstance(chat, dict):
                 continue
-            for k, dv in [("title", "Conversation"), ("messages", []), ("summary", "")]:
+            for k, dv in [("title", "Conversation"), ("messages", []),
+                          ("summary", "")]:
                 if k not in chat:
                     chat[k] = dv
                     migrated = True
@@ -2807,8 +3173,6 @@ def migrate_user_data(db_data: dict) -> tuple:
             if "summary_token_count" not in chat:
                 chat["summary_token_count"] = 0
                 migrated = True
-
-            # Nếu messages là list (legacy) → nén + mã hóa
             msgs = chat.get("messages", [])
             if isinstance(msgs, list) and len(msgs) > 0:
                 try:
@@ -2817,16 +3181,14 @@ def migrate_user_data(db_data: dict) -> tuple:
                     migrated = True
                 except Exception:
                     pass
-
         if "api_keys" in uinfo:
             del uinfo["api_keys"]
             migrated = True
-
     return db_data, migrated
 
 
 # ==========================================
-# 9. TRAFFIC + BUG + FEEDBACK HELPERS
+# 9. TRAFFIC/BUG/FEEDBACK HELPERS
 # ==========================================
 def _today_vn_str() -> str:
     return vn_now().strftime("%Y-%m-%d")
@@ -2839,9 +3201,8 @@ def _now_vn_iso() -> str:
 def _prune_traffic_log(traffic: dict) -> dict:
     if not isinstance(traffic, dict):
         return {}
-    cutoff = vn_now() - timedelta(days=TRAFFIC_RETENTION_DAYS)
-    cutoff_str = cutoff.strftime("%Y-%m-%d")
-    return {k: v for k, v in traffic.items() if k >= cutoff_str}
+    cutoff = (vn_now() - timedelta(days=TRAFFIC_RETENTION_DAYS)).strftime("%Y-%m-%d")
+    return {k: v for k, v in traffic.items() if k >= cutoff}
 
 
 def record_traffic(db_data: dict, user_label: str, role: str) -> bool:
@@ -2851,20 +3212,18 @@ def record_traffic(db_data: dict, user_label: str, role: str) -> bool:
     today = _today_vn_str()
     if today not in traffic:
         traffic[today] = {"visits": []}
-    day_data = traffic[today]
-    if "visits" not in day_data:
-        day_data["visits"] = []
+    day = traffic[today]
+    if "visits" not in day:
+        day["visits"] = []
     if role in ("user", "guest"):
-        for v in day_data["visits"]:
+        for v in day["visits"]:
             if v.get("device") == device_id and v.get("role") == role:
                 return False
-    day_data["visits"].append({
-        "time": _now_vn_iso(),
-        "label": user_label,
-        "role": role,
-        "device": device_id,
+    day["visits"].append({
+        "time": _now_vn_iso(), "label": user_label,
+        "role": role, "device": device_id,
     })
-    traffic[today] = day_data
+    traffic[today] = day
     db_data[TRAFFIC_LOG_KEY] = _prune_traffic_log(traffic)
     return True
 
@@ -2874,32 +3233,30 @@ def add_bug_report(db_data: dict, report: dict) -> bool:
     if not isinstance(reports, list):
         reports = []
     reports.insert(0, report)
-    if len(reports) > BUG_REPORTS_MAX:
-        reports = reports[:BUG_REPORTS_MAX]
-    db_data[BUG_REPORTS_KEY] = reports
+    db_data[BUG_REPORTS_KEY] = reports[:BUG_REPORTS_MAX]
     return True
 
 
-def delete_bug_report(db_data: dict, report_id: str) -> bool:
+def delete_bug_report(db_data: dict, rid: str) -> bool:
     reports = db_data.get(BUG_REPORTS_KEY, [])
     if not isinstance(reports, list):
         return False
-    new_reports = [r for r in reports if r.get("id") != report_id]
-    if len(new_reports) == len(reports):
+    new = [r for r in reports if r.get("id") != rid]
+    if len(new) == len(reports):
         return False
-    db_data[BUG_REPORTS_KEY] = new_reports
+    db_data[BUG_REPORTS_KEY] = new
     return True
 
 
-def reply_bug_report(db_data: dict, report_id: str, reply_text: str, admin_name: str) -> bool:
+def reply_bug_report(db_data: dict, rid: str, reply: str, admin: str) -> bool:
     reports = db_data.get(BUG_REPORTS_KEY, [])
     if not isinstance(reports, list):
         return False
     for r in reports:
-        if r.get("id") == report_id:
-            r["reply"] = reply_text
+        if r.get("id") == rid:
+            r["reply"] = reply
             r["replied_at"] = _now_vn_iso()
-            r["replied_by"] = admin_name
+            r["replied_by"] = admin
             db_data[BUG_REPORTS_KEY] = reports
             return True
     return False
@@ -2912,14 +3269,12 @@ def get_user_bug_reports(db_data: dict, username: str) -> list:
     return [r for r in reports if r.get("user") == username]
 
 
-def add_feedback(db_data: dict, feedback: dict) -> bool:
+def add_feedback(db_data: dict, fb: dict) -> bool:
     items = db_data.get(FEEDBACK_KEY, [])
     if not isinstance(items, list):
         items = []
-    items.insert(0, feedback)
-    if len(items) > FEEDBACK_MAX:
-        items = items[:FEEDBACK_MAX]
-    db_data[FEEDBACK_KEY] = items
+    items.insert(0, fb)
+    db_data[FEEDBACK_KEY] = items[:FEEDBACK_MAX]
     return True
 
 
@@ -2927,22 +3282,22 @@ def delete_feedback(db_data: dict, fid: str) -> bool:
     items = db_data.get(FEEDBACK_KEY, [])
     if not isinstance(items, list):
         return False
-    new_items = [r for r in items if r.get("id") != fid]
-    if len(new_items) == len(items):
+    new = [r for r in items if r.get("id") != fid]
+    if len(new) == len(items):
         return False
-    db_data[FEEDBACK_KEY] = new_items
+    db_data[FEEDBACK_KEY] = new
     return True
 
 
-def reply_feedback(db_data: dict, fid: str, reply_text: str, admin_name: str) -> bool:
+def reply_feedback(db_data: dict, fid: str, reply: str, admin: str) -> bool:
     items = db_data.get(FEEDBACK_KEY, [])
     if not isinstance(items, list):
         return False
     for r in items:
         if r.get("id") == fid:
-            r["reply"] = reply_text
+            r["reply"] = reply
             r["replied_at"] = _now_vn_iso()
-            r["replied_by"] = admin_name
+            r["replied_by"] = admin
             db_data[FEEDBACK_KEY] = items
             return True
     return False
@@ -2982,14 +3337,12 @@ class GitHubStorage:
         if not force_refresh and GitHubStorage._is_cache_valid():
             return GitHubStorage._cache
         if not GITHUB_TOKEN or not GITHUB_REPO:
-            st.error("⚠️ Missing GITHUB_TOKEN or GITHUB_REPO in Secrets!")
+            st.error("⚠️ Missing GITHUB_TOKEN or GITHUB_REPO")
             return {}
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
         try:
-            res = requests.get(
-                url, headers=GitHubStorage.get_api_headers(),
-                params={"nocache": int(time.time())}, timeout=8
-            )
+            res = requests.get(url, headers=GitHubStorage.get_api_headers(),
+                                params={"nocache": int(time.time())}, timeout=8)
             if res.status_code == 200:
                 content_b64 = res.json().get("content", "")
                 decoded = base64.b64decode(content_b64.encode('utf-8')).decode('utf-8')
@@ -3030,10 +3383,9 @@ class GitHubStorage:
     @staticmethod
     def save_db(data: dict) -> tuple:
         if not GITHUB_TOKEN or not GITHUB_REPO:
-            return False, "Missing GitHub Token/Repo configuration."
+            return False, "Missing GitHub Token/Repo"
         url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
         headers = GitHubStorage.get_api_headers()
-
         with GitHubStorage._save_lock:
             sha = None
             try:
@@ -3055,26 +3407,26 @@ class GitHubStorage:
                 if res_put.status_code in [200, 201]:
                     GitHubStorage._cache = data
                     GitHubStorage._cache_time = time.time()
-                    return True, "Saved successfully!"
+                    return True, "Saved"
                 else:
-                    return False, f"GitHub error (HTTP {res_put.status_code})"
+                    return False, f"HTTP {res_put.status_code}"
             except requests.exceptions.Timeout:
-                return False, "Timeout saving to GitHub"
+                return False, "Timeout"
             except Exception as e:
-                return False, f"Save error: {e}"
+                return False, str(e)
 
 
 # ==========================================
-# 11. HÀM AI PHỤ
+# 11. AI HELPERS
 # ==========================================
 def generate_chat_title(user_prompt, api_keys, model_name, lang="en"):
     try:
         if lang == "vi":
-            prompt = ("Hãy tạo 1 tiêu đề cực kỳ ngắn gọn (từ 2 đến 5 từ, không đặt trong dấu ngoặc kép, không dùng markdown) "
-                      f"tóm tắt chủ đề của câu hỏi sau:\n\"{user_prompt}\"")
+            prompt = (f"Tạo tiêu đề cực ngắn (2-5 từ, không ngoặc kép, không markdown) "
+                      f"cho câu hỏi sau:\n\"{user_prompt}\"")
         else:
-            prompt = ("Generate an extremely short title (2-5 words, no quotes, no markdown) "
-                      f"summarizing the topic of this question:\n\"{user_prompt}\"")
+            prompt = (f"Generate an extremely short title (2-5 words, no quotes, no markdown) "
+                      f"for:\n\"{user_prompt}\"")
         text, err = call_gemini_with_failover(
             prompt_inputs=[prompt], api_keys=api_keys,
             preferred_model=model_name, lang=lang
@@ -3087,114 +3439,13 @@ def generate_chat_title(user_prompt, api_keys, model_name, lang="en"):
         return user_prompt[:25] + "..." if len(user_prompt) > 25 else user_prompt
 
 
-def _fallback_summary(messages_to_summarize, existing_summary, lang="en"):
-    parts = []
-    if existing_summary:
-        parts.append(existing_summary)
-    for m in messages_to_summarize[-20:]:
-        role = "U" if m.get("role") == "user" else "A"
-        c = m.get("content", "")[:300]
-        parts.append(f"{role}: {c}")
-    return "\n".join(parts)
-
-
-def generate_summary_structured(
-    messages_to_summarize, existing_summary, api_keys, model_name,
-    lang="en", target_tokens=3000,
-):
-    if not messages_to_summarize and not existing_summary:
-        return ""
-    try:
-        conv_lines = []
-        for m in messages_to_summarize:
-            role = "User" if m.get("role") == "user" else "Assistant"
-            content = m.get("content", "")
-            if len(content) > 4000:
-                content = content[:2400] + "\n[...]\n" + content[-1400:]
-            conv_lines.append(f"### {role}:\n{content}")
-        conversation_text = "\n\n".join(conv_lines)
-        if lang == "vi":
-            system_guide = (
-                "Bạn là chuyên gia tóm tắt hội thoại. Tạo bản tóm tắt ĐẦY ĐỦ nhưng GỌN GÀNG.\n\n"
-                "QUY TẮC BẮT BUỘC:\n"
-                "1. GIỮ LẠI TẤT CẢ: tên riêng, số liệu, ngày giờ, địa điểm, quyết định, yêu cầu/ràng buộc, sở thích.\n"
-                "2. KHÔNG lược bỏ chi tiết dù nhỏ.\n"
-                "3. Nếu có mâu thuẫn cũ/mới, ghi rõ cả hai.\n"
-                "4. Trình bày theo các mục:\n"
-                "   - 📌 CHỦ ĐỀ / MỤC TIÊU\n"
-                "   - 📊 DỮ KIỆN QUAN TRỌNG\n"
-                "   - ✅ QUYẾT ĐỊNH ĐÃ CHỐT\n"
-                "   - ⚠️ RÀNG BUỘC / YÊU CẦU\n"
-                "   - 🎯 BỐI CẢNH KHÁC\n"
-                "   - ❓ CÂU HỎI CHƯA GIẢI QUYẾT\n"
-                f"5. Độ dài mục tiêu: ~{target_tokens} token.\n"
-                "6. Viết bằng tiếng Việt."
-            )
-        else:
-            system_guide = (
-                "You are a conversation summarization expert. Create a COMPLETE but CONCISE summary.\n\n"
-                "MANDATORY RULES:\n"
-                "1. PRESERVE ALL: names, numbers, dates, places, decisions, constraints, preferences.\n"
-                "2. Do NOT drop any detail.\n"
-                "3. If old and new info conflict, note both.\n"
-                "4. Format with these sections:\n"
-                "   - 📌 TOPIC / GOAL\n"
-                "   - 📊 KEY FACTS\n"
-                "   - ✅ DECISIONS MADE\n"
-                "   - ⚠️ CONSTRAINTS / REQUIREMENTS\n"
-                "   - 🎯 OTHER CONTEXT\n"
-                "   - ❓ OPEN QUESTIONS\n"
-                f"5. Target ~{target_tokens} tokens.\n"
-                "6. Keep English."
-            )
-        parts = [system_guide, ""]
-        if existing_summary:
-            label = "BẢN TÓM TẮT TRƯỚC ĐÓ (gộp + nén):" if lang == "vi" else "PREVIOUS SUMMARY (merge + compress):"
-            parts.extend([label, existing_summary, ""])
-        label2 = "TIN NHẮN MỚI:" if lang == "vi" else "NEW MESSAGES:"
-        parts.extend([label2, conversation_text, ""])
-        final_ask = (
-            "Trả về BẢN TÓM TẮT CẬP NHẬT theo cấu trúc mục ở trên. Giữ mọi tên/số/ngày/quyết định/ràng buộc."
-            if lang == "vi" else
-            "Return the UPDATED SUMMARY in the section format above. Keep all names/numbers/dates/decisions/constraints."
-        )
-        parts.append(final_ask)
-        prompt = "\n".join(parts)
-        text, err = call_gemini_with_failover(
-            prompt_inputs=[prompt], api_keys=api_keys,
-            preferred_model=model_name, lang=lang,
-            generation_config={"temperature": 0.2, "top_p": 0.9, "top_k": 40}
-        )
-        if text:
-            return text.strip()
-        return _fallback_summary(messages_to_summarize, existing_summary, lang)
-    except Exception:
-        return _fallback_summary(messages_to_summarize, existing_summary, lang)
-
-
-def generate_summary_in_batches(
-    messages_to_summarize, existing_summary, api_keys, model_name,
-    lang="en", batch_size=SUMMARY_BATCH_SIZE,
-):
-    if len(messages_to_summarize) <= batch_size:
-        return generate_summary_structured(
-            messages_to_summarize, existing_summary, api_keys, model_name, lang
-        )
-    batches = [messages_to_summarize[i:i + batch_size]
-               for i in range(0, len(messages_to_summarize), batch_size)]
-    running = existing_summary
-    for batch in batches:
-        running = generate_summary_structured(batch, running, api_keys, model_name, lang)
-    return running
-
-
 # ==========================================
 # 12. i18n
 # ==========================================
 TRANSLATIONS = {
     "en": {
         "app_title": "⚡ LTTP AI Online",
-        "app_subtitle": "Multi-purpose AI System with GitHub Sync",
+        "app_subtitle": "Multi-purpose AI System with Agentic Search",
         "login_tab": "🔑 Login", "register_tab": "📝 Register",
         "username": "Username:", "password": "Password:",
         "confirm_password": "Confirm password:",
@@ -3221,40 +3472,22 @@ TRANSLATIONS = {
         "memory_saved": "Memory saved!",
         "model_select": "Choose A.I model:",
         "gen_config": "🎨 How A.I responds",
-        "temperature": "Creativity level",
-        "temperature_help": "**Creativity level** — how imaginative the A.I is.",
-        "top_p": "Diversity",
-        "top_p_help": "**Diversity** — word choices considered.",
-        "top_k": "Focus level",
-        "top_k_help": "**Focus level** — candidate words per step.",
-        "save_params": "💾 Save settings",
-        "params_saved": "Settings saved!",
-        "reset_params": "↺ Defaults",
-        "reset_params_toast": "Reset to defaults!",
-        "t_level_safe": "Safe, sticks to facts",
-        "t_level_balanced": "Balanced — recommended",
-        "t_level_creative": "Creative, imaginative",
-        "p_level_predictable": "Predictable, safe",
-        "p_level_varied": "Rich, varied",
-        "k_level_focused": "Very focused, concise",
-        "k_level_balanced": "Balanced — recommended",
-        "k_level_varied": "Highly varied",
+        "temperature": "Creativity", "top_p": "Diversity", "top_k": "Focus",
+        "save_params": "💾 Save settings", "params_saved": "Settings saved!",
+        "reset_params": "↺ Defaults", "reset_params_toast": "Reset to defaults!",
         "chat_placeholder": "Ask LTTP AI anything...",
         "current_chat": "Currently in", "model_label": "Model",
         "new_chat": "New Conversation",
-        "no_api_key": "⚠️ No A.I service is available right now!",
+        "no_api_key": "⚠️ No A.I service available!",
         "ai_thinking": "LTTP AI is thinking...",
         "ai_typing": "LTTP AI is typing...",
         "ai_error": "❌ Could not generate AI response.",
         "ai_retry_btn": "🔄 Retry",
-        "ai_retry_tooltip": "Retry this message",
-        "ai_retry_sending": "Retrying...",
-        "ai_chat_running_elsewhere": "⚠️ Another chat is still generating. You can continue in this chat.",
+        "ai_chat_running_elsewhere": "⚠️ Another chat is generating. You can continue in this chat.",
         "chat_running_badge": "GEN",
         "device_id": "Device ID", "online": "Online", "language": "🌐 Language",
-        "guest_btn": "👤 Continue as Guest",
-        "guest_mode": "Guest Mode",
-        "guest_banner": "You are using Guest Mode. Chats are not saved.",
+        "guest_btn": "👤 Continue as Guest", "guest_mode": "Guest Mode",
+        "guest_banner": "Guest Mode. Chats are not saved.",
         "maintenance_title": "🚧 System under maintenance",
         "maintenance_desc": "We are temporarily pausing the system.",
         "maintenance_login_expander": "🔧 Maintenance access",
@@ -3262,540 +3495,554 @@ TRANSLATIONS = {
         "admin_panel": "🛡️ Admin Panel",
         "admin_logged_in": "Logged in as Administrator",
         "maintenance_toggle": "System Maintenance Mode",
-        "maintenance_on": "🔴 Pause System",
-        "maintenance_off": "🟢 Resume System",
-        "maintenance_note_label": "Maintenance note (optional):",
+        "maintenance_on": "🔴 Pause System", "maintenance_off": "🟢 Resume System",
+        "maintenance_note_label": "Maintenance note:",
         "maintenance_note_placeholder": "e.g. We are upgrading servers.",
-        "save_maintenance_note": "💾 Save Maintenance Note",
-        "maintenance_note_saved": "Maintenance note saved!",
-        "sys_status": "System Status",
-        "sys_running": "🟢 Running", "sys_paused": "🔴 Paused",
+        "save_maintenance_note": "💾 Save Note", "maintenance_note_saved": "Saved!",
+        "sys_status": "System Status", "sys_running": "🟢 Running", "sys_paused": "🔴 Paused",
         "admin_logout": "🚪 Exit Admin Mode",
         "announcement_panel_title": "📢 Announcement Board",
-        "announcement_panel_desc": "This message will be shown to ALL users.",
+        "announcement_panel_desc": "Shown to ALL users.",
         "announcement_title_label": "Title (optional)",
-        "announcement_title_placeholder": "e.g. Scheduled maintenance tonight",
-        "announcement_body_label": "Message content",
-        "announcement_body_placeholder": "Write something to display to all users.",
-        "announcement_send_btn": "📤 Send to all users",
-        "announcement_update_btn": "💾 Update announcement",
-        "announcement_clear_btn": "🗑️ Clear announcement",
-        "announcement_sent_toast": "Announcement updated!",
-        "announcement_cleared_toast": "Announcement cleared!",
+        "announcement_title_placeholder": "e.g. Scheduled maintenance",
+        "announcement_body_label": "Message",
+        "announcement_body_placeholder": "Write something.",
+        "announcement_send_btn": "📤 Send to all",
+        "announcement_update_btn": "💾 Update",
+        "announcement_clear_btn": "🗑️ Clear",
+        "announcement_sent_toast": "Updated!",
+        "announcement_cleared_toast": "Cleared!",
         "announcement_preview": "Preview:",
-        "announcement_current_status": "Current status",
-        "announcement_status_on": "🟢 Live",
-        "announcement_status_off": "⚪ Off",
+        "announcement_current_status": "Status",
+        "announcement_status_on": "🟢 Live", "announcement_status_off": "⚪ Off",
         "announcement_default_title": "📢 Announcement",
         "announcement_updated_at": "Last updated",
-        "test_mode_label": "🔧 TEST SESSION",
-        "test_banner": "You are in TEST mode. Actions stored in RAM only.",
-        "test_logout": "🚪 Exit Test Session",
-        "test_only_in_maintenance": "❌ Test account only works during maintenance.",
-        "test_login_success": "Test mode activated!",
-        "test_badge": "TEST",
-        "traffic_title": "📊 Traffic Analytics",
-        "traffic_desc": "Visitor log (VN time, GMT+7)",
-        "traffic_today": "Today", "traffic_7d": "Last 7 days", "traffic_30d": "Last 30 days",
-        "traffic_unique": "Unique visitors", "traffic_by_role": "By role",
-        "traffic_chart_title": "Visits per day (last 14 days)",
-        "traffic_recent": "Recent visits", "traffic_no_data": "No traffic data yet.",
-        "traffic_role_user": "Users", "traffic_role_guest": "Guests", "traffic_role_admin": "Admin",
+        "test_mode_label": "🔧 TEST", "test_banner": "TEST MODE. RAM only.",
+        "test_logout": "🚪 Exit Test", "test_only_in_maintenance": "❌ Test only in maintenance.",
+        "test_login_success": "Test activated!", "test_badge": "TEST",
+        "traffic_title": "📊 Traffic", "traffic_desc": "VN time (GMT+7)",
+        "traffic_today": "Today", "traffic_7d": "7d", "traffic_30d": "30d",
+        "traffic_unique": "Unique", "traffic_by_role": "By role",
+        "traffic_chart_title": "14-day chart", "traffic_recent": "Recent",
+        "traffic_no_data": "No data.", "traffic_role_user": "Users",
+        "traffic_role_guest": "Guests", "traffic_role_admin": "Admin",
         "traffic_current_time": "Current VN time",
         "settings_title": "⚙️ Settings",
-        "smart_draft_label": "Smart Message Saving",
-        "smart_draft_help": "Auto-saves draft:\n• >20 words → every 5s\n• Idle 20s → save once",
-        "smart_draft_on": "✅ Enabled", "smart_draft_off": "❌ Disabled",
-        "draft_restored_title": "📝 Unsent draft found",
-        "draft_restored_desc": "You have a saved draft:",
-        "draft_restore_btn": "📋 Copy to clipboard",
-        "draft_discard_btn": "🗑️ Discard draft",
-        "draft_discarded_toast": "Draft discarded",
-        "draft_copied_toast": "Draft copied!",
+        "smart_draft_label": "Smart Draft",
+        "smart_draft_help": "Auto-save: >20 words every 5s; idle 20s once.",
+        "smart_draft_on": "✅ On", "smart_draft_off": "❌ Off",
+        "draft_restored_title": "📝 Draft found",
+        "draft_restored_desc": "Saved draft:",
+        "draft_restore_btn": "📋 Copy",
+        "draft_discard_btn": "🗑️ Discard",
+        "draft_discarded_toast": "Discarded", "draft_copied_toast": "Copied!",
         "typing_mode_label": "Typing speed",
-        "typing_mode_help": "Choose how A.I's response appears.",
+        "typing_mode_help": "Choose how responses appear.",
         "typing_mode_smooth": "🌊 Smooth",
         "typing_mode_controlled": "⌨️ Controlled",
         "typing_mode_instant": "⚡ Instant",
-        "typing_cps_label": "Typing speed (chars/second):",
-        "typing_mode_saved": "Typing mode saved!",
-        "bug_report_btn": "🐛 Report a Bug",
+        "typing_cps_label": "Chars/sec:",
+        "typing_mode_saved": "Saved!",
+        "bug_report_btn": "🐛 Bug Report",
         "bug_report_title": "🐛 Bug Report",
-        "bug_report_desc": "Help us improve! Screenshot auto-attached.",
-        "bug_report_text_label": "Describe the bug (optional):",
-        "bug_report_text_placeholder": "e.g. When I pressed X, error Y...",
-        "bug_report_screenshot_label": "Screenshot (auto):",
-        "bug_report_capture_btn": "📸 Capture screenshot",
-        "bug_report_submit_btn": "📤 Send report",
+        "bug_report_desc": "Help us improve! Auto screenshot.",
+        "bug_report_text_label": "Describe (optional):",
+        "bug_report_text_placeholder": "e.g. When I pressed X...",
+        "bug_report_screenshot_label": "Screenshot:",
+        "bug_report_capture_btn": "📸 Capture",
+        "bug_report_submit_btn": "📤 Send",
         "bug_report_cancel_btn": "✖ Cancel",
-        "bug_report_success": "Report sent!",
-        "bug_report_error": "Failed to send report.",
-        "bug_report_no_screenshot": "No screenshot. Text-only report OK.",
+        "bug_report_success": "Sent!", "bug_report_error": "Failed.",
+        "bug_report_no_screenshot": "No screenshot. Text only OK.",
         "bug_report_my_reports": "📬 My Reports",
-        "bug_report_no_reports": "No reports yet.",
+        "bug_report_no_reports": "None yet.",
         "bug_report_reply_from_admin": "Admin reply:",
         "bug_report_sent_at": "Sent at",
         "bug_report_admin_title": "🐛 Bug Reports (Admin)",
-        "bug_report_admin_desc": "User-submitted bug reports. Max 50 kept.",
-        "bug_report_admin_empty": "No bug reports yet.",
-        "bug_report_admin_reply_label": "Reply to user:",
-        "bug_report_admin_reply_placeholder": "e.g. Thanks, we will fix this.",
-        "bug_report_admin_reply_btn": "📤 Send reply",
-        "bug_report_admin_delete_btn": "🗑️ Delete report",
-        "bug_report_admin_reply_saved": "Reply sent!",
-        "bug_report_admin_deleted": "Report deleted!",
+        "bug_report_admin_desc": "Max 50.",
+        "bug_report_admin_empty": "None.",
+        "bug_report_admin_reply_label": "Reply:",
+        "bug_report_admin_reply_placeholder": "Thanks...",
+        "bug_report_admin_reply_btn": "📤 Send",
+        "bug_report_admin_delete_btn": "🗑️ Delete",
+        "bug_report_admin_reply_saved": "Sent!",
+        "bug_report_admin_deleted": "Deleted!",
         "bug_report_from_user": "From",
-        "bug_report_view_screenshot": "View screenshot",
+        "bug_report_view_screenshot": "Screenshot",
         "bug_report_status_replied": "✅ Replied",
-        "bug_report_status_pending": "⏳ Awaiting reply",
+        "bug_report_status_pending": "⏳ Pending",
         "feedback_btn": "💬 Feedback",
-        "feedback_title": "💬 Feedback & Feature Request",
-        "feedback_desc": "Tell us what you need. We read every message!",
+        "feedback_title": "💬 Feedback",
+        "feedback_desc": "We read every message!",
         "feedback_category_label": "Category:",
-        "feedback_category_feature": "✨ Feature request",
+        "feedback_category_feature": "✨ Feature",
         "feedback_category_bug": "🐛 Bug",
-        "feedback_category_improve": "🔧 Improvement",
+        "feedback_category_improve": "🔧 Improve",
         "feedback_category_other": "💭 Other",
-        "feedback_text_label": "Your feedback:",
-        "feedback_text_placeholder": "e.g. I want a dark mode toggle...",
-        "feedback_submit_btn": "📤 Send feedback",
+        "feedback_text_label": "Feedback:",
+        "feedback_text_placeholder": "e.g. I want...",
+        "feedback_submit_btn": "📤 Send",
         "feedback_cancel_btn": "✖ Cancel",
-        "feedback_success": "Thanks for your feedback!",
-        "feedback_error": "Failed to send feedback.",
-        "feedback_empty": "Please write something before sending.",
+        "feedback_success": "Thanks!",
+        "feedback_error": "Failed.",
+        "feedback_empty": "Please write something.",
         "feedback_my_items": "📬 My feedback",
-        "feedback_no_items": "No feedback yet.",
-        "feedback_admin_title": "💬 User Feedback (Admin)",
-        "feedback_admin_desc": "Feedback from users. Max 100 kept.",
-        "feedback_admin_empty": "No feedback yet.",
+        "feedback_no_items": "None yet.",
+        "feedback_admin_title": "💬 Feedback (Admin)",
+        "feedback_admin_desc": "Max 100.",
+        "feedback_admin_empty": "None.",
         "feedback_admin_reply_label": "Reply:",
-        "feedback_admin_reply_placeholder": "e.g. Thanks! We'll add this soon.",
-        "feedback_admin_reply_btn": "📤 Send reply",
+        "feedback_admin_reply_placeholder": "Thanks!",
+        "feedback_admin_reply_btn": "📤 Send",
         "feedback_admin_delete_btn": "🗑️ Delete",
-        "feedback_admin_reply_saved": "Reply sent!",
+        "feedback_admin_reply_saved": "Sent!",
         "feedback_admin_deleted": "Deleted!",
         "feedback_from_user": "From",
         "feedback_status_replied": "✅ Replied",
         "feedback_status_pending": "⏳ Pending",
-        "context_title": "📊 Context Info",
-        "context_model": "Model", "context_budget": "Total budget",
-        "context_messages": "Messages", "context_history_tokens": "Est. history tokens",
+        "context_title": "📊 Context",
+        "context_model": "Model", "context_budget": "Budget",
+        "context_messages": "Messages", "context_history_tokens": "Est. tokens",
         "context_summary_tokens": "Summary tokens",
-        "security_title": "🛡️ Security",
-        "security_desc": "Alerts and logs from abuse detection.",
-        "security_no_alerts": "No security alerts.",
+        "security_title": "🛡️ Security", "security_desc": "Alerts and logs.",
+        "security_no_alerts": "No alerts.",
         "security_alerts_count": "Active alerts",
-        "security_blocked_devices": "Blocked devices",
-        "security_log": "Security log",
-        "security_alert_ack": "Acknowledge",
-        "security_alert_acked": "Acknowledged!",
-        "security_block_device": "🚫 Block this device (24h)",
-        "security_unblock_device": "✅ Unblock device",
-        "security_device_blocked": "Device blocked!",
-        "security_device_unblocked": "Device unblocked!",
-        "security_alert_deleted": "Alert deleted!",
-        "security_delete_alert": "🗑️ Delete alert",
-        "blocked_title": "🚫 Access Temporarily Blocked",
-        "blocked_desc": "Your device has been temporarily blocked.",
-        "blocked_reason": "Reason",
-        "blocked_until": "Blocked until",
-        "terms_title": "📜 Terms of Use",
-        "terms_required": "You must accept the Terms of Use to register.",
-        "terms_accept_checkbox": "I have read and accept the Terms of Use",
-        "terms_show_btn": "📜 View Terms of Use",
-        "ql_btn_enable": "🔍 Enable Quick Lookup",
-        "ql_btn_disable": "🔍✓ Disable Quick Lookup",
-        "ql_badge": "QUICK LOOKUP",
-        "ql_enabled_toast": "Quick Lookup enabled - AI won't remember context",
-        "ql_disabled_toast": "Quick Lookup disabled",
+        "security_blocked_devices": "Blocked",
+        "security_log": "Log",
+        "security_alert_ack": "Ack",
+        "security_alert_acked": "Acked!",
+        "security_block_device": "🚫 Block (24h)",
+        "security_unblock_device": "✅ Unblock",
+        "security_device_blocked": "Blocked!",
+        "security_device_unblocked": "Unblocked!",
+        "security_alert_deleted": "Deleted!",
+        "security_delete_alert": "🗑️ Delete",
+        "blocked_title": "🚫 Temporarily Blocked",
+        "blocked_desc": "Your device is blocked.",
+        "blocked_reason": "Reason", "blocked_until": "Until",
+        "terms_title": "📜 Terms", "terms_required": "Accept to register.",
+        "terms_accept_checkbox": "I accept the Terms",
+        "terms_show_btn": "📜 View Terms",
+        "ql_btn_enable": "🔍 Quick Lookup: ON",
+        "ql_btn_disable": "🔍 Quick Lookup: OFF",
+        "ql_badge": "QL", "ql_enabled_toast": "QL enabled",
+        "ql_disabled_toast": "QL disabled",
         "ql_title": "Quick Lookup",
-        "guest_quota_title": "Guest Daily Quota",
-        "guest_quota_used": "Used",
-        "guest_quota_limit": "Limit",
-        "guest_quota_exceeded": "⚠️ You have reached the daily guest limit. Please register to continue.",
+        "guest_quota_title": "Guest Quota",
+        "guest_quota_used": "Used", "guest_quota_limit": "Limit",
+        "guest_quota_exceeded": "⚠️ Daily limit reached. Please register.",
         "changelog_title": "📢 What's New",
-        "changelog_refresh": "🔄 Refresh",
-        "changelog_retry": "🔄 Retry",
-        "privacy_title": "🔒 Privacy Policy",
-        "privacy_btn": "📜 View Privacy Policy",
-        "privacy_accepted_note": "By using this software, you agree to the Privacy Policy.",
-        "lttp_sec_title": "LTTP Security",
-        "lttp_sec_running": "Running",
-        "lttp_sec_safety": "Safety",
-        "lttp_sec_layers": "Protection layers",
-        "lttp_sec_enabled_toast": "LTTP Security enabled",
-        "lttp_sec_disabled_toast": "⚠️ LTTP Security disabled — data NOT fully protected!",
-        "lttp_sec_disable_warning": "⚠️ WARNING: When disabled, LTTP Security no longer protects your data automatically. Only manual scans remain. Are you sure?",
-        "lttp_sec_scan_now": "🔄 Scan",
-        "lttp_sec_scan_clean": "✅ Clean",
+        "changelog_refresh": "🔄 Refresh", "changelog_retry": "🔄 Retry",
+        "privacy_title": "🔒 Privacy",
+        "privacy_btn": "📜 Privacy Policy",
+        "privacy_accepted_note": "By using, you agree.",
+        "lttp_sec_title": "LTTP Security", "lttp_sec_running": "Running",
+        "lttp_sec_safety": "Safety", "lttp_sec_layers": "Layers",
+        "lttp_sec_enabled_toast": "Enabled",
+        "lttp_sec_disabled_toast": "⚠️ Disabled — not fully protected!",
+        "lttp_sec_disable_warning": "⚠️ Data not protected! Sure?",
+        "lttp_sec_scan_now": "🔄 Scan", "lttp_sec_scan_clean": "✅ Clean",
         "lttp_sec_scan_issues": "⚠️ Issues",
-        "lttp_sec_toggle_on": "ON",
-        "lttp_sec_toggle_off": "OFF",
-        "lttp_sec_enable_btn": "🛡️ Enable",
-        "lttp_sec_disable_btn": "🔓 Disable",
-        "lttp_sec_off_msg": "⚠️ OFF",
-        "lttp_sec_scan_running": "Scanning...",
-        "lttp_sec_no_issues": "No issues found.",
-        "taskbar_sec": "Security",
-        "taskbar_feedback": "Feedback",
-        "taskbar_lang_tip": "Switch language",
-        "taskbar_user": "User",
+        "lttp_sec_toggle_on": "ON", "lttp_sec_toggle_off": "OFF",
+        "lttp_sec_enable_btn": "🛡️ Enable", "lttp_sec_disable_btn": "🔓 Disable",
+        "lttp_sec_off_msg": "⚠️ OFF", "lttp_sec_scan_running": "Scanning...",
+        "lttp_sec_no_issues": "No issues.",
+        "taskbar_sec": "Security", "taskbar_feedback": "Feedback",
+        "taskbar_lang_tip": "Switch language", "taskbar_user": "User",
         "tech_title": "🚀 Advanced Technologies",
-        "tech_desc": "Exclusive technologies powering LTTP AI Online.",
+        "tech_desc": "Exclusive technologies.",
         "tech_security_title": "LTTP Security",
-        "tech_security_desc": "Multi-layer encryption: AES-256-GCM + LTTP-Cipher fallback + HMAC integrity + payload obfuscation + replay prevention + entropy detection.",
+        "tech_security_desc": "Multi-layer encryption (AES-256-GCM + LTTP-Cipher + HMAC + obfuscation).",
         "tech_write_title": "LTTP Write Data",
-        "tech_write_desc": "Non-blocking async database writer. Groups changes within 1.2s and writes to GitHub in the background.",
+        "tech_write_desc": "Async database writer. Groups changes in 1.2s, no UI block.",
         "tech_ai_title": "LTTP AI",
-        "tech_ai_desc": "Smart AI engine with multi-model failover, streaming retry when interrupted, per-message retry button, and intelligent context summarization.",
+        "tech_ai_desc": "Multi-model failover, streaming retry, per-message retry, context summary.",
         "tech_ui_title": "LTTP UI",
-        "tech_ui_desc": "Responsive UI optimized for phones, tablets and desktops. Touch-friendly, iOS-safe input, smooth animated gradient title.",
+        "tech_ui_desc": "Responsive UI for phone/tablet/desktop.",
         "tech_stream_title": "LTTP Stream Engine",
-        "tech_stream_desc": "Char-by-char streaming that never lags midway. Time-based scheduling with lag correction.",
+        "tech_stream_desc": "Char-by-char streaming with lag correction.",
         "tech_memory_title": "LTTP Memory",
-        "tech_memory_desc": "Sliding-window context manager with auto-summarization, preserved key facts, per-chat memory.",
+        "tech_memory_desc": "Sliding-window with auto-summary.",
         "tech_multichat_title": "LTTP Multi-Chat Engine",
-        "tech_multichat_desc": "Run multiple AI streams in background threads. Start a new chat while another is still generating — no waiting, no blocking.",
+        "tech_multichat_desc": "Background threads per chat, no blocking.",
         "tech_crypto_title": "LTTP Chat Crypto",
-        "tech_crypto_desc": "Messages compressed with zlib level 9 and encrypted with AES-256-GCM before writing to GitHub. Reduces storage size ~70-90% and keeps chats unreadable to anyone without the secret key.",
+        "tech_crypto_desc": "zlib+AES-GCM, saves ~70-90% size.",
+        "tech_agentic_title": "LTTP Agentic Search",
+        "tech_agentic_desc": "AI classifier decides which tools to call. Real-time info via DDG, Wikipedia, Open-Meteo, exchangerate.host.",
+        "tech_custom_title": "LTTP Custom Tools",
+        "tech_custom_desc": "User-defined HTTP tools with test button.",
         "tech_badge_active": "ACTIVE",
+        # Custom tools
+        "custom_tools_title": "🛠️ Custom Tools (user-defined)",
+        "custom_tools_desc": "Create HTTP API tools that the AI can call during conversations.",
+        "custom_tools_empty": "No custom tools yet.",
+        "custom_tool_form_title": "✨ Create New Tool",
+        "custom_tool_name": "Tool name",
+        "custom_tool_name_hint": "e.g. gia_vang",
+        "custom_tool_desc": "Description",
+        "custom_tool_desc_hint": "e.g. Get SJC gold price",
+        "custom_tool_url": "URL (use {query} for parameter)",
+        "custom_tool_url_hint": "e.g. https://api.example.com/gold?q={query}",
+        "custom_tool_method": "Method",
+        "custom_tool_response_format": "Response format",
+        "custom_tool_icon": "Icon (emoji)",
+        "custom_tool_advanced": "Advanced (optional)",
+        "custom_tool_headers": "Headers (one per line, Key: Value)",
+        "custom_tool_params": "Default params (a=1&b=2)",
+        "custom_tool_json_path": "JSON path (e.g. data.items[].title)",
+        "custom_tool_test_query": "Test query",
+        "custom_tool_test_btn": "🧪 Test",
+        "custom_tool_save_btn": "💾 Save",
+        "custom_tool_cancel_btn": "❌ Cancel",
+        "custom_tool_test_result": "Test result",
+        "custom_tool_saved": "Tool saved!",
+        "custom_tool_deleted": "Tool deleted!",
+        "custom_tool_test_ok": "✅ Status {code} • {time}ms • {size} bytes",
+        "custom_tool_test_fail": "❌ {err}",
+        "custom_tool_shortcut_name": "Quick name:",
+        "custom_tool_shortcut_desc": "Quick desc:",
+        "custom_tool_shortcut_url": "Quick URL:",
+        "custom_tool_shortcut_icon": "Quick icon:",
+        "custom_tool_test_query_hint": "Quick:",
+        "custom_tool_edit_btn": "✏️ Edit",
+        "custom_tool_delete_btn": "🗑️ Delete",
+        "custom_tool_test_btn_short": "🧪 Test",
+        "custom_tool_enable": "Enable",
+        "custom_tool_disabled_toast": "Tool disabled",
+        "custom_tool_enabled_toast": "Tool enabled",
+        # Agentic search
+        "tool_call_searching": "🔍 Searching",
+        "tool_call_wiki": "📖 Wikipedia",
+        "tool_call_weather": "🌤️ Weather",
+        "tool_call_currency": "💱 Currency",
+        "tool_call_fetch": "🌐 Reading URL",
+        "tool_call_calc": "🧮 Calculating",
+        "tool_call_custom": "🛠️ Custom tool",
+        "tool_call_found": "found",
+        "tool_call_not_found": "not found",
+        "tool_classify_reasoning": "AI decided to use tools",
+        "tool_no_tools_needed": "AI answered directly (no tools needed)",
     },
     "vi": {
         "app_title": "⚡ LTTP AI Online",
-        "app_subtitle": "Hệ thống Trí tuệ Nhân tạo Đa Năng Đồng bộ GitHub",
+        "app_subtitle": "Hệ thống Trí tuệ Nhân tạo với Tìm kiếm Agentic",
         "login_tab": "🔑 Đăng nhập", "register_tab": "📝 Đăng ký",
         "username": "Tên đăng nhập:", "password": "Mật khẩu:",
         "confirm_password": "Xác nhận mật khẩu:",
-        "remember_device": "📌 Ghi nhớ thiết bị này (30 ngày)",
-        "login_btn": "Đăng nhập", "register_btn": "Tạo tài khoản mới",
-        "fill_all": "⚠️ Vui lòng điền đầy đủ thông tin.",
-        "pass_min": "❌ Mật khẩu phải có ít nhất 6 ký tự.",
-        "pass_mismatch": "❌ Mật khẩu xác nhận không khớp.",
-        "username_taken": "❌ Tên đăng nhập đã được sử dụng.",
+        "remember_device": "📌 Ghi nhớ thiết bị (30 ngày)",
+        "login_btn": "Đăng nhập", "register_btn": "Tạo tài khoản",
+        "fill_all": "⚠️ Vui lòng điền đầy đủ.",
+        "pass_min": "❌ Mật khẩu ≥ 6 ký tự.",
+        "pass_mismatch": "❌ Mật khẩu không khớp.",
+        "username_taken": "❌ Tên đã được dùng.",
         "register_success": "🎉 Đăng ký thành công!",
-        "login_fail": "❌ Mật khẩu hoặc tên đăng nhập không chính xác!",
+        "login_fail": "❌ Sai tên hoặc mật khẩu!",
         "login_success": "Đăng nhập thành công!",
-        "auto_login": "Tự động đăng nhập thành công! Xin chào",
+        "auto_login": "Tự động đăng nhập! Xin chào",
         "logout_btn": "🚪 Đăng xuất",
         "new_chat_btn": "➕ Cuộc trò chuyện mới",
-        "chat_list": "💬 Danh sách trò chuyện",
-        "no_chats": "Chưa có cuộc trò chuyện nào.",
-        "delete_chat_tooltip": "Xóa cuộc trò chuyện",
-        "chat_deleted": "Đã xóa cuộc trò chuyện!",
+        "chat_list": "💬 Danh sách",
+        "no_chats": "Chưa có cuộc trò chuyện.",
+        "delete_chat_tooltip": "Xóa",
+        "chat_deleted": "Đã xóa!",
         "memory_title": "🧠 Bộ nhớ cố định",
-        "memory_desc": "AI sẽ luôn ghi nhớ và tuân thủ các quy tắc này.",
-        "memory_placeholder": "Ví dụ: Bạn là trợ lý lập trình Python chuyên nghiệp.",
+        "memory_desc": "AI sẽ luôn ghi nhớ các quy tắc này.",
+        "memory_placeholder": "Ví dụ: Bạn là trợ lý Python chuyên nghiệp.",
         "save_memory_btn": "💾 Lưu ghi nhớ",
-        "memory_saved": "Đã ghi nhớ thông tin!",
-        "model_select": "Chọn trí tuệ nhân tạo:",
+        "memory_saved": "Đã ghi nhớ!",
+        "model_select": "Chọn A.I:",
         "gen_config": "🎨 Cách A.I trả lời",
-        "temperature": "Mức độ sáng tạo",
-        "temperature_help": "**Mức độ sáng tạo** — A.I bay bổng đến mức nào.",
-        "top_p": "Mức độ đa dạng",
-        "top_p_help": "**Mức độ đa dạng** — số lựa chọn từ.",
-        "top_k": "Mức độ tập trung",
-        "top_k_help": "**Mức độ tập trung** — số từ mỗi bước.",
-        "save_params": "💾 Lưu cài đặt",
-        "params_saved": "Đã lưu cài đặt!",
-        "reset_params": "↺ Mặc định",
-        "reset_params_toast": "Đã khôi phục mặc định!",
-        "t_level_safe": "An toàn, bám sát sự thật",
-        "t_level_balanced": "Cân bằng — khuyên dùng",
-        "t_level_creative": "Sáng tạo, bay bổng",
-        "p_level_predictable": "Dễ đoán, an toàn",
-        "p_level_varied": "Đa dạng, phong phú",
-        "k_level_focused": "Rất tập trung, gọn gàng",
-        "k_level_balanced": "Cân bằng — khuyên dùng",
-        "k_level_varied": "Đa dạng cao",
+        "temperature": "Sáng tạo", "top_p": "Đa dạng", "top_k": "Tập trung",
+        "save_params": "💾 Lưu", "params_saved": "Đã lưu!",
+        "reset_params": "↺ Mặc định", "reset_params_toast": "Đã khôi phục!",
         "chat_placeholder": "Hỏi LTTP AI bất cứ điều gì...",
-        "current_chat": "Đang trò chuyện trong", "model_label": "Mô hình",
+        "current_chat": "Đang trong", "model_label": "Mô hình",
         "new_chat": "Cuộc trò chuyện mới",
-        "no_api_key": "⚠️ Hiện chưa có dịch vụ A.I nào khả dụng!",
-        "ai_thinking": "LTTP AI đang suy nghĩ...",
+        "no_api_key": "⚠️ Chưa có dịch vụ A.I!",
+        "ai_thinking": "LTTP AI đang nghĩ...",
         "ai_typing": "LTTP AI đang gõ...",
-        "ai_error": "❌ Không thể tạo phản hồi từ AI.",
+        "ai_error": "❌ Không thể tạo phản hồi.",
         "ai_retry_btn": "🔄 Thử lại",
-        "ai_retry_tooltip": "Gửi lại tin nhắn này",
-        "ai_retry_sending": "Đang thử lại...",
-        "ai_chat_running_elsewhere": "⚠️ Một chat khác vẫn đang tạo phản hồi. Bạn có thể tiếp tục ở chat này.",
+        "ai_chat_running_elsewhere": "⚠️ Chat khác đang chạy. Bạn vẫn có thể tiếp tục ở đây.",
         "chat_running_badge": "ĐANG TẠO",
         "device_id": "Device ID", "online": "Online", "language": "🌐 Ngôn ngữ",
-        "guest_btn": "👤 Tiếp tục với tư cách Khách",
-        "guest_mode": "Chế độ Khách",
-        "guest_banner": "Bạn đang dùng chế độ Khách. Cuộc trò chuyện không được lưu.",
-        "maintenance_title": "🚧 Hệ thống đang bảo trì",
-        "maintenance_desc": "Chúng tôi tạm thời ngừng hệ thống.",
+        "guest_btn": "👤 Dùng với tư cách Khách", "guest_mode": "Chế độ Khách",
+        "guest_banner": "Chế độ Khách. Không lưu chat.",
+        "maintenance_title": "🚧 Hệ thống bảo trì",
+        "maintenance_desc": "Tạm ngừng hệ thống.",
         "maintenance_login_expander": "🔧 Truy cập bảo trì",
-        "maintenance_login_test_hint": "Dùng tài khoản test khi đang bảo trì",
+        "maintenance_login_test_hint": "Dùng tài khoản test khi bảo trì",
         "admin_panel": "🛡️ Bảng điều khiển Admin",
-        "admin_logged_in": "Đã đăng nhập với quyền Quản trị viên",
-        "maintenance_toggle": "Chế độ Bảo trì Hệ thống",
-        "maintenance_on": "🔴 Tạm ngừng hệ thống",
-        "maintenance_off": "🟢 Mở lại hệ thống",
-        "maintenance_note_label": "Lời chú thích bảo trì:",
+        "admin_logged_in": "Đã đăng nhập Quản trị",
+        "maintenance_toggle": "Chế độ Bảo trì",
+        "maintenance_on": "🔴 Tạm ngừng", "maintenance_off": "🟢 Mở lại",
+        "maintenance_note_label": "Lời chú thích:",
         "maintenance_note_placeholder": "Ví dụ: Đang nâng cấp máy chủ.",
-        "save_maintenance_note": "💾 Lưu lời chú thích",
-        "maintenance_note_saved": "Đã lưu lời chú thích!",
-        "sys_status": "Trạng thái hệ thống",
-        "sys_running": "🟢 Đang chạy", "sys_paused": "🔴 Đang tạm ngừng",
-        "admin_logout": "🚪 Thoát chế độ Admin",
+        "save_maintenance_note": "💾 Lưu", "maintenance_note_saved": "Đã lưu!",
+        "sys_status": "Trạng thái", "sys_running": "🟢 Chạy", "sys_paused": "🔴 Dừng",
+        "admin_logout": "🚪 Thoát Admin",
         "announcement_panel_title": "📢 Bảng thông tin",
-        "announcement_panel_desc": "Thông báo này hiển thị cho TẤT CẢ người dùng.",
-        "announcement_title_label": "Tiêu đề (không bắt buộc)",
+        "announcement_panel_desc": "Hiển thị cho TẤT CẢ.",
+        "announcement_title_label": "Tiêu đề",
         "announcement_title_placeholder": "Ví dụ: Bảo trì tối nay",
-        "announcement_body_label": "Nội dung thông báo",
-        "announcement_body_placeholder": "Nhập nội dung gửi đến mọi người.",
-        "announcement_send_btn": "📤 Gửi đến toàn bộ người dùng",
-        "announcement_update_btn": "💾 Cập nhật thông báo",
-        "announcement_clear_btn": "🗑️ Xóa thông báo",
-        "announcement_sent_toast": "Đã cập nhật bảng thông tin!",
-        "announcement_cleared_toast": "Đã xóa bảng thông tin!",
+        "announcement_body_label": "Nội dung",
+        "announcement_body_placeholder": "Nhập nội dung...",
+        "announcement_send_btn": "📤 Gửi tất cả",
+        "announcement_update_btn": "💾 Cập nhật",
+        "announcement_clear_btn": "🗑️ Xóa",
+        "announcement_sent_toast": "Đã cập nhật!",
+        "announcement_cleared_toast": "Đã xóa!",
         "announcement_preview": "Xem trước:",
         "announcement_current_status": "Trạng thái",
-        "announcement_status_on": "🟢 Đang hiển thị",
-        "announcement_status_off": "⚪ Đang tắt",
+        "announcement_status_on": "🟢 Hiển thị",
+        "announcement_status_off": "⚪ Tắt",
         "announcement_default_title": "📢 Thông báo",
         "announcement_updated_at": "Cập nhật lúc",
-        "test_mode_label": "🔧 PHIÊN TEST",
-        "test_banner": "Bạn đang ở chế độ TEST. Mọi thao tác chỉ lưu RAM.",
-        "test_logout": "🚪 Thoát phiên Test",
-        "test_only_in_maintenance": "❌ Tài khoản test chỉ dùng được khi bảo trì.",
-        "test_login_success": "Đã bật Test!",
-        "test_badge": "TEST",
-        "traffic_title": "📊 Lưu lượng truy cập",
-        "traffic_desc": "Nhật ký (giờ Việt Nam, GMT+7)",
-        "traffic_today": "Hôm nay", "traffic_7d": "7 ngày qua", "traffic_30d": "30 ngày qua",
-        "traffic_unique": "Người truy cập riêng", "traffic_by_role": "Theo vai trò",
-        "traffic_chart_title": "Lượt/ngày (14 ngày qua)",
-        "traffic_recent": "Truy cập gần đây", "traffic_no_data": "Chưa có dữ liệu.",
-        "traffic_role_user": "Người dùng", "traffic_role_guest": "Khách", "traffic_role_admin": "Admin",
-        "traffic_current_time": "Giờ VN hiện tại",
+        "test_mode_label": "🔧 TEST", "test_banner": "TEST. RAM only.",
+        "test_logout": "🚪 Thoát Test",
+        "test_only_in_maintenance": "❌ Test chỉ trong bảo trì.",
+        "test_login_success": "Đã bật Test!", "test_badge": "TEST",
+        "traffic_title": "📊 Lưu lượng", "traffic_desc": "Giờ VN",
+        "traffic_today": "Hôm nay", "traffic_7d": "7d", "traffic_30d": "30d",
+        "traffic_unique": "Riêng", "traffic_by_role": "Theo vai trò",
+        "traffic_chart_title": "14 ngày", "traffic_recent": "Gần đây",
+        "traffic_no_data": "Chưa có dữ liệu.",
+        "traffic_role_user": "Người dùng",
+        "traffic_role_guest": "Khách", "traffic_role_admin": "Admin",
+        "traffic_current_time": "Giờ VN",
         "settings_title": "⚙️ Cài đặt",
-        "smart_draft_label": "Lưu tin nhắn thông minh",
-        "smart_draft_help": "Tự động lưu nháp:\n• >20 từ → 5s\n• Ngừng 20s → lưu 1 lần",
-        "smart_draft_on": "✅ Đang bật", "smart_draft_off": "❌ Đang tắt",
-        "draft_restored_title": "📝 Có tin nhắn nháp",
-        "draft_restored_desc": "Bạn có nháp đã lưu:",
+        "smart_draft_label": "Lưu nháp thông minh",
+        "smart_draft_help": "Tự lưu: >20 từ mỗi 5s; idle 20s 1 lần.",
+        "smart_draft_on": "✅ Bật", "smart_draft_off": "❌ Tắt",
+        "draft_restored_title": "📝 Có nháp",
+        "draft_restored_desc": "Nháp đã lưu:",
         "draft_restore_btn": "📋 Sao chép",
-        "draft_discard_btn": "🗑️ Xóa nháp",
-        "draft_discarded_toast": "Đã xóa nháp",
-        "draft_copied_toast": "Đã sao chép!",
+        "draft_discard_btn": "🗑️ Xóa",
+        "draft_discarded_toast": "Đã xóa", "draft_copied_toast": "Đã chép!",
         "typing_mode_label": "Tốc độ gõ",
-        "typing_mode_help": "Chọn cách câu trả lời của A.I xuất hiện.",
-        "typing_mode_smooth": "🌊 Mượt mà",
+        "typing_mode_help": "Chọn cách câu trả lời xuất hiện.",
+        "typing_mode_smooth": "🌊 Mượt",
         "typing_mode_controlled": "⌨️ Kiểm soát",
-        "typing_mode_instant": "⚡ Hiện ngay",
-        "typing_cps_label": "Tốc độ gõ (ký tự/giây):",
-        "typing_mode_saved": "Đã lưu chế độ gõ!",
-        "bug_report_btn": "🐛 Báo cáo lỗi",
+        "typing_mode_instant": "⚡ Ngay",
+        "typing_cps_label": "Ký tự/giây:",
+        "typing_mode_saved": "Đã lưu!",
+        "bug_report_btn": "🐛 Báo lỗi",
         "bug_report_title": "🐛 Báo cáo lỗi",
-        "bug_report_desc": "Giúp chúng tôi cải thiện! Ảnh chụp tự động đính kèm.",
-        "bug_report_text_label": "Mô tả lỗi (không bắt buộc):",
-        "bug_report_text_placeholder": "Ví dụ: Khi tôi bấm X thì hiện lỗi Y...",
-        "bug_report_screenshot_label": "Ảnh chụp (tự động):",
-        "bug_report_capture_btn": "📸 Chụp màn hình",
-        "bug_report_submit_btn": "📤 Gửi báo cáo",
+        "bug_report_desc": "Chụp màn hình tự động.",
+        "bug_report_text_label": "Mô tả (tuỳ chọn):",
+        "bug_report_text_placeholder": "Ví dụ: Khi tôi bấm X...",
+        "bug_report_screenshot_label": "Ảnh chụp:",
+        "bug_report_capture_btn": "📸 Chụp",
+        "bug_report_submit_btn": "📤 Gửi",
         "bug_report_cancel_btn": "✖ Hủy",
-        "bug_report_success": "Đã gửi báo cáo!",
-        "bug_report_error": "Gửi báo cáo thất bại.",
-        "bug_report_no_screenshot": "Chưa có ảnh. Vẫn có thể gửi báo cáo chữ.",
+        "bug_report_success": "Đã gửi!", "bug_report_error": "Thất bại.",
+        "bug_report_no_screenshot": "Chưa có ảnh. Có thể gửi chữ.",
         "bug_report_my_reports": "📬 Báo cáo của tôi",
-        "bug_report_no_reports": "Bạn chưa có báo cáo nào.",
-        "bug_report_reply_from_admin": "Phản hồi từ Admin:",
-        "bug_report_sent_at": "Gửi lúc",
+        "bug_report_no_reports": "Chưa có.",
+        "bug_report_reply_from_admin": "Phản hồi:",
+        "bug_report_sent_at": "Lúc",
         "bug_report_admin_title": "🐛 Báo cáo lỗi (Admin)",
-        "bug_report_admin_desc": "Báo cáo từ người dùng. Giữ tối đa 50.",
-        "bug_report_admin_empty": "Chưa có báo cáo.",
+        "bug_report_admin_desc": "Tối đa 50.",
+        "bug_report_admin_empty": "Chưa có.",
         "bug_report_admin_reply_label": "Phản hồi:",
-        "bug_report_admin_reply_placeholder": "Ví dụ: Cảm ơn, sẽ sửa trong bản tới.",
-        "bug_report_admin_reply_btn": "📤 Gửi phản hồi",
-        "bug_report_admin_delete_btn": "🗑️ Xóa báo cáo",
-        "bug_report_admin_reply_saved": "Đã gửi phản hồi!",
-        "bug_report_admin_deleted": "Đã xóa báo cáo!",
+        "bug_report_admin_reply_placeholder": "Cảm ơn...",
+        "bug_report_admin_reply_btn": "📤 Gửi",
+        "bug_report_admin_delete_btn": "🗑️ Xóa",
+        "bug_report_admin_reply_saved": "Đã gửi!",
+        "bug_report_admin_deleted": "Đã xóa!",
         "bug_report_from_user": "Từ",
-        "bug_report_view_screenshot": "Xem ảnh chụp",
-        "bug_report_status_replied": "✅ Đã phản hồi",
-        "bug_report_status_pending": "⏳ Chờ phản hồi",
+        "bug_report_view_screenshot": "Xem ảnh",
+        "bug_report_status_replied": "✅ Đã trả lời",
+        "bug_report_status_pending": "⏳ Chờ",
         "feedback_btn": "💬 Phản hồi",
-        "feedback_title": "💬 Phản hồi & Đề xuất tính năng",
-        "feedback_desc": "Cho chúng tôi biết bạn cần gì. Chúng tôi đọc mọi tin nhắn!",
-        "feedback_category_label": "Danh mục:",
-        "feedback_category_feature": "✨ Đề xuất tính năng",
+        "feedback_title": "💬 Phản hồi",
+        "feedback_desc": "Chúng tôi đọc mọi tin!",
+        "feedback_category_label": "Loại:",
+        "feedback_category_feature": "✨ Tính năng",
         "feedback_category_bug": "🐛 Lỗi",
         "feedback_category_improve": "🔧 Cải thiện",
         "feedback_category_other": "💭 Khác",
-        "feedback_text_label": "Phản hồi của bạn:",
-        "feedback_text_placeholder": "Ví dụ: Tôi muốn có chế độ tối...",
-        "feedback_submit_btn": "📤 Gửi phản hồi",
+        "feedback_text_label": "Nội dung:",
+        "feedback_text_placeholder": "Ví dụ: Tôi muốn...",
+        "feedback_submit_btn": "📤 Gửi",
         "feedback_cancel_btn": "✖ Hủy",
-        "feedback_success": "Cảm ơn phản hồi của bạn!",
-        "feedback_error": "Gửi phản hồi thất bại.",
-        "feedback_empty": "Vui lòng nhập nội dung trước khi gửi.",
+        "feedback_success": "Cảm ơn!",
+        "feedback_error": "Thất bại.",
+        "feedback_empty": "Vui lòng nhập nội dung.",
         "feedback_my_items": "📬 Phản hồi của tôi",
-        "feedback_no_items": "Chưa có phản hồi nào.",
-        "feedback_admin_title": "💬 Phản hồi người dùng (Admin)",
-        "feedback_admin_desc": "Phản hồi từ người dùng. Giữ tối đa 100.",
-        "feedback_admin_empty": "Chưa có phản hồi nào.",
+        "feedback_no_items": "Chưa có.",
+        "feedback_admin_title": "💬 Phản hồi (Admin)",
+        "feedback_admin_desc": "Tối đa 100.",
+        "feedback_admin_empty": "Chưa có.",
         "feedback_admin_reply_label": "Phản hồi:",
-        "feedback_admin_reply_placeholder": "Ví dụ: Cảm ơn! Sẽ thêm sớm.",
-        "feedback_admin_reply_btn": "📤 Gửi phản hồi",
+        "feedback_admin_reply_placeholder": "Cảm ơn!",
+        "feedback_admin_reply_btn": "📤 Gửi",
         "feedback_admin_delete_btn": "🗑️ Xóa",
-        "feedback_admin_reply_saved": "Đã gửi phản hồi!",
+        "feedback_admin_reply_saved": "Đã gửi!",
         "feedback_admin_deleted": "Đã xóa!",
         "feedback_from_user": "Từ",
-        "feedback_status_replied": "✅ Đã phản hồi",
-        "feedback_status_pending": "⏳ Đang chờ",
-        "context_title": "📊 Thông tin ngữ cảnh",
-        "context_model": "Mô hình", "context_budget": "Ngân sách tối đa",
-        "context_messages": "Số tin nhắn", "context_history_tokens": "Token lịch sử (ước tính)",
+        "feedback_status_replied": "✅ Đã trả lời",
+        "feedback_status_pending": "⏳ Chờ",
+        "context_title": "📊 Ngữ cảnh",
+        "context_model": "Mô hình", "context_budget": "Ngân sách",
+        "context_messages": "Tin nhắn", "context_history_tokens": "Token ước tính",
         "context_summary_tokens": "Token tóm tắt",
-        "security_title": "🛡️ Bảo mật",
-        "security_desc": "Cảnh báo và nhật ký từ hệ thống phát hiện bất thường.",
-        "security_no_alerts": "Không có cảnh báo bảo mật.",
-        "security_alerts_count": "Cảnh báo hoạt động",
-        "security_blocked_devices": "Thiết bị bị chặn",
-        "security_log": "Nhật ký bảo mật",
+        "security_title": "🛡️ Bảo mật", "security_desc": "Cảnh báo và nhật ký.",
+        "security_no_alerts": "Không cảnh báo.",
+        "security_alerts_count": "Cảnh báo",
+        "security_blocked_devices": "Bị chặn",
+        "security_log": "Nhật ký",
         "security_alert_ack": "Đã xem",
-        "security_alert_acked": "Đã đánh dấu cảnh báo!",
-        "security_block_device": "🚫 Chặn thiết bị này (24h)",
-        "security_unblock_device": "✅ Bỏ chặn thiết bị",
-        "security_device_blocked": "Đã chặn thiết bị!",
-        "security_device_unblocked": "Đã bỏ chặn thiết bị!",
-        "security_alert_deleted": "Đã xóa cảnh báo!",
-        "security_delete_alert": "🗑️ Xóa cảnh báo",
-        "blocked_title": "🚫 Truy cập tạm thời bị chặn",
-        "blocked_desc": "Thiết bị của bạn đã bị chặn tạm thời do hoạt động đáng ngờ.",
-        "blocked_reason": "Lý do",
-        "blocked_until": "Chặn đến",
-        "terms_title": "📜 Điều khoản sử dụng",
-        "terms_required": "Bạn phải chấp nhận Điều khoản sử dụng để đăng ký.",
-        "terms_accept_checkbox": "Tôi đã đọc và chấp nhận Điều khoản sử dụng",
-        "terms_show_btn": "📜 Xem Điều khoản sử dụng",
-        "ql_btn_enable": "🔍 Bật Quick Lookup",
-        "ql_btn_disable": "🔍✓ Tắt Quick Lookup",
-        "ql_badge": "QUICK LOOKUP",
-        "ql_enabled_toast": "Đã bật Quick Lookup - AI sẽ không nhớ ngữ cảnh",
-        "ql_disabled_toast": "Đã tắt Quick Lookup",
+        "security_alert_acked": "Đã đánh dấu!",
+        "security_block_device": "🚫 Chặn (24h)",
+        "security_unblock_device": "✅ Bỏ chặn",
+        "security_device_blocked": "Đã chặn!",
+        "security_device_unblocked": "Đã bỏ chặn!",
+        "security_alert_deleted": "Đã xóa!",
+        "security_delete_alert": "🗑️ Xóa",
+        "blocked_title": "🚫 Bị chặn tạm thời",
+        "blocked_desc": "Thiết bị đã bị chặn.",
+        "blocked_reason": "Lý do", "blocked_until": "Đến",
+        "terms_title": "📜 Điều khoản", "terms_required": "Phải chấp nhận.",
+        "terms_accept_checkbox": "Tôi chấp nhận Điều khoản",
+        "terms_show_btn": "📜 Xem Điều khoản",
+        "ql_btn_enable": "🔍 Quick Lookup: BẬT",
+        "ql_btn_disable": "🔍 Quick Lookup: TẮT",
+        "ql_badge": "QL", "ql_enabled_toast": "QL đã bật",
+        "ql_disabled_toast": "QL đã tắt",
         "ql_title": "Tra cứu nhanh",
-        "guest_quota_title": "Hạn mức Khách hàng ngày",
-        "guest_quota_used": "Đã dùng",
-        "guest_quota_limit": "Giới hạn",
-        "guest_quota_exceeded": "⚠️ Bạn đã đạt giới hạn guest hôm nay. Vui lòng đăng ký để tiếp tục.",
+        "guest_quota_title": "Hạn mức Khách",
+        "guest_quota_used": "Đã dùng", "guest_quota_limit": "Giới hạn",
+        "guest_quota_exceeded": "⚠️ Đạt giới hạn. Vui lòng đăng ký.",
         "changelog_title": "📢 Có gì mới",
-        "changelog_refresh": "🔄 Tải lại",
-        "changelog_retry": "🔄 Thử lại",
-        "privacy_title": "🔒 Tuyên bố Quyền riêng tư",
-        "privacy_btn": "📜 Xem Chính sách Quyền riêng tư",
-        "privacy_accepted_note": "Khi sử dụng phần mềm này, bạn đồng ý với Chính sách Quyền riêng tư.",
-        "lttp_sec_title": "LTTP Security",
-        "lttp_sec_running": "Đang chạy",
-        "lttp_sec_safety": "An toàn",
-        "lttp_sec_layers": "Các lớp bảo vệ",
-        "lttp_sec_enabled_toast": "Đã bật LTTP Security",
-        "lttp_sec_disabled_toast": "⚠️ Đã TẮT LTTP Security — dữ liệu KHÔNG được bảo vệ đầy đủ!",
-        "lttp_sec_disable_warning": "⚠️ CẢNH BÁO: Khi tắt, LTTP Security không còn tự động bảo vệ dữ liệu. Chỉ còn quét thủ công. Bạn chắc chắn?",
-        "lttp_sec_scan_now": "🔄 Quét",
-        "lttp_sec_scan_clean": "✅ Sạch",
+        "changelog_refresh": "🔄 Tải lại", "changelog_retry": "🔄 Thử lại",
+        "privacy_title": "🔒 Quyền riêng tư",
+        "privacy_btn": "📜 Chính sách",
+        "privacy_accepted_note": "Dùng là đồng ý.",
+        "lttp_sec_title": "LTTP Security", "lttp_sec_running": "Đang chạy",
+        "lttp_sec_safety": "An toàn", "lttp_sec_layers": "Lớp bảo vệ",
+        "lttp_sec_enabled_toast": "Đã bật",
+        "lttp_sec_disabled_toast": "⚠️ Tắt — không bảo vệ đầy đủ!",
+        "lttp_sec_disable_warning": "⚠️ Dữ liệu không được bảo vệ! Chắc?",
+        "lttp_sec_scan_now": "🔄 Quét", "lttp_sec_scan_clean": "✅ Sạch",
         "lttp_sec_scan_issues": "⚠️ Có vấn đề",
-        "lttp_sec_toggle_on": "BẬT",
-        "lttp_sec_toggle_off": "TẮT",
-        "lttp_sec_enable_btn": "🛡️ Bật",
-        "lttp_sec_disable_btn": "🔓 Tắt",
-        "lttp_sec_off_msg": "⚠️ TẮT",
-        "lttp_sec_scan_running": "Đang quét...",
-        "lttp_sec_no_issues": "Không phát hiện vấn đề.",
-        "taskbar_sec": "Bảo mật",
-        "taskbar_feedback": "Phản hồi",
-        "taskbar_lang_tip": "Đổi ngôn ngữ",
-        "taskbar_user": "Người dùng",
+        "lttp_sec_toggle_on": "BẬT", "lttp_sec_toggle_off": "TẮT",
+        "lttp_sec_enable_btn": "🛡️ Bật", "lttp_sec_disable_btn": "🔓 Tắt",
+        "lttp_sec_off_msg": "⚠️ TẮT", "lttp_sec_scan_running": "Đang quét...",
+        "lttp_sec_no_issues": "Không vấn đề.",
+        "taskbar_sec": "Bảo mật", "taskbar_feedback": "Phản hồi",
+        "taskbar_lang_tip": "Đổi ngôn ngữ", "taskbar_user": "Người dùng",
         "tech_title": "🚀 Công nghệ tiên tiến",
-        "tech_desc": "Các công nghệ độc quyền đang được áp dụng trong LTTP AI Online.",
+        "tech_desc": "Công nghệ độc quyền.",
         "tech_security_title": "LTTP Security",
-        "tech_security_desc": "Mã hóa đa lớp: AES-256-GCM + LTTP-Cipher fallback + HMAC toàn vẹn + xáo trộn payload + chống replay + phát hiện entropy.",
+        "tech_security_desc": "Mã hóa đa lớp (AES-256-GCM + LTTP-Cipher + HMAC + obfuscation).",
         "tech_write_title": "LTTP Write Data",
-        "tech_write_desc": "Ghi database bất đồng bộ, không chặn UI. Gộp các thay đổi trong 1.2s và ghi GitHub ở background.",
+        "tech_write_desc": "Ghi DB bất đồng bộ. Gộp trong 1.2s, không block UI.",
         "tech_ai_title": "LTTP AI",
-        "tech_ai_desc": "Bộ máy AI thông minh với failover đa mô hình, tự retry khi stream đứt, nút Thử lại từng tin nhắn, và tóm tắt ngữ cảnh thông minh.",
+        "tech_ai_desc": "Failover đa mô hình, retry stream, retry từng tin, tóm tắt ngữ cảnh.",
         "tech_ui_title": "LTTP UI",
-        "tech_ui_desc": "Giao diện responsive tối ưu cho điện thoại, máy tính bảng và desktop. Nút chạm 44px trên mobile, chống zoom iOS, tiêu đề gradient động mượt mà.",
+        "tech_ui_desc": "Responsive cho điện thoại/tablet/desktop.",
         "tech_stream_title": "LTTP Stream Engine",
-        "tech_stream_desc": "Stream từng ký tự không bị lag giữa chừng. Lập lịch theo thời gian có bù trễ.",
+        "tech_stream_desc": "Stream từng ký tự với bù trễ.",
         "tech_memory_title": "LTTP Memory",
-        "tech_memory_desc": "Quản lý ngữ cảnh sliding-window có tự tóm tắt, giữ lại dữ kiện quan trọng và bộ nhớ riêng từng chat.",
+        "tech_memory_desc": "Sliding-window với tự tóm tắt.",
         "tech_multichat_title": "LTTP Multi-Chat Engine",
-        "tech_multichat_desc": "Chạy nhiều stream AI song song trong background thread. Có thể tạo chat mới trong khi chat khác vẫn đang tạo phản hồi — không chờ, không block.",
+        "tech_multichat_desc": "Thread nền cho mỗi chat, không block.",
         "tech_crypto_title": "LTTP Chat Crypto",
-        "tech_crypto_desc": "Tin nhắn được nén bằng zlib level 9 và mã hóa AES-256-GCM trước khi ghi lên GitHub. Giảm ~70-90% dung lượng và khiến chat không thể đọc được nếu không có khóa bí mật.",
+        "tech_crypto_desc": "zlib+AES-GCM, giảm ~70-90% dung lượng.",
+        "tech_agentic_title": "LTTP Agentic Search",
+        "tech_agentic_desc": "AI phân loại quyết định tool nào gọi. Thông tin thời gian thực qua DDG, Wikipedia, Open-Meteo, exchangerate.host.",
+        "tech_custom_title": "LTTP Custom Tools",
+        "tech_custom_desc": "User tự định nghĩa HTTP tool với nút test.",
         "tech_badge_active": "ĐANG HOẠT ĐỘNG",
+        "custom_tools_title": "🛠️ Custom Tools (tự định nghĩa)",
+        "custom_tools_desc": "Tạo HTTP API tool để AI gọi trong hội thoại.",
+        "custom_tools_empty": "Chưa có custom tool.",
+        "custom_tool_form_title": "✨ Tạo tool mới",
+        "custom_tool_name": "Tên tool",
+        "custom_tool_name_hint": "Ví dụ: gia_vang",
+        "custom_tool_desc": "Mô tả",
+        "custom_tool_desc_hint": "Ví dụ: Lấy giá vàng SJC",
+        "custom_tool_url": "URL (dùng {query} cho tham số)",
+        "custom_tool_url_hint": "Ví dụ: https://api.example.com/gold?q={query}",
+        "custom_tool_method": "Method",
+        "custom_tool_response_format": "Định dạng trả về",
+        "custom_tool_icon": "Icon (emoji)",
+        "custom_tool_advanced": "Nâng cao (tuỳ chọn)",
+        "custom_tool_headers": "Headers (mỗi dòng Key: Value)",
+        "custom_tool_params": "Params mặc định (a=1&b=2)",
+        "custom_tool_json_path": "JSON path (ví dụ data.items[].title)",
+        "custom_tool_test_query": "Query test",
+        "custom_tool_test_btn": "🧪 Test",
+        "custom_tool_save_btn": "💾 Lưu",
+        "custom_tool_cancel_btn": "❌ Hủy",
+        "custom_tool_test_result": "Kết quả test",
+        "custom_tool_saved": "Đã lưu tool!",
+        "custom_tool_deleted": "Đã xóa tool!",
+        "custom_tool_test_ok": "✅ Status {code} • {time}ms • {size} bytes",
+        "custom_tool_test_fail": "❌ {err}",
+        "custom_tool_shortcut_name": "Tên nhanh:",
+        "custom_tool_shortcut_desc": "Mô tả nhanh:",
+        "custom_tool_shortcut_url": "URL nhanh:",
+        "custom_tool_shortcut_icon": "Icon nhanh:",
+        "custom_tool_test_query_hint": "Nhanh:",
+        "custom_tool_edit_btn": "✏️ Sửa",
+        "custom_tool_delete_btn": "🗑️ Xoá",
+        "custom_tool_test_btn_short": "🧪 Test",
+        "custom_tool_enable": "Bật",
+        "custom_tool_disabled_toast": "Đã tắt tool",
+        "custom_tool_enabled_toast": "Đã bật tool",
+        "tool_call_searching": "🔍 Đang tìm",
+        "tool_call_wiki": "📖 Wikipedia",
+        "tool_call_weather": "🌤️ Thời tiết",
+        "tool_call_currency": "💱 Tỷ giá",
+        "tool_call_fetch": "🌐 Đang đọc URL",
+        "tool_call_calc": "🧮 Đang tính",
+        "tool_call_custom": "🛠️ Custom tool",
+        "tool_call_found": "tìm thấy",
+        "tool_call_not_found": "không tìm thấy",
+        "tool_classify_reasoning": "AI quyết định dùng tool",
+        "tool_no_tools_needed": "AI trả lời trực tiếp (không cần tool)",
     }
 }
+
 
 def t(key: str, lang: str = "en") -> str:
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
 
 
-# ==========================================
-# TERMS OF USE
-# ==========================================
+# Terms of use
 TERMS_OF_USE_HTML_EN = """
 <div style="max-height: 500px; overflow-y: auto; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; font-size: 0.9rem; line-height: 1.6;">
 <h3>TERMS OF USE & LEGAL DISCLAIMER</h3>
-<p><b>1. Prohibited Actions</b><br>
-The following actions are strictly prohibited and considered illegal:<br>
-1.1. Copying the source code without written permission from the author.<br>
-1.2. Impersonating the author or copyright holder.<br>
-1.3. Making unauthorized modifications to the software.<br>
-1.4. Transmitting or distributing software-related information/data without prior authorization.</p>
-<p><b>2. Violations of Terms of Use</b><br>
-Any user who commits the following violations will be permanently blocked from using the services:<br>
-2.1. Creating multiple inactive or unused accounts.<br>
-2.2. Repeatedly sending inappropriate, spam, or meaningless content to the AI.<br>
-2.3. Performing actions that overload the server (including but not limited to DDoS attacks or scraping), regardless of whether the source code is affected.<br>
-2.4. Exploiting security vulnerabilities without notifying the author, causing harm to the software, users, or related third-party platforms (e.g., GitHub, Streamlit Cloud).<br>
-2.5. Reverse-engineering the software to illicitly extract personal data or proprietary algorithms.</p>
-<p><b>3. Legal Consequences & Penalties</b><br>
-3.1. <b>In Vietnam:</b> Violations of Section 1 may be subject to liability under the Law on Intellectual Property, the Law on Cybersecurity, and the Penal Code of Vietnam; administrative fines may reach up to 5,000,000,000 VND or criminal prosecution with imprisonment up to 3 years.<br>
-3.2. <b>International Jurisdiction:</b> Copyright-related violations (Section 1.1 and 1.3) will be handled in accordance with the Berne Convention for the Protection of Literary and Artistic Works, applicable in all signatory member countries.</p>
+<p><b>1. Prohibited Actions</b><br>1.1. Copying source code without permission.<br>1.2. Impersonating author.<br>1.3. Unauthorized modifications.<br>1.4. Distributing without permission.</p>
+<p><b>2. Violations</b><br>2.1. Multiple fake accounts.<br>2.2. Spam/meaningless content.<br>2.3. Overloading servers.<br>2.4. Exploiting vulnerabilities.<br>2.5. Reverse-engineering.</p>
+<p><b>3. Legal Consequences</b><br>3.1. <b>Vietnam:</b> Fines up to 5 billion VND or 3 years imprisonment.<br>3.2. <b>International:</b> Berne Convention applies.</p>
 </div>
 """
 
 TERMS_OF_USE_HTML_VI = """
 <div style="max-height: 500px; overflow-y: auto; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 10px; font-size: 0.9rem; line-height: 1.7;">
 <h3>ĐIỀU KHOẢN SỬ DỤNG &amp; TUYÊN BỐ MIỄN TRỪ TRÁCH NHIỆM PHÁP LÝ</h3>
-<p><b>1. Các hành vi bị nghiêm cấm</b><br>
-Các hành vi sau đây bị nghiêm cấm tuyệt đối và được coi là bất hợp pháp:<br>
-1.1. Sao chép mã nguồn mà không có sự cho phép bằng văn bản từ tác giả.<br>
-1.2. Mạo danh tác giả hoặc chủ sở hữu bản quyền.<br>
-1.3. Thực hiện các sửa đổi trái phép đối với phần mềm.<br>
-1.4. Truyền tải hoặc phân phối thông tin/dữ liệu liên quan đến phần mềm mà không được cho phép trước.</p>
-<p><b>2. Vi phạm Điều khoản sử dụng</b><br>
-Người dùng thực hiện các hành vi vi phạm dưới đây sẽ bị chặn vĩnh viễn khỏi việc sử dụng các dịch vụ:<br>
-2.1. Tạo nhiều tài khoản không hoạt động hoặc không sử dụng.<br>
-2.2. Liên tục gửi nội dung không phù hợp, thư rác (spam) hoặc nội dung vô nghĩa cho AI.<br>
-2.3. Thực hiện các hành động gây quá tải máy chủ (bao gồm nhưng không giới hạn ở các cuộc tấn công DDoS hoặc thu thập dữ liệu tự động - scraping), bất kể mã nguồn có bị ảnh hưởng hay không.<br>
-2.4. Khai thác các lỗ hổng bảo mật mà không thông báo cho tác giả, gây tổn hại đến phần mềm, người dùng hoặc các nền tảng bên thứ ba có liên quan.<br>
-2.5. Kỹ thuật đảo ngược (reverse-engineering) phần mềm nhằm mục đích trích xuất trái phép dữ liệu cá nhân hoặc các thuật toán độc quyền.</p>
-<p><b>3. Hậu quả pháp lý &amp; Hình thức xử phạt</b><br>
-3.1. <b>Tại Việt Nam:</b> Các hành vi vi phạm Mục 1 có thể bị truy cứu trách nhiệm theo Luật Sở hữu trí tuệ, Luật An ninh mạng và Bộ luật Hình sự Việt Nam; mức xử phạt hành chính có thể lên tới 5.000.000.000 VNĐ hoặc bị truy cứu trách nhiệm hình sự với mức án tù lên đến 3 năm.<br>
-3.2. <b>Phạm vi quốc tế:</b> Các hành vi vi phạm liên quan đến bản quyền sẽ bị xử lý theo Công ước Berne về bảo hộ các tác phẩm văn học và nghệ thuật, áp dụng tại tất cả các quốc gia thành viên ký kết.</p>
+<p><b>1. Các hành vi bị nghiêm cấm</b><br>1.1. Sao chép mã nguồn không được phép.<br>1.2. Mạo danh tác giả.<br>1.3. Sửa đổi trái phép.<br>1.4. Phân phối không được phép.</p>
+<p><b>2. Vi phạm</b><br>2.1. Tạo nhiều tài khoản ảo.<br>2.2. Spam/nội dung vô nghĩa.<br>2.3. Gây quá tải máy chủ.<br>2.4. Khai thác lỗ hổng.<br>2.5. Reverse-engineering.</p>
+<p><b>3. Hậu quả pháp lý</b><br>3.1. <b>Việt Nam:</b> Phạt đến 5 tỷ VNĐ hoặc 3 năm tù.<br>3.2. <b>Quốc tế:</b> Công ước Berne.</p>
 </div>
 """
 
 
 def get_terms_html(lang: str) -> str:
-    if lang == "vi":
-        return TERMS_OF_USE_HTML_VI
-    return TERMS_OF_USE_HTML_EN
+    return TERMS_OF_USE_HTML_VI if lang == "vi" else TERMS_OF_USE_HTML_EN
 
 
 PRIVACY_POLICY_HTML = """
 <div style="max-height: 450px; overflow-y: auto; padding: 16px; background: rgba(102,126,234,0.06); border-radius: 10px; font-size: 0.92rem; line-height: 1.7;">
-<h3>🔒 TUYÊN BỐ VỀ QUYỀN RIÊNG TƯ VÀ CÁCH XỬ LÝ DỮ LIỆU</h3>
+<h3>🔒 CHÍNH SÁCH QUYỀN RIÊNG TƯ</h3>
 <ol style="padding-left: 20px;">
-<li><b>Phần mềm cam kết không chia sẻ dữ liệu cá nhân với bất kỳ bên thứ ba nào; mọi dữ liệu đều được xử lý một cách cẩn trọng.</b></li>
-<li>Phần mềm sử dụng một số cookie nhất định (cụ thể là các cookie dùng để ghi nhớ phiên đăng nhập).</li>
-<li><b style="color: #fbbf24;">Lưu ý quan trọng:</b> Vui lòng kiểm chứng thông tin do AI tạo ra trước khi chia sẻ.</li>
-<li>Nghiêm cấm mọi hành vi sao chép phần mềm dưới bất kỳ hình thức nào mà không được phép.</li>
+<li><b>Không chia sẻ dữ liệu cá nhân với bên thứ ba.</b></li>
+<li>Sử dụng cookie cho phiên đăng nhập.</li>
+<li><b style="color: #fbbf24;">Vui lòng kiểm chứng thông tin AI.</b></li>
+<li>Nghiêm cấm sao chép phần mềm.</li>
 </ol>
 </div>
 """
@@ -3805,27 +4052,26 @@ PRIVACY_POLICY_HTML = """
 # 13. SESSION STATE
 # ==========================================
 for k, dv in [("user", None), ("is_admin", False), ("is_guest", False),
-              ("is_temporary", False),
-              ("current_chat_id", None), ("messages", []), ("db_data", {}),
-              ("last_save_time", 0), ("language", "en"),
+              ("is_temporary", False), ("current_chat_id", None),
+              ("messages", []), ("db_data", {}), ("language", "en"),
               ("pending_retry_prompt", None), ("seen_version", None),
               ("guest_chats", {}), ("guest_memory", ""),
               ("test_chats", {}), ("test_memory", ""),
               ("traffic_recorded", False),
-              ("draft_last_saved_hash", ""),
-              ("bug_report_open", False),
-              ("bug_report_text", ""),
-              ("feedback_open", False),
-              ("feedback_text", ""),
+              ("bug_report_open", False), ("bug_report_text", ""),
+              ("feedback_open", False), ("feedback_text", ""),
               ("feedback_category", "feature"),
-              ("_models_cache", None),
-              ("_models_cache_time", 0),
-              ("_changelog_cache", None),
-              ("_changelog_cache_time", 0),
-              ("_ql_mode", False),
-              ("_lttp_sec_enabled", True),
+              ("_models_cache", None), ("_models_cache_time", 0),
+              ("_changelog_cache", None), ("_changelog_cache_time", 0),
+              ("_ql_mode", False), ("_lttp_sec_enabled", True),
               ("_lttp_sec_last_scan", None),
-              ("_lttp_sec_last_scan_time", 0)]:
+              ("_lttp_sec_last_scan_time", 0),
+              ("_show_tool_form", False),
+              ("_editing_tool_id", None),
+              ("_tool_test_result", None),
+              ("_tool_test_ok", None),
+              ("guest_custom_tools", []),
+              ("test_custom_tools", [])]:
     if k not in st.session_state:
         st.session_state[k] = dv
 
@@ -3836,7 +4082,6 @@ if "guest_prefs" not in st.session_state:
         "typing_mode": DEFAULT_TYPING_MODE,
         "typing_cps": DEFAULT_TYPING_CPS
     }
-
 if "test_prefs" not in st.session_state:
     st.session_state.test_prefs = {
         "model": DEFAULT_MODEL, "temperature": 0.7,
@@ -3867,7 +4112,6 @@ system_config = db_data.get(SYSTEM_CONFIG_KEY, {
     "announcement": {"enabled": False, "title": "", "body": "", "updated_at": ""}
 })
 maintenance_mode = system_config.get("maintenance_mode", False)
-maintenance_note = system_config.get("maintenance_note", "").strip()
 
 _ann_cfg = system_config.get("announcement", {}) or {}
 announcement = {
@@ -3888,9 +4132,9 @@ if _block_status["blocked"]:
     until_str = datetime.fromtimestamp(_block_status["until_ts"], VN_TZ).strftime("%Y-%m-%d %H:%M:%S")
     st.markdown(f"""
     <div class="blocked-banner">
-        <div style="font-size: 2rem; margin-bottom: 8px;">🚫</div>
+        <div style="font-size: 2rem;">🚫</div>
         <div>{t('blocked_title', lang_check)}</div>
-        <div style="margin-top: 12px; font-size: 0.9rem; font-weight: 500; opacity: 0.9;">
+        <div style="margin-top: 12px; font-size: 0.9rem;">
             <b>{t('blocked_reason', lang_check)}:</b> {_block_status['reason']}<br>
             <b>{t('blocked_until', lang_check)}:</b> {until_str} (VN)
         </div>
@@ -4007,7 +4251,6 @@ def bug_report_dialog():
     lang = st.session_state.get("language", "en")
     st.markdown(f"### {t('bug_report_title', lang)}")
     st.caption(t("bug_report_desc", lang))
-
     st.markdown(f"**{t('bug_report_screenshot_label', lang)}**")
     col_cap, col_clear = st.columns([1, 1])
     with col_cap:
@@ -4016,10 +4259,9 @@ def bug_report_dialog():
             time.sleep(1.2)
             st.rerun()
     with col_clear:
-        if st.button("🗑️", use_container_width=True, key="bug_clear_ss_btn", help="Clear"):
+        if st.button("🗑️", use_container_width=True, key="bug_clear_ss_btn"):
             clear_bug_report_cookies()
             st.rerun()
-
     b64 = read_bug_report_screenshot()
     if b64:
         try:
@@ -4028,14 +4270,12 @@ def bug_report_dialog():
             st.caption("⚠️ Preview error.")
     else:
         st.caption(t("bug_report_no_screenshot", lang))
-
     bug_text = st.text_area(
         t("bug_report_text_label", lang),
         value=st.session_state.get("bug_report_text", ""),
         height=120, placeholder=t("bug_report_text_placeholder", lang),
         key="bug_dialog_text"
     )
-
     col_send, col_cancel = st.columns(2)
     with col_send:
         if st.button(t("bug_report_submit_btn", lang), use_container_width=True, type="primary", key="bug_submit_btn"):
@@ -4067,7 +4307,6 @@ def bug_report_dialog():
                 st.session_state.bug_report_open = False
                 time.sleep(1.0)
                 st.rerun()
-
     with col_cancel:
         if st.button(t("bug_report_cancel_btn", lang), use_container_width=True, key="bug_cancel_btn"):
             clear_bug_report_cookies()
@@ -4080,7 +4319,6 @@ def feedback_dialog():
     lang = st.session_state.get("language", "en")
     st.markdown(f"### {t('feedback_title', lang)}")
     st.caption(t("feedback_desc", lang))
-
     cat_options = ["feature", "bug", "improve", "other"]
     cat_labels = {
         "feature": t("feedback_category_feature", lang),
@@ -4093,24 +4331,18 @@ def feedback_dialog():
         cur_idx = cat_options.index(cur_cat)
     except ValueError:
         cur_idx = 0
-
     selected_cat = st.radio(
         t("feedback_category_label", lang),
-        options=cat_options,
-        index=cur_idx,
+        options=cat_options, index=cur_idx,
         format_func=lambda x: cat_labels.get(x, x),
-        key="feedback_cat_radio",
-        horizontal=False,
+        key="feedback_cat_radio"
     )
-
     fb_text = st.text_area(
         t("feedback_text_label", lang),
         value=st.session_state.get("feedback_text", ""),
-        height=180,
-        placeholder=t("feedback_text_placeholder", lang),
+        height=180, placeholder=t("feedback_text_placeholder", lang),
         key="feedback_dialog_text"
     )
-
     col_send, col_cancel = st.columns(2)
     with col_send:
         if st.button(t("feedback_submit_btn", lang), use_container_width=True, type="primary", key="feedback_submit_btn"):
@@ -4125,8 +4357,7 @@ def feedback_dialog():
                     "role": "guest" if st.session_state.get("is_guest") else ("test" if is_temporary_session() else "user"),
                     "device": mask_device(device_id),
                     "time": _now_vn_iso(),
-                    "category": selected_cat,
-                    "text": fb_text.strip(),
+                    "category": selected_cat, "text": fb_text.strip(),
                     "reply": "", "replied_at": "", "replied_by": "",
                 }
                 if is_temporary_session():
@@ -4141,7 +4372,6 @@ def feedback_dialog():
                 st.session_state.feedback_text = ""
                 time.sleep(1.0)
                 st.rerun()
-
     with col_cancel:
         if st.button(t("feedback_cancel_btn", lang), use_container_width=True, key="feedback_cancel_btn"):
             st.session_state.feedback_open = False
@@ -4155,25 +4385,22 @@ def render_auth_ui():
     lang = st.session_state.language
     _show_update_notice_if_needed()
     render_announcement_banner()
-
     col_lang_left, col_lang_right = st.columns([5, 1])
     with col_lang_right:
-        lc = st.selectbox("🌐", ["en", "vi"], index=0 if lang == "en" else 1,
+        lc = st.selectbox("🌐", ["en", "vi"],
+                          index=0 if lang == "en" else 1,
                           format_func=lambda x: "🇬🇧 EN" if x == "en" else "🇻🇳 VI",
                           key="auth_lang_selector", label_visibility="collapsed")
         if lc != lang:
             st.session_state.language = lc
             st.rerun()
-
     st.markdown(f"<h1 class='main-header' style='text-align: center;'>{t('app_title', lang)}</h1>", unsafe_allow_html=True)
     st.caption(f"<p style='text-align: center;'>{t('app_subtitle', lang)}</p>", unsafe_allow_html=True)
     st.divider()
-
     _, col, _ = st.columns([1, 1.8, 1])
     with col:
         st.caption(f"🆔 {t('device_id', lang)}: `{mask_device(device_id)}`")
         tab_login, tab_register = st.tabs([t("login_tab", lang), t("register_tab", lang)])
-
         with tab_login:
             with st.form("login_form"):
                 u_name = st.text_input(t("username", lang)).strip()
@@ -4198,8 +4425,9 @@ def render_auth_ui():
                         u_name_lower = u_name.lower()
                         db = GitHubStorage.load_db(force_refresh=True)
                         if (u_name_lower in db
-                                and u_name_lower not in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY, BUG_REPORTS_KEY,
-                                                          FEEDBACK_KEY, SECURITY_LOG_KEY, SECURITY_ALERTS_KEY,
+                                and u_name_lower not in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY,
+                                                          BUG_REPORTS_KEY, FEEDBACK_KEY,
+                                                          SECURITY_LOG_KEY, SECURITY_ALERTS_KEY,
                                                           BLOCKLIST_KEY, GUEST_QUOTAS_KEY, LTTP_SECURITY_KEY)
                                 and isinstance(db[u_name_lower], dict)
                                 and db[u_name_lower].get("password") == hash_password(u_pass)):
@@ -4220,22 +4448,18 @@ def render_auth_ui():
                             st.rerun()
                         else:
                             st.error(t("login_fail", lang))
-
         with tab_register:
             with st.form("register_form"):
                 reg_u = st.text_input(t("username", lang)).strip().lower()
                 reg_p = st.text_input(t("password", lang), type="password")
                 reg_p2 = st.text_input(t("confirm_password", lang), type="password")
-
                 st.markdown(f"**{t('terms_title', lang)}**")
                 with st.expander(t("terms_show_btn", lang), expanded=False):
                     st.markdown(get_terms_html(lang), unsafe_allow_html=True)
                 terms_agree = st.checkbox(t("terms_accept_checkbox", lang), value=False, key="terms_agree_chk")
-
                 st.markdown(f"**{t('privacy_title', lang)}**")
                 with st.expander(t("privacy_btn", lang), expanded=False):
                     st.markdown(PRIVACY_POLICY_HTML, unsafe_allow_html=True)
-
                 if st.form_submit_button(t("register_btn", lang), use_container_width=True):
                     if not enforce_rate_limit("register_attempt", "Register"):
                         return
@@ -4267,6 +4491,7 @@ def render_auth_ui():
                                 "language": "en",
                                 "terms_accepted": True,
                                 "terms_accepted_at": _now_vn_iso(),
+                                "custom_tools": [],
                                 "preferences": {
                                     "model": DEFAULT_MODEL, "temperature": 0.7,
                                     "top_p": 0.95, "top_k": 40, "smart_draft": True,
@@ -4279,7 +4504,6 @@ def render_auth_ui():
                                 st.success(t("register_success", lang))
                             else:
                                 st.error(f"❌ {msg}")
-
         st.markdown("---")
         if st.button(t("guest_btn", lang), use_container_width=True, type="secondary"):
             st.session_state.is_guest = True
@@ -4296,213 +4520,17 @@ def render_auth_ui():
                 "typing_cps": DEFAULT_TYPING_CPS
             }
             st.session_state.guest_memory = ""
+            st.session_state.guest_custom_tools = []
             st.session_state.traffic_recorded = False
             st.rerun()
 
 
 # ==========================================
-# 22. TRAFFIC ANALYTICS
-# ==========================================
-def _render_traffic_analytics(lang: str, traffic: dict):
-    st.markdown(f"### {t('traffic_title', lang)}")
-    st.caption(f"{t('traffic_desc', lang)} • {t('traffic_current_time', lang)}: **{_now_vn_iso()}**")
-    if not isinstance(traffic, dict) or not traffic:
-        st.info(t("traffic_no_data", lang))
-        return
-    today = _today_vn_str()
-    d7 = (vn_now() - timedelta(days=6)).strftime("%Y-%m-%d")
-    d30 = (vn_now() - timedelta(days=29)).strftime("%Y-%m-%d")
-    total_7d = total_30d = today_count = 0
-    unique_devices = set()
-    role_counts = {"user": 0, "guest": 0, "admin": 0}
-    for date_str, day in traffic.items():
-        if not isinstance(day, dict):
-            continue
-        visits = day.get("visits", [])
-        if not isinstance(visits, list):
-            continue
-        n = len(visits)
-        if date_str >= d30: total_30d += n
-        if date_str >= d7: total_7d += n
-        if date_str == today: today_count = n
-        for v in visits:
-            dev = v.get("device")
-            role = v.get("role", "user")
-            if dev: unique_devices.add(dev)
-            if role in role_counts: role_counts[role] += 1
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{today_count}</div><div class="stat-label">{t("traffic_today", lang)}</div></div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{total_7d}</div><div class="stat-label">{t("traffic_7d", lang)}</div></div>', unsafe_allow_html=True)
-    with c3:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{total_30d}</div><div class="stat-label">{t("traffic_30d", lang)}</div></div>', unsafe_allow_html=True)
-    with c4:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{len(unique_devices)}</div><div class="stat-label">{t("traffic_unique", lang)}</div></div>', unsafe_allow_html=True)
-
-    st.markdown(f"#### {t('traffic_chart_title', lang)}")
-    chart_data = {}
-    for i in range(13, -1, -1):
-        d = (vn_now() - timedelta(days=i)).strftime("%Y-%m-%d")
-        day = traffic.get(d, {})
-        visits = day.get("visits", []) if isinstance(day, dict) else []
-        chart_data[d] = len(visits) if isinstance(visits, list) else 0
-    try:
-        import pandas as pd
-        df = pd.DataFrame({"visits": list(chart_data.values())}, index=list(chart_data.keys()))
-        st.bar_chart(df, use_container_width=True)
-    except Exception:
-        for d, n in chart_data.items():
-            st.markdown(f"<div class='traffic-row'>{d}: {'█' * min(n, 50)} ({n})</div>", unsafe_allow_html=True)
-
-    st.markdown(f"#### {t('traffic_by_role', lang)}")
-    rc1, rc2, rc3 = st.columns(3)
-    with rc1:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{role_counts["user"]}</div><div class="stat-label">👤 {t("traffic_role_user", lang)}</div></div>', unsafe_allow_html=True)
-    with rc2:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{role_counts["guest"]}</div><div class="stat-label">👥 {t("traffic_role_guest", lang)}</div></div>', unsafe_allow_html=True)
-    with rc3:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{role_counts["admin"]}</div><div class="stat-label">🛡️ {t("traffic_role_admin", lang)}</div></div>', unsafe_allow_html=True)
-
-    with st.expander(f"📋 {t('traffic_recent', lang)}", expanded=False):
-        all_visits = []
-        for date_str, day in traffic.items():
-            if not isinstance(day, dict):
-                continue
-            for v in day.get("visits", []):
-                if isinstance(v, dict):
-                    all_visits.append(v)
-        all_visits.sort(key=lambda x: x.get("time", ""), reverse=True)
-        recent = all_visits[:100]
-        if not recent:
-            st.caption(t("traffic_no_data", lang))
-        else:
-            for v in recent:
-                ts = v.get("time", "?")
-                lbl = v.get("label", "?")
-                role = v.get("role", "?")
-                dev = mask_device(v.get("device", ""))
-                icon = {"user": "👤", "guest": "👥", "admin": "🛡️"}.get(role, "❓")
-                st.markdown(f"<div class='traffic-row'>{icon} <b>{ts}</b> — {lbl} <span style='opacity:0.5'>({dev})</span></div>", unsafe_allow_html=True)
-
-
-# ==========================================
-# 23. SECURITY PANEL
-# ==========================================
-def render_security_panel(lang: str, db: dict):
-    st.markdown(f"### {t('security_title', lang)}")
-    st.caption(t("security_desc", lang))
-    alerts = db.get(SECURITY_ALERTS_KEY, [])
-    if not isinstance(alerts, list):
-        alerts = []
-    blocklist = db.get(BLOCKLIST_KEY, {})
-    if not isinstance(blocklist, dict):
-        blocklist = {}
-    now_ts = time.time()
-    active_alerts = [a for a in alerts if not a.get("acknowledged", False)]
-    blocked_now = {d: e for d, e in blocklist.items() if float(e.get("until_ts", 0)) > now_ts}
-    cs1, cs2 = st.columns(2)
-    with cs1:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{len(active_alerts)}</div><div class="stat-label">{t("security_alerts_count", lang)}</div></div>', unsafe_allow_html=True)
-    with cs2:
-        st.markdown(f'<div class="stat-card"><div class="stat-value">{len(blocked_now)}</div><div class="stat-label">{t("security_blocked_devices", lang)}</div></div>', unsafe_allow_html=True)
-    if blocked_now:
-        st.markdown("#### 🚫 " + t("security_blocked_devices", lang))
-        for dev, entry in list(blocked_now.items())[:20]:
-            until_dt = datetime.fromtimestamp(float(entry.get("until_ts", 0)), VN_TZ)
-            until_str = until_dt.strftime("%Y-%m-%d %H:%M:%S")
-            reason = entry.get("reason", "")
-            sev = entry.get("severity", "medium")
-            b1, b2 = st.columns([0.75, 0.25])
-            with b1:
-                st.markdown(
-                    f"<div class='alert-card {sev}'>"
-                    f"<div class='alert-meta'>🔒 <b>{mask_device(dev)}</b> • {until_str} • {sev.upper()}</div>"
-                    f"<div class='alert-msg'>{reason}</div>"
-                    f"</div>", unsafe_allow_html=True
-                )
-            with b2:
-                if st.button(t("security_unblock_device", lang), key=f"unblock_{dev[:8]}", use_container_width=True):
-                    db2 = GitHubStorage.load_db(force_refresh=True)
-                    unblock_device(db2, dev)
-                    save_db_async(db2, immediate=True)
-                    st.toast(t("security_device_unblocked", lang), icon="✅")
-                    time.sleep(0.3); st.rerun()
-    st.markdown("---")
-    if not alerts:
-        st.caption(t("security_no_alerts", lang))
-    else:
-        for a in alerts[:50]:
-            sev = a.get("severity", "low")
-            ts = a.get("ts", "?")
-            title_alert = a.get("title", "")
-            detail = a.get("detail", "")
-            dev = a.get("device", "?")
-            user_a = a.get("user", "?")
-            ack = a.get("acknowledged", False)
-            aid = a.get("id", "")
-            ack_badge = "✅" if ack else "🔔"
-            st.markdown(
-                f"<div class='alert-card {sev}'>"
-                f"<div class='alert-meta'>{ack_badge} <b>{sev.upper()}</b> • {ts} • {dev} • <b>{user_a}</b></div>"
-                f"<div class='alert-msg'><b>{title_alert}</b><br>{detail}</div>"
-                f"</div>", unsafe_allow_html=True
-            )
-            bc1, bc2, bc3 = st.columns(3)
-            with bc1:
-                if not ack:
-                    if st.button(t("security_alert_ack", lang), key=f"ack_{aid[:8]}", use_container_width=True):
-                        db2 = GitHubStorage.load_db(force_refresh=True)
-                        al2 = db2.get(SECURITY_ALERTS_KEY, [])
-                        for x in al2:
-                            if x.get("id") == aid:
-                                x["acknowledged"] = True
-                        db2[SECURITY_ALERTS_KEY] = al2
-                        save_db_async(db2, immediate=True)
-                        st.toast(t("security_alert_acked", lang), icon="✅")
-                        time.sleep(0.3); st.rerun()
-            with bc2:
-                dev_raw = a.get("device_raw", "")
-                if dev_raw and dev_raw not in blocked_now:
-                    if st.button(t("security_block_device", lang), key=f"block_{aid[:8]}", use_container_width=True):
-                        db2 = GitHubStorage.load_db(force_refresh=True)
-                        block_device(db2, dev_raw, f"Manual: {title_alert}", "high", duration_override=24 * 3600)
-                        save_db_async(db2, immediate=True)
-                        st.toast(t("security_device_blocked", lang), icon="🚫")
-                        time.sleep(0.3); st.rerun()
-            with bc3:
-                if st.button(t("security_delete_alert", lang), key=f"del_{aid[:8]}", use_container_width=True):
-                    db2 = GitHubStorage.load_db(force_refresh=True)
-                    al2 = [x for x in db2.get(SECURITY_ALERTS_KEY, []) if x.get("id") != aid]
-                    db2[SECURITY_ALERTS_KEY] = al2
-                    save_db_async(db2, immediate=True)
-                    st.toast(t("security_alert_deleted", lang), icon="🗑️")
-                    time.sleep(0.3); st.rerun()
-    with st.expander(t("security_log", lang), expanded=False):
-        sec_log = db.get(SECURITY_LOG_KEY, [])
-        if not isinstance(sec_log, list):
-            sec_log = []
-        for entry in sec_log[:100]:
-            ts = entry.get("ts", "?")
-            ev = entry.get("event", "?")
-            sev = entry.get("severity", "low")
-            msg = entry.get("message", "")
-            dev = entry.get("device", "?")
-            u = entry.get("user", "?")
-            st.markdown(
-                f"<div class='traffic-row'><b>[{sev.upper()}]</b> {ts} — {ev} — {dev} ({u})<br>{msg}</div>",
-                unsafe_allow_html=True
-            )
-
-
-# ==========================================
-# 24. ADMIN PANEL
+# 22. ADMIN PANEL (rút gọn)
 # ==========================================
 def render_admin_panel():
     lang = st.session_state.language
     _show_update_notice_if_needed()
-
     st.markdown(f"<h1 class='main-header'>{t('admin_panel', lang)}</h1>", unsafe_allow_html=True)
     st.caption(f"🛡️ {t('admin_logged_in', lang)} • VN: {_now_vn_iso()}")
     st.divider()
@@ -4529,10 +4557,8 @@ def render_admin_panel():
         st.markdown(f"**{t('announcement_current_status', lang)}:** {t('announcement_status_off', lang)}")
     if ann_updated:
         st.caption(f"🕐 {t('announcement_updated_at', lang)}: {ann_updated}")
-    ann_title_input = st.text_input(t("announcement_title_label", lang), value=ann_title,
-                                     placeholder=t("announcement_title_placeholder", lang), key="admin_ann_title")
-    ann_body_input = st.text_area(t("announcement_body_label", lang), value=ann_body, height=140,
-                                   placeholder=t("announcement_body_placeholder", lang), key="admin_ann_body")
+    ann_title_input = st.text_input(t("announcement_title_label", lang), value=ann_title, key="admin_ann_title")
+    ann_body_input = st.text_area(t("announcement_body_label", lang), value=ann_body, height=140, key="admin_ann_body")
     if ann_body_input.strip():
         st.markdown(f"**{t('announcement_preview', lang)}**")
         preview_title = ann_title_input.strip() or t("announcement_default_title", lang)
@@ -4564,8 +4590,6 @@ def render_admin_panel():
             time.sleep(0.4); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-    status_text = t("sys_paused", lang) if cur_maint else t("sys_running", lang)
-    st.markdown(f"**{t('sys_status', lang)}:** {status_text}")
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
     st.subheader(t("maintenance_toggle", lang))
     col_a, col_b = st.columns(2)
@@ -4573,231 +4597,48 @@ def render_admin_panel():
         if st.button(t("maintenance_on", lang), use_container_width=True, disabled=cur_maint, key="admin_maint_on"):
             cfg["maintenance_mode"] = True; db[SYSTEM_CONFIG_KEY] = cfg
             save_db_async(db, immediate=True)
-            st.toast("🔴 System paused", icon="🔴")
+            st.toast("🔴 Paused", icon="🔴")
             time.sleep(0.3); st.rerun()
     with col_b:
         if st.button(t("maintenance_off", lang), use_container_width=True, disabled=not cur_maint, key="admin_maint_off"):
             cfg["maintenance_mode"] = False; db[SYSTEM_CONFIG_KEY] = cfg
             save_db_async(db, immediate=True)
-            st.toast("🟢 System resumed", icon="🟢")
+            st.toast("🟢 Resumed", icon="🟢")
             time.sleep(0.3); st.rerun()
-    st.markdown(f"**{t('maintenance_note_label', lang)}**")
-    note_input = st.text_area("Note:", value=cur_note, height=100,
-                              placeholder=t("maintenance_note_placeholder", lang),
-                              key="admin_maint_note", label_visibility="collapsed")
+    note_input = st.text_area("Note:", value=cur_note, height=80, key="admin_maint_note")
     if st.button(t("save_maintenance_note", lang), use_container_width=True, key="admin_save_note"):
-        cfg["maintenance_note"] = note_input.strip(); db[SYSTEM_CONFIG_KEY] = cfg
+        cfg["maintenance_note"] = note_input.strip()
+        db[SYSTEM_CONFIG_KEY] = cfg
         save_db_async(db, immediate=True)
         st.toast(t("maintenance_note_saved", lang), icon="💾")
         time.sleep(0.3); st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
-    render_security_panel(lang, db)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # FEEDBACK
-    st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
-    st.subheader(t("feedback_admin_title", lang))
-    st.caption(t("feedback_admin_desc", lang))
-    feedbacks = db.get(FEEDBACK_KEY, [])
-    if not isinstance(feedbacks, list):
-        feedbacks = []
-    if not feedbacks:
-        st.caption(t("feedback_admin_empty", lang))
-    else:
-        fsorted = sorted(feedbacks, key=lambda x: x.get("time", ""), reverse=True)
-        for fb in fsorted:
-            fid = fb.get("id", "")
-            uname = fb.get("user", "?")
-            role = fb.get("role", "user")
-            ftime = fb.get("time", "?")
-            ftext = fb.get("text", "").strip()
-            fcat = fb.get("category", "other")
-            reply = fb.get("reply", "")
-            replied_at = fb.get("replied_at", "")
-            replied_by = fb.get("replied_by", "")
-            cat_labels = {
-                "feature": t("feedback_category_feature", lang),
-                "bug": t("feedback_category_bug", lang),
-                "improve": t("feedback_category_improve", lang),
-                "other": t("feedback_category_other", lang),
-            }
-            cat_label = cat_labels.get(fcat, fcat)
-            with st.container():
-                status_badge = t("feedback_status_replied", lang) if reply else t("feedback_status_pending", lang)
-                st.markdown(f"""
-                <div class="feedback-card">
-                    <div class="feedback-meta">
-                        💬 <b>#{fid[:8]}</b> • {t('feedback_from_user', lang)}: <b>{uname}</b> ({role}) • {cat_label} • {ftime} • {status_badge}
-                    </div>
-                """, unsafe_allow_html=True)
-                if ftext:
-                    st.markdown(f'<div class="feedback-text">{ftext}</div>', unsafe_allow_html=True)
-                if reply:
-                    st.markdown(
-                        f'<div class="feedback-reply">💬 <b>{t("bug_report_reply_from_admin", lang)}</b> '
-                        f'({replied_by}, {replied_at}):<br>{reply}</div>',
-                        unsafe_allow_html=True
-                    )
-                st.markdown('</div>', unsafe_allow_html=True)
-                reply_input = st.text_area(
-                    t("feedback_admin_reply_label", lang), value=reply, height=80,
-                    placeholder=t("feedback_admin_reply_placeholder", lang),
-                    key=f"fb_reply_text_{fid}"
-                )
-                cr1, cr2 = st.columns(2)
-                with cr1:
-                    if st.button(t("feedback_admin_reply_btn", lang), use_container_width=True, key=f"fb_reply_send_{fid}"):
-                        if not reply_input.strip():
-                            st.warning("⚠️ Empty reply.")
-                        else:
-                            db2 = GitHubStorage.load_db(force_refresh=True)
-                            if reply_feedback(db2, fid, reply_input.strip(), "Admin"):
-                                save_db_async(db2, immediate=True)
-                                st.toast(t("feedback_admin_reply_saved", lang), icon="✅")
-                                time.sleep(0.4); st.rerun()
-                            else:
-                                st.error("Not found.")
-                with cr2:
-                    if st.button(t("feedback_admin_delete_btn", lang), use_container_width=True, key=f"fb_del_{fid}"):
-                        db2 = GitHubStorage.load_db(force_refresh=True)
-                        if delete_feedback(db2, fid):
-                            save_db_async(db2, immediate=True)
-                            st.toast(t("feedback_admin_deleted", lang), icon="🗑️")
-                            time.sleep(0.4); st.rerun()
-                        else:
-                            st.error("Not found.")
-                st.markdown("---")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # BUG REPORTS
-    st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
-    st.subheader(t("bug_report_admin_title", lang))
-    st.caption(t("bug_report_admin_desc", lang))
-    reports = db.get(BUG_REPORTS_KEY, [])
-    if not isinstance(reports, list): reports = []
-    if not reports:
-        st.caption(t("bug_report_admin_empty", lang))
-    else:
-        reports_sorted = sorted(reports, key=lambda x: x.get("time", ""), reverse=True)
-        for rpt in reports_sorted:
-            rid = rpt.get("id", "")
-            uname = rpt.get("user", "?")
-            role = rpt.get("role", "user")
-            rtime = rpt.get("time", "?")
-            rtext = rpt.get("text", "").strip()
-            ss = rpt.get("screenshot_b64", "")
-            reply = rpt.get("reply", "")
-            replied_at = rpt.get("replied_at", "")
-            replied_by = rpt.get("replied_by", "")
-            with st.container():
-                status_badge = t("bug_report_status_replied", lang) if reply else t("bug_report_status_pending", lang)
-                st.markdown(f"""
-                <div class="bug-report-card">
-                    <div class="bug-report-meta">
-                        🐛 <b>#{rid[:8]}</b> • {t('bug_report_from_user', lang)}: <b>{uname}</b> ({role}) • {rtime} • {status_badge}
-                    </div>
-                """, unsafe_allow_html=True)
-                if rtext:
-                    st.markdown(f'<div class="bug-report-text">{rtext}</div>', unsafe_allow_html=True)
-                if reply:
-                    st.markdown(
-                        f'<div class="bug-report-reply">💬 <b>{t("bug_report_reply_from_admin", lang)}</b> '
-                        f'({replied_by}, {replied_at}):<br>{reply}</div>',
-                        unsafe_allow_html=True
-                    )
-                st.markdown('</div>', unsafe_allow_html=True)
-                if ss:
-                    with st.expander(t("bug_report_view_screenshot", lang), expanded=False):
-                        try:
-                            st.image("data:image/jpeg;base64," + ss, caption=f"#{rid[:8]}", width=480)
-                        except Exception:
-                            st.caption("⚠️ Cannot read image.")
-                reply_input = st.text_area(
-                    t("bug_report_admin_reply_label", lang), value=reply, height=80,
-                    placeholder=t("bug_report_admin_reply_placeholder", lang),
-                    key=f"reply_text_{rid}"
-                )
-                cr1, cr2 = st.columns(2)
-                with cr1:
-                    if st.button(t("bug_report_admin_reply_btn", lang), use_container_width=True, key=f"reply_send_{rid}"):
-                        if not reply_input.strip():
-                            st.warning("⚠️ Empty reply.")
-                        else:
-                            db2 = GitHubStorage.load_db(force_refresh=True)
-                            if reply_bug_report(db2, rid, reply_input.strip(), "Admin"):
-                                save_db_async(db2, immediate=True)
-                                st.toast(t("bug_report_admin_reply_saved", lang), icon="✅")
-                                time.sleep(0.4); st.rerun()
-                            else:
-                                st.error("Not found.")
-                with cr2:
-                    if st.button(t("bug_report_admin_delete_btn", lang), use_container_width=True, key=f"reply_del_{rid}"):
-                        db2 = GitHubStorage.load_db(force_refresh=True)
-                        if delete_bug_report(db2, rid):
-                            save_db_async(db2, immediate=True)
-                            st.toast(t("bug_report_admin_deleted", lang), icon="🗑️")
-                            time.sleep(0.4); st.rerun()
-                        else:
-                            st.error("Not found.")
-                st.markdown("---")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="admin-panel">', unsafe_allow_html=True)
-    _render_traffic_analytics(lang, db.get(TRAFFIC_LOG_KEY, {}))
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    with st.expander("⚙️ LTTP Write Data — Status", expanded=False):
-        wstats = lttp_writer.stats()
-        st.markdown(f"- **Queue:** {wstats.get('queued', 0)}")
-        st.markdown(f"- **Status:** {wstats.get('last_status', '?')}")
-        st.markdown(f"- **Flush count:** {wstats.get('flush_count', 0)}")
-        st.markdown(f"- **Thread alive:** {'✅' if wstats.get('thread_alive') else '❌'}")
-        if wstats.get("last_error"):
-            st.caption(f"Last error: {wstats.get('last_error')}")
-
-    with st.expander("🌐 LTTP Multi-Chat — Running:", expanded=False):
-        running = multi_chat.get_all_running()
-        if running:
-            st.markdown(f"**{len(running)} chat(s) đang chạy nền:**")
-            for cid in running:
-                st_obj = multi_chat.get_state(cid)
-                st.markdown(f"- `{cid[:8]}...` — queue: {st_obj.get('queue_size', 0)} chunks")
+    st.subheader(t("security_title", lang))
+    scan = st.session_state.get("_lttp_sec_last_scan")
+    if scan:
+        score = scan.get("score", 100)
+        st.metric(t("lttp_sec_safety", lang), score)
+        issues = scan.get("issues", [])
+        if not issues:
+            st.caption(t("lttp_sec_no_issues", lang))
         else:
-            st.caption("Không có chat nào đang chạy.")
+            for i in issues:
+                st.caption(f"⚠️ {i.get('msg', '')}")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    with st.expander("🔐 LTTP Chat Crypto — Info", expanded=False):
-        st.markdown("**Thuật toán:** zlib compress (level 9) + AES-256-GCM + base64")
-        st.markdown("**Khóa:** `CHAT_ENCRYPTION_SECRET` (fallback: `ENCRYPTION_SECRET`)")
-        st.markdown("**Format:** `LTTPCHAT` magic + version + salt + nonce + ciphertext")
-        st.caption("Mọi tin nhắn được nén + mã hóa trước khi ghi lên GitHub.")
-
-    with st.expander("📋 Existing users", expanded=False):
-        user_list = [u for u in db.keys()
-                     if u not in (SYSTEM_CONFIG_KEY, TRAFFIC_LOG_KEY, BUG_REPORTS_KEY,
-                                   FEEDBACK_KEY, SECURITY_LOG_KEY, SECURITY_ALERTS_KEY,
-                                   BLOCKLIST_KEY, GUEST_QUOTAS_KEY, LTTP_SECURITY_KEY)
-                     and isinstance(db[u], dict)]
-        if user_list:
-            for u in sorted(user_list):
-                st.markdown(f"- `{u}`")
-        else:
-            st.caption("No users yet.")
-
-    st.divider()
     if st.button(t("admin_logout", lang), use_container_width=True, key="admin_logout"):
         lttp_writer.flush_now()
         st.session_state.is_admin = False
         st.session_state.user = None
         st.session_state.is_guest = False
         st.session_state.is_temporary = False
-        st.session_state.traffic_recorded = False
         st.rerun()
 
 
 # ==========================================
-# 25. MAINTENANCE SCREEN
+# 23. MAINTENANCE SCREEN
 # ==========================================
 def render_maintenance_screen():
     lang = st.session_state.language
@@ -4808,7 +4649,7 @@ def render_maintenance_screen():
     note_html = f'<div class="maintenance-note">💬 {note}</div>' if note else ""
     st.markdown(f"""
     <div class="maintenance-banner">
-        <div style="font-size: 1.8rem; margin-bottom: 8px;">🚧</div>
+        <div style="font-size: 1.8rem;">🚧</div>
         <div style="font-size: 1.2rem; font-weight: 800;">{t('maintenance_title', lang)}</div>
         <div style="margin-top: 10px; font-size: 0.95rem; opacity: 0.9;">{t('maintenance_desc', lang)}</div>
         {note_html}
@@ -4843,6 +4684,7 @@ def render_maintenance_screen():
                         "typing_mode": DEFAULT_TYPING_MODE,
                         "typing_cps": DEFAULT_TYPING_CPS
                     }
+                    st.session_state.test_custom_tools = []
                     st.session_state.traffic_recorded = True
                     st.toast(t("test_login_success", lang), icon="🔧")
                     st.rerun()
@@ -4851,7 +4693,7 @@ def render_maintenance_screen():
 
 
 # ==========================================
-# 26. ROUTING
+# 24. ROUTING
 # ==========================================
 if st.session_state.is_admin:
     render_admin_panel()
@@ -4880,7 +4722,7 @@ if not st.session_state.user and not st.session_state.is_guest:
 
 
 # ==========================================
-# 27. LOAD USER / GUEST / TEST DATA
+# 25. LOAD USER DATA
 # ==========================================
 is_guest = st.session_state.is_guest
 is_test = is_temporary_session()
@@ -4891,7 +4733,8 @@ if is_test:
         "custom_instructions": st.session_state.test_memory,
         "chats": st.session_state.test_chats,
         "remembered_devices": [], "language": lang,
-        "preferences": st.session_state.test_prefs
+        "preferences": st.session_state.test_prefs,
+        "custom_tools": st.session_state.get("test_custom_tools", [])
     }
     user_chats = st.session_state.test_chats
 elif is_guest:
@@ -4899,7 +4742,8 @@ elif is_guest:
         "custom_instructions": st.session_state.guest_memory,
         "chats": st.session_state.guest_chats,
         "remembered_devices": [], "language": lang,
-        "preferences": st.session_state.guest_prefs
+        "preferences": st.session_state.guest_prefs,
+        "custom_tools": st.session_state.get("guest_custom_tools", [])
     }
     user_chats = st.session_state.guest_chats
 else:
@@ -4909,6 +4753,7 @@ else:
     user_data.setdefault("remembered_devices", [])
     user_data.setdefault("language", "en")
     user_data.setdefault("preferences", {})
+    user_data.setdefault("custom_tools", [])
     user_data["preferences"].setdefault("model", DEFAULT_MODEL)
     user_data["preferences"].setdefault("temperature", 0.7)
     user_data["preferences"].setdefault("top_p", 0.95)
@@ -4924,13 +4769,10 @@ if st.session_state.current_chat_id and st.session_state.current_chat_id not in 
     st.session_state.current_chat_id = None
     st.session_state.messages = []
 
-# Load current chat messages (decrypt)
-_current_chat_data = None
 if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
-    _current_chat_data = user_chats[st.session_state.current_chat_id]
-    _raw_msgs = _current_chat_data.get("messages", [])
-    _decoded = deserialize_messages_from_storage(_raw_msgs)
-    st.session_state.messages = _decoded
+    _chat = user_chats[st.session_state.current_chat_id]
+    _raw = _chat.get("messages", [])
+    st.session_state.messages = deserialize_messages_from_storage(_raw)
 
 _SAFE_MODEL = user_data["preferences"].get("model", DEFAULT_MODEL)
 _SAFE_TEMP = float(user_data["preferences"].get("temperature", 0.7))
@@ -4942,9 +4784,12 @@ temperature = _SAFE_TEMP
 top_p = _SAFE_TOP_P
 top_k = _SAFE_TOP_K
 
+# Custom tools list
+custom_tools = user_data.get("custom_tools", [])
+
 
 # ==========================================
-# 28. SIDEBAR
+# 26. SIDEBAR
 # ==========================================
 with st.sidebar:
     if is_test or is_guest:
@@ -4976,9 +4821,9 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
     elif is_guest:
-        db_data_fresh = GitHubStorage.load_db()
-        g_used = get_guest_quota_used(db_data_fresh, device_id)
-        g_limit = get_guest_daily_limit(db_data_fresh)
+        db_fresh = GitHubStorage.load_db()
+        g_used = get_guest_quota_used(db_fresh, device_id)
+        g_limit = get_guest_daily_limit(db_fresh)
         st.markdown(f"""
         <div class="user-card">
             <div style="font-weight:700;font-size:1.1rem;color:#94a3b8;">👤 {t('guest_mode', lang)}</div>
@@ -5001,50 +4846,9 @@ with st.sidebar:
         st.session_state.bug_report_open = True
         st.rerun()
 
-    if not is_test and not is_guest:
-        with st.expander(t("bug_report_my_reports", lang), expanded=False):
-            my_reports = get_user_bug_reports(db_data, st.session_state.user)
-            if not my_reports:
-                st.caption(t("bug_report_no_reports", lang))
-            else:
-                for rpt in my_reports[:10]:
-                    rtime = rpt.get("time", "?")
-                    rtext = rpt.get("text", "").strip()
-                    reply = rpt.get("reply", "")
-                    replied_at = rpt.get("replied_at", "")
-                    status = t("bug_report_status_replied", lang) if reply else t("bug_report_status_pending", lang)
-                    st.markdown(f"**{rtime}** • {status}")
-                    if rtext:
-                        st.caption(f"💬 {rtext[:120]}" + ("..." if len(rtext) > 120 else ""))
-                    if reply:
-                        st.markdown(
-                            f'<div class="bug-report-reply">💬 <b>{t("bug_report_reply_from_admin", lang)}</b> '
-                            f'({replied_at}):<br>{reply}</div>',
-                            unsafe_allow_html=True
-                        )
-                    st.markdown("---")
-
-        with st.expander(t("feedback_my_items", lang), expanded=False):
-            my_fb = get_user_feedback(db_data, st.session_state.user)
-            if not my_fb:
-                st.caption(t("feedback_no_items", lang))
-            else:
-                for fb in my_fb[:10]:
-                    ftime = fb.get("time", "?")
-                    ftext = fb.get("text", "").strip()
-                    reply = fb.get("reply", "")
-                    replied_at = fb.get("replied_at", "")
-                    status = t("feedback_status_replied", lang) if reply else t("feedback_status_pending", lang)
-                    st.markdown(f"**{ftime}** • {status}")
-                    if ftext:
-                        st.caption(f"💬 {ftext[:120]}" + ("..." if len(ftext) > 120 else ""))
-                    if reply:
-                        st.markdown(
-                            f'<div class="feedback-reply">💬 <b>{t("bug_report_reply_from_admin", lang)}</b> '
-                            f'({replied_at}):<br>{reply}</div>',
-                            unsafe_allow_html=True
-                        )
-                    st.markdown("---")
+    if st.button(t("feedback_btn", lang), use_container_width=True, key="feedback_open_btn"):
+        st.session_state.feedback_open = True
+        st.rerun()
 
     logout_label = t("test_logout", lang) if is_test else t("logout_btn", lang)
     if st.button(logout_label, use_container_width=True, key="logout_btn"):
@@ -5072,7 +4876,6 @@ with st.sidebar:
 
     if st.button(t("new_chat_btn", lang), type="primary", use_container_width=True, key="new_chat_btn"):
         if enforce_rate_limit("new_chat", "New chat"):
-            # Không ngăn cản khi chat khác đang generate
             st.session_state.current_chat_id = None
             st.session_state.messages = []
             st.rerun()
@@ -5089,20 +4892,18 @@ with st.sidebar:
             title = item.get("title", t("new_chat", lang))
             active = (cid == st.session_state.current_chat_id)
             is_running = multi_chat.is_running(cid)
-            running_badge = f' <span class="chat-running-badge">{t("chat_running_badge", lang)}</span>' if is_running else ""
             prefix = "📌" if active else "💬"
-            label = f"{prefix} {title}{running_badge}"
-            # Streamlit button không hỗ trợ HTML trong label, nên dùng caption cho badge
+            label = f"{prefix} {title}"
+            if is_running:
+                label += f" ⚙️"
             cc, cd = st.columns([0.8, 0.2])
             if cc.button(label, key=f"sel_{cid}", use_container_width=True):
-                # Chuyển chat được phép khi chat khác đang chạy
                 st.session_state.current_chat_id = cid
-                raw_msgs = user_chats[cid].get("messages", [])
-                st.session_state.messages = deserialize_messages_from_storage(raw_msgs)
+                raw = user_chats[cid].get("messages", [])
+                st.session_state.messages = deserialize_messages_from_storage(raw)
                 st.rerun()
             if cd.button("🗑️", key=f"del_{cid}", help=t("delete_chat_tooltip", lang)):
                 if enforce_rate_limit("delete_chat", "Delete chat"):
-                    # Dừng stream nếu đang chạy
                     multi_chat.cleanup_chat(cid)
                     if cid in user_chats:
                         del user_chats[cid]
@@ -5121,37 +4922,20 @@ with st.sidebar:
                         st.rerun()
 
     ql_on = is_quick_lookup_mode()
-    if ql_on:
-        toggle_btn_label = "🔍 Quick Lookup: BẬT" if lang == "vi" else "🔍 Quick Lookup: ON"
-        toggle_help = "Nhấn để TẮT Quick Lookup" if lang == "vi" else "Click to DISABLE Quick Lookup"
-    else:
-        toggle_btn_label = "🔍 Quick Lookup: TẮT" if lang == "vi" else "🔍 Quick Lookup: OFF"
-        toggle_help = "Nhấn để BẬT Quick Lookup" if lang == "vi" else "Click to ENABLE Quick Lookup"
-
-    if st.button(toggle_btn_label, use_container_width=True, key="ql_toggle_main_btn", help=toggle_help):
+    toggle_label = t("ql_btn_disable", lang) if ql_on else t("ql_btn_enable", lang)
+    if st.button(toggle_label, use_container_width=True, key="ql_toggle_main_btn"):
         new_state = not ql_on
         set_quick_lookup_mode(new_state)
         st.toast(t("ql_enabled_toast", lang) if new_state else t("ql_disabled_toast", lang), icon="🔍")
         st.rerun()
 
-    if ql_on:
-        st.caption("⚠️ Đang BẬT — AI sẽ không nhớ ngữ cảnh trước đó." if lang == "vi" else "⚠️ Currently ON — AI won't remember prior context.")
-    else:
-        st.caption("✅ Đang TẮT — AI nhớ ngữ cảnh bình thường." if lang == "vi" else "✅ Currently OFF — AI remembers context normally.")
     st.divider()
 
     with st.expander(t("settings_title", lang), expanded=False):
-        col_lbl, col_help = st.columns([0.85, 0.15])
-        with col_lbl:
-            st.markdown(f"**{t('smart_draft_label', lang)}**")
-        with col_help:
-            with st.popover("❓"):
-                st.markdown(t("smart_draft_help", lang))
         smart_draft_val = st.toggle(
             t("smart_draft_label", lang),
             value=bool(user_data["preferences"].get("smart_draft", True)),
-            key="smart_draft_toggle",
-            label_visibility="collapsed"
+            key="smart_draft_toggle"
         )
         if smart_draft_val != user_data["preferences"].get("smart_draft", True):
             if enforce_rate_limit("toggle_smart_draft", "Toggle smart draft"):
@@ -5165,19 +4949,11 @@ with st.sidebar:
                     save_db_async(db_data)
                 st.toast(t("smart_draft_on", lang) if smart_draft_val else t("smart_draft_off", lang), icon="💾")
 
-        status_txt = t("smart_draft_on", lang) if smart_draft_val else t("smart_draft_off", lang)
-        st.caption(f"→ {status_txt}")
         if not smart_draft_val:
             clear_draft_cookie_via_js()
 
         st.markdown("---")
 
-        tcol1, tcol2 = st.columns([0.85, 0.15])
-        with tcol1:
-            st.markdown(f"**⌨️ {t('typing_mode_label', lang)}**")
-        with tcol2:
-            with st.popover("❓", use_container_width=True):
-                st.markdown(t("typing_mode_help", lang))
         typing_mode_options = [TYPING_MODE_SMOOTH, TYPING_MODE_CONTROLLED, TYPING_MODE_INSTANT]
         typing_mode_labels = {
             TYPING_MODE_SMOOTH: t("typing_mode_smooth", lang),
@@ -5192,7 +4968,7 @@ with st.sidebar:
         selected_mode = st.radio(
             t("typing_mode_label", lang), options=typing_mode_options,
             index=default_idx, format_func=lambda x: typing_mode_labels.get(x, x),
-            key="typing_mode_radio", label_visibility="collapsed"
+            key="typing_mode_radio"
         )
         if selected_mode == TYPING_MODE_CONTROLLED:
             new_cps = st.slider(t("typing_cps_label", lang), min_value=5, max_value=120,
@@ -5218,50 +4994,6 @@ with st.sidebar:
                     save_db_async(db_data)
                 st.toast(t("typing_mode_saved", lang), icon="⌨️")
 
-    st.divider()
-
-    with st.expander(t("context_title", lang), expanded=False):
-        ctx_budget = get_context_budget(sel_model)
-        cur_msgs = st.session_state.messages
-        cur_tokens = estimate_messages_tokens(cur_msgs)
-        st.markdown(f"**{t('context_model', lang)}:** `{sel_model}`")
-        st.markdown(f"**{t('context_messages', lang)}:** {len(cur_msgs)}")
-        st.markdown(f"**{t('context_history_tokens', lang)}:** {cur_tokens:,}")
-        used_ratio = cur_tokens / max(1, ctx_budget)
-        if used_ratio < 0.5:
-            st.caption("🟢 OK")
-        elif used_ratio < 0.8:
-            st.caption("🟡 " + ("Đang dùng vừa" if lang == "vi" else "Moderate"))
-        else:
-            st.caption("🔴 " + ("Gần đầy" if lang == "vi" else "Nearly full"))
-
-    st.divider()
-
-    with st.expander(t("changelog_title", lang), expanded=False):
-        cl_content, cl_time, cl_ok = fetch_changelog_cached()
-        if cl_ok:
-            st.caption(f"🕐 {('Cập nhật lúc' if lang == 'vi' else 'Fetched at')}: {cl_time}")
-            safe_cl = (cl_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-            st.markdown(f'<div class="changelog-view">{safe_cl}</div>', unsafe_allow_html=True)
-            if st.button(t("changelog_refresh", lang), use_container_width=True, key="changelog_refresh_btn"):
-                st.session_state._changelog_cache = None
-                st.session_state._changelog_cache_time = 0
-                st.rerun()
-        else:
-            st.caption(cl_content)
-            if st.button(t("changelog_retry", lang), use_container_width=True, key="changelog_retry_btn"):
-                st.session_state._changelog_cache = None
-                st.session_state._changelog_cache_time = 0
-                st.rerun()
-
-    st.divider()
-
-    with st.expander(t("privacy_btn", lang), expanded=False):
-        st.markdown(PRIVACY_POLICY_HTML, unsafe_allow_html=True)
-
-    st.divider()
-
-    # ===== Bộ nhớ cố định =====
     with st.expander(t("memory_title", lang), expanded=False):
         st.caption(t("memory_desc", lang))
         mem = st.text_area("Memory:", value=user_data.get("custom_instructions", ""),
@@ -5285,94 +5017,43 @@ with st.sidebar:
     # ===== CÔNG NGHỆ TIÊN TIẾN =====
     with st.expander(t("tech_title", lang), expanded=False):
         st.caption(t("tech_desc", lang))
-
         techs = [
-            {
-                "icon": "🛡️",
-                "name": t("tech_security_title", lang),
-                "desc": t("tech_security_desc", lang),
-                "badge": t("tech_badge_active", lang),
-            },
-            {
-                "icon": "⚡",
-                "name": t("tech_write_title", lang),
-                "desc": t("tech_write_desc", lang),
-                "badge": t("tech_badge_active", lang),
-            },
-            {
-                "icon": "🌐",
-                "name": t("tech_multichat_title", lang),
-                "desc": t("tech_multichat_desc", lang),
-                "badge": t("tech_badge_active", lang),
-            },
-            {
-                "icon": "🔐",
-                "name": t("tech_crypto_title", lang),
-                "desc": t("tech_crypto_desc", lang),
-                "badge": t("tech_badge_active", lang),
-            },
-            {
-                "icon": "🤖",
-                "name": t("tech_ai_title", lang),
-                "desc": t("tech_ai_desc", lang),
-                "badge": t("tech_badge_active", lang),
-            },
-            {
-                "icon": "🎨",
-                "name": t("tech_ui_title", lang),
-                "desc": t("tech_ui_desc", lang),
-                "badge": t("tech_badge_active", lang),
-            },
-            {
-                "icon": "🌊",
-                "name": t("tech_stream_title", lang),
-                "desc": t("tech_stream_desc", lang),
-                "badge": t("tech_badge_active", lang),
-            },
-            {
-                "icon": "🧠",
-                "name": t("tech_memory_title", lang),
-                "desc": t("tech_memory_desc", lang),
-                "badge": t("tech_badge_active", lang),
-            },
+            {"icon": "🛡️", "name": t("tech_security_title", lang), "desc": t("tech_security_desc", lang)},
+            {"icon": "⚡", "name": t("tech_write_title", lang), "desc": t("tech_write_desc", lang)},
+            {"icon": "🌐", "name": t("tech_multichat_title", lang), "desc": t("tech_multichat_desc", lang)},
+            {"icon": "🔐", "name": t("tech_crypto_title", lang), "desc": t("tech_crypto_desc", lang)},
+            {"icon": "🔍", "name": t("tech_agentic_title", lang), "desc": t("tech_agentic_desc", lang)},
+            {"icon": "🛠️", "name": t("tech_custom_title", lang), "desc": t("tech_custom_desc", lang)},
+            {"icon": "🤖", "name": t("tech_ai_title", lang), "desc": t("tech_ai_desc", lang)},
+            {"icon": "🎨", "name": t("tech_ui_title", lang), "desc": t("tech_ui_desc", lang)},
+            {"icon": "🌊", "name": t("tech_stream_title", lang), "desc": t("tech_stream_desc", lang)},
+            {"icon": "🧠", "name": t("tech_memory_title", lang), "desc": t("tech_memory_desc", lang)},
         ]
-
         for tech in techs:
             st.markdown(f"""
             <div class="tech-card">
                 <div class="tech-card-title">
                     {tech['icon']} {tech['name']}
-                    <span class="tech-card-tag">{tech['badge']}</span>
+                    <span class="tech-card-tag">{t('tech_badge_active', lang)}</span>
                 </div>
                 <div class="tech-card-desc">{tech['desc']}</div>
             </div>
             """, unsafe_allow_html=True)
 
-        wstats = lttp_writer.stats()
-        queue_size = wstats.get("queued", 0)
-        last_status = wstats.get("last_status", "idle")
-        running_chats = multi_chat.get_all_running()
-        if queue_size > 0 or running_chats:
-            st.caption(f"⚙️ Write queue: **{queue_size}** • Status: **{last_status}** • Running chats: **{len(running_chats)}**")
-
     st.divider()
 
     st.subheader(t("model_select", lang))
-
     available_models = get_available_models_cached()
-
     saved_model = user_data["preferences"].get("model", DEFAULT_MODEL)
     if saved_model not in available_models:
         saved_model = DEFAULT_MODEL
         user_data["preferences"]["model"] = saved_model
         if not is_guest and not is_test:
             db_data[st.session_state.user] = user_data
-
     try:
         midx = available_models.index(saved_model)
     except ValueError:
         midx = 0
-
     _new_model = st.selectbox(t("model_select", lang), available_models, index=midx, key="sidebar_model_sel")
     if _new_model != user_data["preferences"].get("model"):
         if enforce_rate_limit("change_model", "Change model"):
@@ -5386,94 +5067,316 @@ with st.sidebar:
                 save_db_async(db_data)
     sel_model = _new_model
 
-    with st.expander(t("gen_config", lang), expanded=False):
-        tcol1, tcol2 = st.columns([0.85, 0.15])
-        with tcol1:
-            st.markdown(f"**🎨 {t('temperature', lang)}**")
-        with tcol2:
-            with st.popover("❓", use_container_width=True):
-                st.markdown(t("temperature_help", lang))
-        temperature = st.slider(t("temperature", lang), 0.0, 1.0,
-                                float(user_data["preferences"].get("temperature", 0.7)), 0.05,
-                                key="sidebar_temp", label_visibility="collapsed")
-        if temperature <= 0.3:
-            st.caption("🟦 " + t("t_level_safe", lang))
-        elif temperature <= 0.7:
-            st.caption("🟩 " + t("t_level_balanced", lang))
+    # ===== CUSTOM TOOLS BUILDER =====
+    with st.expander(t("custom_tools_title", lang), expanded=False):
+        st.caption(t("custom_tools_desc", lang))
+
+        # List existing tools
+        if not custom_tools:
+            st.caption(t("custom_tools_empty", lang))
         else:
-            st.caption("🟧 " + t("t_level_creative", lang))
+            for i, tool in enumerate(custom_tools):
+                tool_enabled = tool.get("enabled", True)
+                icon = tool.get("icon", "🛠️")
+                name = tool.get("name", "?")
+                desc = tool.get("description", "")
+                url_short = tool.get("url", "")[:60]
+                cls = "" if tool_enabled else " off"
+                st.markdown(f"""
+                <div class="custom-tool-card{cls}">
+                    <div class="custom-tool-name">{icon} {name}</div>
+                    <div class="custom-tool-url">{url_short}</div>
+                    <div style="font-size:0.78rem;color:#94a3b8;">{desc}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                tcol1, tcol2, tcol3 = st.columns([0.33, 0.33, 0.33])
+                with tcol1:
+                    if st.button(
+                        "🔓" if tool_enabled else "🛡️",
+                        key=f"toggle_tool_{i}",
+                        use_container_width=True,
+                        help=t("custom_tool_enable", lang),
+                    ):
+                        custom_tools[i]["enabled"] = not tool_enabled
+                        user_data["custom_tools"] = custom_tools
+                        if is_test:
+                            st.session_state.test_custom_tools = custom_tools
+                        elif is_guest:
+                            st.session_state.guest_custom_tools = custom_tools
+                        else:
+                            db_data[st.session_state.user] = user_data
+                            save_db_async(db_data)
+                        st.toast(
+                            t("custom_tool_enabled_toast" if not tool_enabled else "custom_tool_disabled_toast", lang),
+                            icon="✅"
+                        )
+                        st.rerun()
+                with tcol2:
+                    if st.button(t("custom_tool_edit_btn", lang), key=f"edit_tool_{i}", use_container_width=True):
+                        st.session_state._editing_tool_id = tool.get("id")
+                        st.session_state._show_tool_form = True
+                        st.rerun()
+                with tcol3:
+                    if st.button(t("custom_tool_delete_btn", lang), key=f"del_tool_{i}", use_container_width=True):
+                        if enforce_rate_limit("tool_delete", "Delete tool"):
+                            custom_tools.pop(i)
+                            user_data["custom_tools"] = custom_tools
+                            if is_test:
+                                st.session_state.test_custom_tools = custom_tools
+                            elif is_guest:
+                                st.session_state.guest_custom_tools = custom_tools
+                            else:
+                                db_data[st.session_state.user] = user_data
+                                save_db_async(db_data)
+                            st.toast(t("custom_tool_deleted", lang), icon="🗑️")
+                            time.sleep(0.3)
+                            st.rerun()
 
         st.markdown("---")
 
-        tcol1, tcol2 = st.columns([0.85, 0.15])
-        with tcol1:
-            st.markdown(f"**🌈 {t('top_p', lang)}**")
-        with tcol2:
-            with st.popover("❓", use_container_width=True):
-                st.markdown(t("top_p_help", lang))
-        top_p = st.slider(t("top_p", lang), 0.0, 1.0,
-                          float(user_data["preferences"].get("top_p", 0.95)), 0.05,
-                          key="sidebar_topp", label_visibility="collapsed")
-        if top_p <= 0.7:
-            st.caption("🟦 " + t("p_level_predictable", lang))
-        else:
-            st.caption("🟩 " + t("p_level_varied", lang))
+        # Create new tool button
+        if not st.session_state.get("_show_tool_form"):
+            if st.button(f"➕ {t('custom_tool_form_title', lang)}", use_container_width=True, type="primary", key="show_tool_form_btn"):
+                st.session_state._show_tool_form = True
+                st.session_state._editing_tool_id = None
+                st.session_state._tool_test_result = None
+                st.rerun()
 
-        st.markdown("---")
+        # Tool form
+        if st.session_state.get("_show_tool_form"):
+            editing_id = st.session_state.get("_editing_tool_id")
+            editing_tool = None
+            if editing_id:
+                for tool in custom_tools:
+                    if tool.get("id") == editing_id:
+                        editing_tool = tool
+                        break
 
-        tcol1, tcol2 = st.columns([0.85, 0.15])
-        with tcol1:
-            st.markdown(f"**🎯 {t('top_k', lang)}**")
-        with tcol2:
-            with st.popover("❓", use_container_width=True):
-                st.markdown(t("top_k_help", lang))
-        top_k = st.number_input(t("top_k", lang), 1, 100,
-                                int(user_data["preferences"].get("top_k", 40)),
-                                key="sidebar_topk", label_visibility="collapsed")
-        if top_k <= 20:
-            st.caption("🟦 " + t("k_level_focused", lang))
-        elif top_k <= 60:
-            st.caption("🟩 " + t("k_level_balanced", lang))
-        else:
-            st.caption("🟧 " + t("k_level_varied", lang))
+            st.markdown(f"**{t('custom_tool_form_title', lang)}**")
 
-        st.markdown("---")
+            # === Shortcut buttons for name ===
+            st.markdown(f"_{t('custom_tool_shortcut_name', lang)}_")
+            name_cols = st.columns(5)
+            name_shortcuts = ["gia_vang", "thoi_tiet", "tin_tuc", "chung_khoan", "ty_gia"]
+            for idx, sc in enumerate(name_shortcuts):
+                with name_cols[idx]:
+                    if st.button(sc, key=f"sc_name_{idx}", use_container_width=True):
+                        st.session_state._tool_name_input = sc
+                        st.rerun()
 
-        bcol1, bcol2 = st.columns(2)
-        with bcol1:
-            if st.button(t("save_params", lang), use_container_width=True, key="sidebar_save_params", type="primary"):
-                if enforce_rate_limit("change_setting", "Save settings"):
-                    user_data["preferences"]["temperature"] = temperature
-                    user_data["preferences"]["top_p"] = top_p
-                    user_data["preferences"]["top_k"] = top_k
-                    if is_test:
-                        st.session_state.test_prefs = user_data["preferences"]
-                    elif is_guest:
-                        st.session_state.guest_prefs = user_data["preferences"]
+            tool_name = st.text_input(
+                t("custom_tool_name", lang),
+                value=editing_tool.get("name", "") if editing_tool else st.session_state.get("_tool_name_input", ""),
+                placeholder=t("custom_tool_name_hint", lang),
+                key="_tool_name_input" if not editing_tool else f"_tool_name_edit_{editing_id}"
+            )
+
+            # === Shortcut buttons for description ===
+            st.markdown(f"_{t('custom_tool_shortcut_desc', lang)}_")
+            desc_cols = st.columns(3)
+            desc_shortcuts = ["Lấy giá vàng", "Xem thời tiết", "Đọc tin tức"]
+            for idx, sc in enumerate(desc_shortcuts):
+                with desc_cols[idx]:
+                    if st.button(sc, key=f"sc_desc_{idx}", use_container_width=True):
+                        st.session_state._tool_desc_input = sc
+                        st.rerun()
+
+            tool_desc = st.text_input(
+                t("custom_tool_desc", lang),
+                value=editing_tool.get("description", "") if editing_tool else st.session_state.get("_tool_desc_input", ""),
+                placeholder=t("custom_tool_desc_hint", lang),
+                key="_tool_desc_input" if not editing_tool else f"_tool_desc_edit_{editing_id}"
+            )
+
+            # === Shortcut buttons for URL ===
+            st.markdown(f"_{t('custom_tool_shortcut_url', lang)}_")
+            url_cols = st.columns(3)
+            url_shortcuts = [
+                ("RSS mẫu", "https://api.example.com/rss?q={query}"),
+                ("JSON mẫu", "https://api.example.com/data?q={query}"),
+                ("HTML mẫu", "https://example.com/search?q={query}"),
+            ]
+            for idx, (label, url_tpl) in enumerate(url_shortcuts):
+                with url_cols[idx]:
+                    if st.button(label, key=f"sc_url_{idx}", use_container_width=True):
+                        st.session_state._tool_url_input = url_tpl
+                        st.rerun()
+
+            tool_url = st.text_input(
+                t("custom_tool_url", lang),
+                value=editing_tool.get("url", "") if editing_tool else st.session_state.get("_tool_url_input", ""),
+                placeholder=t("custom_tool_url_hint", lang),
+                key="_tool_url_input" if not editing_tool else f"_tool_url_edit_{editing_id}"
+            )
+
+            method_col, format_col = st.columns(2)
+            with method_col:
+                method_options = ["GET", "POST"]
+                default_method_idx = 0
+                if editing_tool and editing_tool.get("method") in method_options:
+                    default_method_idx = method_options.index(editing_tool["method"])
+                tool_method = st.selectbox(
+                    t("custom_tool_method", lang),
+                    method_options, index=default_method_idx,
+                    key=f"_tool_method_{editing_id or 'new'}"
+                )
+            with format_col:
+                format_options = ["json", "text", "html"]
+                default_format_idx = 0
+                if editing_tool and editing_tool.get("response_format") in format_options:
+                    default_format_idx = format_options.index(editing_tool["response_format"])
+                tool_format = st.selectbox(
+                    t("custom_tool_response_format", lang),
+                    format_options, index=default_format_idx,
+                    key=f"_tool_format_{editing_id or 'new'}"
+                )
+
+            # === Shortcut buttons for icon ===
+            st.markdown(f"_{t('custom_tool_shortcut_icon', lang)}_")
+            icon_cols = st.columns(6)
+            icon_shortcuts = ["💰", "📰", "🌤️", "📈", "🌐", "🎬"]
+            for idx, sc in enumerate(icon_shortcuts):
+                with icon_cols[idx]:
+                    if st.button(sc, key=f"sc_icon_{idx}", use_container_width=True):
+                        st.session_state._tool_icon_input = sc
+                        st.rerun()
+
+            tool_icon = st.text_input(
+                t("custom_tool_icon", lang),
+                value=editing_tool.get("icon", "🛠️") if editing_tool else st.session_state.get("_tool_icon_input", "🛠️"),
+                key="_tool_icon_input" if not editing_tool else f"_tool_icon_edit_{editing_id}"
+            )
+
+            # === Advanced (optional) ===
+            with st.expander(t("custom_tool_advanced", lang), expanded=False):
+                tool_headers = st.text_area(
+                    t("custom_tool_headers", lang),
+                    value=editing_tool.get("headers", "") if editing_tool else "",
+                    height=80,
+                    key=f"_tool_headers_{editing_id or 'new'}"
+                )
+                tool_params = st.text_input(
+                    t("custom_tool_params", lang),
+                    value=editing_tool.get("params", "") if editing_tool else "",
+                    key=f"_tool_params_{editing_id or 'new'}"
+                )
+                tool_json_path = st.text_input(
+                    t("custom_tool_json_path", lang),
+                    value=editing_tool.get("json_path", "") if editing_tool else "",
+                    key=f"_tool_json_path_{editing_id or 'new'}"
+                )
+
+            # === Test query with shortcuts ===
+            st.markdown(f"_{t('custom_tool_test_query_hint', lang)}_")
+            test_cols = st.columns(3)
+            test_shortcuts = ["giá vàng", "Hà Nội", "bitcoin"]
+            for idx, sc in enumerate(test_shortcuts):
+                with test_cols[idx]:
+                    if st.button(sc, key=f"sc_test_{idx}", use_container_width=True):
+                        st.session_state._tool_test_query = sc
+                        st.rerun()
+
+            test_query = st.text_input(
+                t("custom_tool_test_query", lang),
+                value=st.session_state.get("_tool_test_query", ""),
+                key="_tool_test_query"
+            )
+
+            # === Action buttons ===
+            btn_col1, btn_col2, btn_col3 = st.columns([0.33, 0.33, 0.33])
+
+            with btn_col1:
+                if st.button(t("custom_tool_test_btn", lang), use_container_width=True, key="test_tool_btn"):
+                    if not enforce_rate_limit("tool_test", "Test tool"):
+                        pass
+                    elif not tool_url.strip():
+                        st.error("URL không được để trống")
                     else:
-                        db_data[st.session_state.user] = user_data
-                        save_db_async(db_data)
-                    st.toast(t("params_saved", lang), icon="💾")
-                    st.rerun()
-        with bcol2:
-            if st.button(t("reset_params", lang), use_container_width=True, key="sidebar_reset_params"):
-                if enforce_rate_limit("change_setting", "Reset settings"):
-                    user_data["preferences"]["temperature"] = 0.7
-                    user_data["preferences"]["top_p"] = 0.95
-                    user_data["preferences"]["top_k"] = 40
-                    if is_test:
-                        st.session_state.test_prefs = user_data["preferences"]
-                    elif is_guest:
-                        st.session_state.guest_prefs = user_data["preferences"]
+                        test_tool_obj = {
+                            "name": tool_name or "test_tool",
+                            "url": tool_url,
+                            "method": tool_method,
+                            "response_format": tool_format,
+                            "headers": tool_headers,
+                            "params": tool_params,
+                            "json_path": tool_json_path,
+                        }
+                        with st.spinner("Đang test..."):
+                            params = {"query": test_query} if test_query else {}
+                            result = tool_engine.exec_custom_tool(test_tool_obj, params)
+                            st.session_state._tool_test_result = result
+                        st.rerun()
+
+            with btn_col2:
+                if st.button(t("custom_tool_save_btn", lang), use_container_width=True, type="primary", key="save_tool_btn"):
+                    if not enforce_rate_limit("tool_create", "Save tool"):
+                        pass
+                    elif not tool_name.strip():
+                        st.error("Tên không được để trống")
+                    elif not tool_url.strip():
+                        st.error("URL không được để trống")
                     else:
-                        db_data[st.session_state.user] = user_data
-                        save_db_async(db_data)
-                    st.toast(t("reset_params_toast", lang), icon="🔄")
+                        new_tool = {
+                            "id": editing_id or str(uuid.uuid4())[:12],
+                            "name": tool_name.strip(),
+                            "description": tool_desc.strip(),
+                            "url": tool_url.strip(),
+                            "method": tool_method,
+                            "response_format": tool_format,
+                            "icon": tool_icon or "🛠️",
+                            "headers": tool_headers.strip(),
+                            "params": tool_params.strip(),
+                            "json_path": tool_json_path.strip(),
+                            "enabled": True,
+                            "created_at": _now_vn_iso(),
+                        }
+                        if editing_id:
+                            for i, existing in enumerate(custom_tools):
+                                if existing.get("id") == editing_id:
+                                    custom_tools[i] = new_tool
+                                    break
+                        else:
+                            custom_tools.append(new_tool)
+                        user_data["custom_tools"] = custom_tools
+                        if is_test:
+                            st.session_state.test_custom_tools = custom_tools
+                        elif is_guest:
+                            st.session_state.guest_custom_tools = custom_tools
+                        else:
+                            db_data[st.session_state.user] = user_data
+                            save_db_async(db_data)
+                        st.session_state._show_tool_form = False
+                        st.session_state._editing_tool_id = None
+                        st.session_state._tool_test_result = None
+                        st.toast(t("custom_tool_saved", lang), icon="💾")
+                        time.sleep(0.5)
+                        st.rerun()
+
+            with btn_col3:
+                if st.button(t("custom_tool_cancel_btn", lang), use_container_width=True, key="cancel_tool_btn"):
+                    st.session_state._show_tool_form = False
+                    st.session_state._editing_tool_id = None
+                    st.session_state._tool_test_result = None
                     st.rerun()
+
+            # === Test result ===
+            test_result = st.session_state.get("_tool_test_result")
+            if test_result:
+                st.markdown(f"**{t('custom_tool_test_result', lang)}**")
+                if test_result.get("found"):
+                    if "text" in test_result:
+                        st.code(test_result["text"][:500], language=None)
+                    elif "extracted" in test_result:
+                        st.json(test_result["extracted"][:5])
+                    elif "raw" in test_result:
+                        st.json(test_result["raw"] if not test_result.get("truncated")
+                                else {"_truncated": True, "preview": str(test_result["raw"])[:500]})
+                else:
+                    st.error(t("custom_tool_test_fail", lang).replace("{err}", test_result.get("error", "unknown")))
 
 
 # ==========================================
-# 29. SMART DRAFT
+# 27. SMART DRAFT
 # ==========================================
 smart_draft_enabled = bool(user_data["preferences"].get("smart_draft", True))
 inject_smart_draft_tracker(
@@ -5482,102 +5385,74 @@ inject_smart_draft_tracker(
     interval_sec=SMART_DRAFT_INTERVAL_SEC,
     idle_sec=SMART_DRAFT_IDLE_SEC
 )
-
 draft_text, draft_ts = get_saved_draft()
 
 
 # ==========================================
-# 30. DIALOG TRIGGERS
+# 28. DIALOG TRIGGERS
 # ==========================================
 if st.session_state.get("bug_report_open", False):
     bug_report_dialog()
-
 if st.session_state.get("feedback_open", False):
     feedback_dialog()
 
 
 # ==========================================
-# 31. HELPER: SYNC BACKGROUND CHAT STATE → UI
+# 29. HELPER: SYNC BACKGROUND CHAT
 # ==========================================
 def sync_running_chat(chat_id: str):
-    """
-    Đọc chunks từ multi_chat engine và append vào st.session_state.messages
-    nếu chat_id là chat hiện tại. Lưu vào storage khi xong.
-    """
     if not chat_id:
         return
     state = multi_chat.get_state(chat_id)
     status = state.get("status", "idle")
-
-    # Nếu không chạy và không có final → không làm gì
     if status not in ("running", "completed", "error", "stopped"):
         return
-
-    # Xử lý hoàn thành
     if status in ("completed", "error", "stopped") and state.get("finished_at", 0) > 0:
         final_text = state.get("final_text", "")
         final_err = state.get("final_err")
-
-        # Chỉ xử lý 1 lần (dùng timestamp gần nhất)
         processed_key = f"_processed_done_{chat_id}"
         last_finished = st.session_state.get(processed_key, 0)
         if state.get("finished_at", 0) > last_finished:
             st.session_state[processed_key] = state.get("finished_at", 0)
-
-            # Nếu chat này là chat đang xem → cập nhật messages
             if st.session_state.current_chat_id == chat_id:
                 if final_text:
-                    # Xóa nếu có tin assistant lỗi trước (nếu retry)
                     st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": final_text
+                        "role": "assistant", "content": final_text
                     })
                 elif final_err and final_err not in ("stopped", "rate_limit"):
                     error_msg = f"{t('ai_error', lang)} Error: {str(final_err)[:150]}"
                     st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": error_msg,
-                        "is_error": True
+                        "role": "assistant", "content": error_msg, "is_error": True
                     })
                 elif final_err == "stopped":
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": "_[Đã dừng theo yêu cầu]_" if lang == "vi" else "_[Stopped by user]_",
+                        "content": "_[Đã dừng theo yêu cầu]_" if lang == "vi" else "_[Stopped]_",
                         "is_error": False
                     })
-
-            # Lưu vào chat_data (encrypted) — kể cả khi user đã chuyển chat
             if st.session_state.current_chat_id == chat_id:
                 msgs_to_save = st.session_state.messages
             else:
-                # Chat khác đang chạy → cần load messages của nó
                 if chat_id in user_chats:
-                    old_msgs = deserialize_messages_from_storage(user_chats[chat_id].get("messages", []))
+                    old = deserialize_messages_from_storage(user_chats[chat_id].get("messages", []))
                     if final_text:
-                        old_msgs.append({"role": "assistant", "content": final_text})
+                        old.append({"role": "assistant", "content": final_text})
                     elif final_err and final_err not in ("stopped", "rate_limit"):
-                        old_msgs.append({
-                            "role": "assistant",
-                            "content": f"{t('ai_error', lang)} Error: {str(final_err)[:150]}",
-                            "is_error": True
-                        })
+                        old.append({"role": "assistant",
+                                    "content": f"{t('ai_error', lang)} Error: {str(final_err)[:150]}",
+                                    "is_error": True})
                     elif final_err == "stopped":
-                        old_msgs.append({
-                            "role": "assistant",
-                            "content": "_[Đã dừng theo yêu cầu]_" if lang == "vi" else "_[Stopped by user]_",
-                            "is_error": False
-                        })
-                    msgs_to_save = old_msgs
+                        old.append({"role": "assistant",
+                                    "content": "_[Đã dừng]_" if lang == "vi" else "_[Stopped]_",
+                                    "is_error": False})
+                    msgs_to_save = old
                 else:
                     msgs_to_save = []
-
-            # Update chat_data
             if chat_id in user_chats:
                 chat_data = user_chats[chat_id]
                 chat_data["messages"] = serialize_messages_for_storage(msgs_to_save)
                 chat_data["_encrypted"] = True
                 chat_data["updated_at"] = vn_now().isoformat()
-
                 if is_test:
                     st.session_state.test_chats = user_chats
                 elif is_guest:
@@ -5586,16 +5461,12 @@ def sync_running_chat(chat_id: str):
                     user_data["chats"] = user_chats
                     db_data[st.session_state.user] = user_data
                     save_db_async(db_data)
-
-            # Title generation cho chat vừa xong (chỉ 1 lần)
             if final_text and chat_id in user_chats:
                 chat_data = user_chats[chat_id]
                 if not chat_data.get("title") or chat_data.get("title") == t("new_chat", lang):
                     try:
-                        # Lấy user prompt đầu tiên
-                        msgs_list = msgs_to_save
                         first_user = ""
-                        for m in msgs_list:
+                        for m in msgs_to_save:
                             if m.get("role") == "user":
                                 first_user = m.get("content", "")
                                 break
@@ -5612,18 +5483,248 @@ def sync_running_chat(chat_id: str):
                                 save_db_async(db_data)
                     except Exception:
                         pass
-
-            # Cleanup engine
             multi_chat.cleanup_chat(chat_id)
 
 
-# Sync current chat nếu đang chạy
 if st.session_state.current_chat_id:
     sync_running_chat(st.session_state.current_chat_id)
 
 
 # ==========================================
-# 32. MAIN CHAT
+# 30. AGENTIC PROMPT BUILDER
+# ==========================================
+def _save_chat_to_storage(chat_id: str):
+    if chat_id not in user_chats:
+        return
+    chat_data = user_chats[chat_id]
+    if chat_id == st.session_state.current_chat_id:
+        msgs = st.session_state.messages
+    else:
+        msgs = deserialize_messages_from_storage(chat_data.get("messages", []))
+    chat_data["messages"] = serialize_messages_for_storage(msgs)
+    chat_data["_encrypted"] = True
+    chat_data["updated_at"] = vn_now().isoformat()
+    if is_test:
+        st.session_state.test_chats = user_chats
+    elif is_guest:
+        st.session_state.guest_chats = user_chats
+    else:
+        user_data["chats"] = user_chats
+        db_data[st.session_state.user] = user_data
+        save_db_async(db_data)
+
+
+def _build_system_prompt_with_tools():
+    """Xây system instruction bao gồm tool definitions."""
+    base_guard = COPYRIGHT_GUARD_PROMPT_VI if lang == "vi" else COPYRIGHT_GUARD_PROMPT_EN
+    parts = [base_guard]
+    user_memory = user_data.get("custom_instructions", "").strip()
+    if user_memory:
+        parts.append("[USER PREFERENCES / RULES]:\n" + user_memory)
+
+    # QL mode
+    ql_active = is_quick_lookup_mode()
+    if ql_active:
+        parts.append(
+            "[QUICK LOOKUP MODE]: Trả lời câu hỏi hiện tại mà KHÔNG dùng ngữ cảnh trước đó."
+            if lang == "vi" else
+            "[QUICK LOOKUP MODE]: Answer WITHOUT using prior context."
+        )
+
+    # Custom tools
+    if custom_tools:
+        enabled_tools = [ct for ct in custom_tools if ct.get("enabled", True)]
+        if enabled_tools:
+            tool_lines = ["\n[CUSTOM TOOLS AVAILABLE]:"]
+            for ct in enabled_tools:
+                tool_lines.append(
+                    f"- <tool:{ct['name']} query=\"...\"/> — {ct.get('description', '')} (HTTP {ct.get('method', 'GET')} to {ct.get('url', '')})"
+                )
+            parts.append("\n".join(tool_lines))
+
+    return "\n\n".join(parts)
+
+
+def _build_chat_history_prompt(user_prompt: str) -> list:
+    """Build prompt inputs từ history chat."""
+    chat_summary = ""
+    if st.session_state.current_chat_id and st.session_state.current_chat_id in user_chats:
+        chat_summary = user_chats[st.session_state.current_chat_id].get("summary", "")
+
+    context_budget = get_context_budget(sel_model)
+    history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
+
+    if chat_summary and not is_quick_lookup_mode():
+        ctx_label = "[BỐI CẢNH TÓM TẮT]:" if lang == "vi" else "[SUMMARIZED HISTORY]:"
+        # Add to system, not here
+
+    all_messages = st.session_state.messages
+    if is_quick_lookup_mode():
+        recent_window = []
+    else:
+        recent_window = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
+        if recent_window and recent_window[-1].get("content") == user_prompt:
+            recent_window = recent_window[:-1]
+        recent_window = [m for m in recent_window if not m.get("is_error", False)]
+
+    content_inputs = []
+    hist = ""
+    for m in recent_window:
+        r = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
+        c = m.get("content", "")
+        max_tok = int(history_budget / max(1, len(recent_window)))
+        if estimate_tokens(c) > max_tok * 2:
+            c = truncate_message_smart(c, max_tok)
+        hist += f"{r}: {c}\n"
+
+    if hist:
+        if lang == "vi":
+            full = "Lịch sử hội thoại gần đây (mới nhất dưới cùng):\n" + hist + "\n---\nCâu hỏi mới: " + user_prompt
+        else:
+            full = "Recent conversation (newest at bottom):\n" + hist + "\n---\nNew question: " + user_prompt
+    else:
+        full = user_prompt
+    content_inputs.append(full)
+    return content_inputs
+
+
+def _run_agentic_stream(chat_id, user_prompt):
+    """
+    Chạy agentic loop:
+    1. Phân loại query
+    2. Nếu cần tool → execute tools → feed kết quả lại AI
+    3. Stream AI response cuối
+    """
+    # Step 1: Classify
+    classification = {"needs_tools": False, "tools": [], "reasoning": ""}
+    try:
+        classification = tool_engine.classify_query(
+            user_prompt, SECRET_API_KEYS, sel_model, lang
+        )
+    except Exception:
+        pass
+
+    # Step 2: Execute tools if needed
+    tool_results = []
+    if classification.get("needs_tools") and classification.get("tools"):
+        for tc in classification["tools"]:
+            tool_name = tc.get("name", "")
+            params = {k: v for k, v in tc.items() if k not in ("name", "reason")}
+            result = tool_engine.execute_tool_call(tool_name, params, custom_tools)
+            tool_results.append(result)
+
+    # Step 3: Build prompt with tool results
+    content_inputs = _build_chat_history_prompt(user_prompt)
+    system_instruction = _build_system_prompt_with_tools()
+
+    if tool_results:
+        tool_ctx = tool_engine.format_results_for_ai(tool_results)
+        prompt_with_tools = (
+            f"{content_inputs[0]}\n\n"
+            f"[TOOL RESULTS — kết quả tìm kiếm tự động]\n"
+            f"{tool_ctx}\n"
+            f"[END TOOL RESULTS]\n\n"
+            f"Dựa trên kết quả tìm kiếm trên, hãy trả lời câu hỏi của người dùng một cách đầy đủ. "
+            f"Nhớ trích dẫn nguồn bằng [1], [2], [3]... khi sử dụng thông tin."
+            if lang == "vi" else
+            f"{content_inputs[0]}\n\n"
+            f"[TOOL RESULTS]\n{tool_ctx}\n[END TOOL RESULTS]\n\n"
+            f"Based on the search results above, answer the user's question fully. "
+            f"Cite sources with [1], [2], [3]..."
+        )
+        content_inputs = [prompt_with_tools]
+
+    # Step 4: Stream AI
+    typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
+    typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
+
+    multi_chat.start_stream(
+        chat_id=chat_id,
+        prompt_inputs=content_inputs,
+        api_keys=SECRET_API_KEYS,
+        preferred_model=sel_model,
+        system_instruction=system_instruction,
+        generation_config={"temperature": temperature, "top_p": top_p, "top_k": top_k},
+        lang=lang,
+        typing_mode=typing_mode_use,
+        typing_cps=typing_cps_use,
+    )
+    return tool_results, classification
+
+
+def start_new_chat_stream(user_prompt: str):
+    if not enforce_message_content(user_prompt):
+        return
+    if is_guest:
+        db_q = GitHubStorage.load_db(force_refresh=True)
+        allowed, used_now, limit_now = check_guest_quota(db_q)
+        if not allowed:
+            st.error(t("guest_quota_exceeded", lang))
+            return
+        increment_guest_quota(db_q, device_id)
+        save_db_async(db_q)
+
+    new_chat_id = str(uuid.uuid4())
+    ql_title = "Quick Lookup" if is_quick_lookup_mode() else t("new_chat", lang)
+    user_chats[new_chat_id] = {
+        "title": ql_title, "messages": [], "summary": "",
+        "summary_updated_at": "", "summary_token_count": 0,
+        "is_quick_lookup": is_quick_lookup_mode(),
+        "created_at": vn_now().isoformat(),
+        "updated_at": vn_now().isoformat()
+    }
+    if is_test:
+        st.session_state.test_chats = user_chats
+    elif is_guest:
+        st.session_state.guest_chats = user_chats
+
+    st.session_state.current_chat_id = new_chat_id
+    st.session_state.messages = [{"role": "user", "content": user_prompt}]
+
+    _save_chat_to_storage(new_chat_id)
+
+    # Store classification for display
+    tool_results, classification = _run_agentic_stream(new_chat_id, user_prompt)
+    st.session_state[f"_tool_results_{new_chat_id}"] = tool_results
+    st.session_state[f"_classification_{new_chat_id}"] = classification
+
+    st.rerun()
+
+
+def send_in_current_chat(user_prompt: str):
+    current_chat_id = st.session_state.current_chat_id
+    if not current_chat_id:
+        start_new_chat_stream(user_prompt)
+        return
+    if multi_chat.is_running(current_chat_id):
+        st.warning(
+            "⚠️ Chat đang tạo phản hồi." if lang == "vi" else
+            "⚠️ This chat is generating."
+        )
+        return
+    if not enforce_message_content(user_prompt):
+        return
+    if is_guest:
+        db_q = GitHubStorage.load_db(force_refresh=True)
+        allowed, used_now, limit_now = check_guest_quota(db_q)
+        if not allowed:
+            st.error(t("guest_quota_exceeded", lang))
+            return
+        increment_guest_quota(db_q, device_id)
+        save_db_async(db_q)
+
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
+    _save_chat_to_storage(current_chat_id)
+
+    tool_results, classification = _run_agentic_stream(current_chat_id, user_prompt)
+    st.session_state[f"_tool_results_{current_chat_id}"] = tool_results
+    st.session_state[f"_classification_{current_chat_id}"] = classification
+
+    st.rerun()
+
+
+# ==========================================
+# 31. MAIN CHAT
 # ==========================================
 _show_update_notice_if_needed()
 render_announcement_banner()
@@ -5638,11 +5739,11 @@ if not SECRET_API_KEYS:
 if is_guest:
     st.markdown(f'<div class="guest-banner">👤 {t("guest_banner", lang)}</div>', unsafe_allow_html=True)
     db_q = GitHubStorage.load_db()
-    g_used_now = get_guest_quota_used(db_q, device_id)
-    g_limit_now = get_guest_daily_limit(db_q)
+    g_used = get_guest_quota_used(db_q, device_id)
+    g_limit = get_guest_daily_limit(db_q)
     st.markdown(
         f'<div class="quota-warning">📊 {t("guest_quota_title", lang)}: '
-        f'<b>{g_used_now}</b> / {g_limit_now}</div>',
+        f'<b>{g_used}</b> / {g_limit}</div>',
         unsafe_allow_html=True
     )
 
@@ -5662,12 +5763,17 @@ ql_badge = ""
 if is_quick_lookup_mode():
     ql_badge = f" <span class='ql-mode-badge'>🔍 {t('ql_badge', lang)}</span>"
 
-# Cảnh báo nếu chat khác đang generate
-other_running = [cid for cid in multi_chat.get_all_running() if cid != st.session_state.current_chat_id]
+other_running = [cid for cid in multi_chat.get_all_running()
+                 if cid != st.session_state.current_chat_id]
 if other_running:
     st.info(t("ai_chat_running_elsewhere", lang))
 
-st.caption(f"📌 {t('current_chat', lang)}: **{current_title}** | {t('model_label', lang)}: `{sel_model}` <span class='typing-mode-badge'>{typing_badge}</span>{ql_badge}", unsafe_allow_html=True)
+st.caption(
+    f"📌 {t('current_chat', lang)}: **{current_title}** | "
+    f"{t('model_label', lang)}: `{sel_model}` "
+    f"<span class='typing-mode-badge'>{typing_badge}</span>{ql_badge}",
+    unsafe_allow_html=True
+)
 
 if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
     st.markdown(f"""
@@ -5703,6 +5809,39 @@ if smart_draft_enabled and draft_text and len(draft_text.strip()) > 0:
             st.toast(t("draft_discarded_toast", lang), icon="🗑️")
             st.rerun()
 
+# Show tool results (nếu có)
+if st.session_state.current_chat_id:
+    tr = st.session_state.get(f"_tool_results_{st.session_state.current_chat_id}", [])
+    if tr:
+        with st.expander("🔍 Kết quả tìm kiếm tự động (AI đã gọi tools)", expanded=False):
+            for idx, r in enumerate(tr, 1):
+                tool = r.get("tool", "?")
+                found = r.get("found", False)
+                icon = "✅" if found else "❌"
+                st.markdown(f"**{icon} Tool {idx}: `{tool}`**")
+                if tool == "search":
+                    for j, item in enumerate(r.get("results", []), 1):
+                        st.markdown(f"  [{j}] [{item.get('title', '')}]({item.get('url', '')})")
+                        st.caption(f"      {item.get('snippet', '')[:200]}")
+                elif tool == "wiki":
+                    st.markdown(f"  **{r.get('title', '')}**")
+                    st.caption(f"  {r.get('extract', '')[:300]}")
+                elif tool == "weather":
+                    st.markdown(f"  Thành phố: **{r.get('city', '')}**")
+                    st.markdown(f"  Nhiệt độ: **{r.get('temperature', '?')}°C** • Độ ẩm: {r.get('humidity', '?')}%")
+                elif tool == "currency":
+                    st.markdown(f"  1 {r.get('base', '')} = **{r.get('rate', '?')}** {r.get('target', '')}")
+                elif tool == "calc":
+                    st.markdown(f"  {r.get('expression', '')} = **{r.get('result', '?')}**")
+                elif tool == "fetch":
+                    st.markdown(f"  **{r.get('title', '')}**")
+                    st.caption(f"  {r.get('text', '')[:300]}")
+                else:
+                    if r.get("found"):
+                        st.json(r.get("raw", r.get("extracted", {})))
+                    else:
+                        st.caption(f"  {r.get('error', '')}")
+
 # Messages
 for idx, msg in enumerate(st.session_state.messages):
     role = msg["role"]
@@ -5713,20 +5852,19 @@ for idx, msg in enumerate(st.session_state.messages):
             st.markdown(f'<div class="lttp-error-card">{content}</div>', unsafe_allow_html=True)
             retry_label = t("ai_retry_btn", lang)
             st.markdown(
-                f'<button class="lttp-retry-btn" data-lttp-retry-index="{idx}">'
-                f'{retry_label}</button>',
+                f'<button class="lttp-retry-btn" data-lttp-retry-index="{idx}">{retry_label}</button>',
                 unsafe_allow_html=True
             )
         else:
             st.markdown(content)
             if role == "assistant":
-                st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER.get("en", ""))}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="ai-disclaimer">✍️ {DISCLAIMER.get(lang, DISCLAIMER.get("en", ""))}</div>',
+                            unsafe_allow_html=True)
 
-# Nếu chat hiện tại đang generate → hiển thị partial
+# Show current generating state
 if st.session_state.current_chat_id and multi_chat.is_running(st.session_state.current_chat_id):
     state = multi_chat.get_state(st.session_state.current_chat_id)
     accumulated = state.get("accumulated", "")
-
     with st.chat_message("assistant"):
         col_stop, _ = st.columns([1, 5])
         with col_stop:
@@ -5734,7 +5872,6 @@ if st.session_state.current_chat_id and multi_chat.is_running(st.session_state.c
             if st.button(stop_label, key="stop_current_chat_btn", use_container_width=True):
                 multi_chat.stop(st.session_state.current_chat_id)
                 st.rerun()
-
         if accumulated:
             st.markdown(accumulated + '<span class="typing-cursor"></span>', unsafe_allow_html=True)
         else:
@@ -5744,296 +5881,49 @@ if st.session_state.current_chat_id and multi_chat.is_running(st.session_state.c
                 <div class="ai-loading-text">{t('ai_typing', lang)}</div>
             </div>
             """, unsafe_allow_html=True)
-
-    # Auto refresh mỗi 0.6s để cập nhật partial
     time.sleep(0.6)
     st.rerun()
 
 
 # ==========================================
-# 33. PROCESS PROMPT — MULTI-CHAT ENGINE
+# 32. RETRY
 # ==========================================
-def build_prompt_inputs_for_chat(chat_id, user_prompt, is_retry=False):
-    """
-    Build prompt inputs cho Gemini từ chat_data hiện tại.
-    Đọc từ user_chats (đã decrypt).
-    """
-    if chat_id in user_chats:
-        chat_data = user_chats[chat_id]
-    else:
-        chat_data = {
-            "title": "Quick Lookup" if is_quick_lookup_mode() else t("new_chat", lang),
-            "messages": [], "summary": "", "summary_updated_at": "",
-            "summary_token_count": 0,
-            "is_quick_lookup": is_quick_lookup_mode(),
-            "created_at": vn_now().isoformat(),
-            "updated_at": vn_now().isoformat()
-        }
-        user_chats[chat_id] = chat_data
-        if is_test:
-            st.session_state.test_chats = user_chats
-        elif is_guest:
-            st.session_state.guest_chats = user_chats
-
-    chat_summary = chat_data.get("summary", "")
-
-    context_budget = get_context_budget(sel_model)
-    history_budget = int(context_budget * HISTORY_BUDGET_RATIO)
-
-    copyright_guard = COPYRIGHT_GUARD_PROMPT_VI if lang == "vi" else COPYRIGHT_GUARD_PROMPT_EN
-    user_memory = user_data.get("custom_instructions", "").strip()
-    system_parts = [copyright_guard]
-    if user_memory:
-        system_parts.append("[USER PREFERENCES / RULES]:\n" + user_memory)
-
-    ql_active = is_quick_lookup_mode()
-    if chat_summary and not ql_active:
-        ctx_label = "[BỐI CẢNH LỊCH SỬ ĐÃ TÓM TẮT]" if lang == "vi" else "[SUMMARIZED HISTORY CONTEXT]"
-        system_parts.append(ctx_label + ":\n" + chat_summary)
-    if ql_active:
-        system_parts.append(
-            "[QUICK LOOKUP MODE]: Trả lời câu hỏi hiện tại mà KHÔNG dùng ngữ cảnh trước đó."
-            if lang == "vi" else
-            "[QUICK LOOKUP MODE]: Answer the current question WITHOUT using prior context."
-        )
-    system_instruction = "\n\n".join(system_parts)
-
-    # Get messages (already decrypted if from session, else decrypt from storage)
-    if chat_id == st.session_state.current_chat_id:
-        all_messages = st.session_state.messages
-    else:
-        all_messages = deserialize_messages_from_storage(chat_data.get("messages", []))
-
-    if ql_active:
-        recent_window = []
-    else:
-        recent_window = smart_sliding_window(all_messages, history_budget, MIN_RECENT_MESSAGES, MAX_RECENT_MESSAGES)
-        if not is_retry and recent_window and recent_window[-1].get("content") == user_prompt:
-            recent_window = recent_window[:-1]
-        recent_window = [m for m in recent_window if not m.get("is_error", False)]
-
-    if is_retry:
-        last_user_content = ""
-        for m in reversed(all_messages):
-            if m.get("role") == "user" and not m.get("is_error", False):
-                last_user_content = m.get("content", "")
-                break
-        user_prompt = last_user_content
-        if recent_window and recent_window[-1].get("role") == "user":
-            recent_window = recent_window[:-1]
-
-    content_inputs = []
-    hist = ""
-    for m in recent_window:
-        r = ("Người dùng" if lang == "vi" else "User") if m["role"] == "user" else "AI"
-        c = m.get("content", "")
-        max_msg_tokens = int(history_budget / max(1, len(recent_window)))
-        if estimate_tokens(c) > max_msg_tokens * 2:
-            c = truncate_message_smart(c, max_msg_tokens)
-        hist += f"{r}: {c}\n"
-
-    if hist:
-        if lang == "vi":
-            full_prompt = (
-                "Lịch sử hội thoại gần đây (mới nhất ở dưới cùng):\n"
-                + hist + "\n---\nCâu hỏi mới của người dùng: " + user_prompt
-            )
-        else:
-            full_prompt = (
-                "Recent conversation history (newest at bottom):\n"
-                + hist + "\n---\nNew user question: " + user_prompt
-            )
-    else:
-        full_prompt = user_prompt
-    content_inputs.append(full_prompt)
-
-    return content_inputs, system_instruction, user_prompt
-
-
-def start_new_chat_stream(user_prompt: str):
-    """Bắt đầu stream cho chat mới."""
-    if not enforce_message_content(user_prompt):
-        return
-
-    if is_guest:
-        db_q = GitHubStorage.load_db(force_refresh=True)
-        allowed, used_now, limit_now = check_guest_quota(db_q)
-        if not allowed:
-            st.error(t("guest_quota_exceeded", lang))
-            return
-        increment_guest_quota(db_q, device_id)
-        save_db_async(db_q)
-
-    # Tạo chat mới
-    new_chat_id = str(uuid.uuid4())
-    ql_title = "Quick Lookup" if is_quick_lookup_mode() else t("new_chat", lang)
-    user_chats[new_chat_id] = {
-        "title": ql_title,
-        "messages": [], "summary": "", "summary_updated_at": "",
-        "summary_token_count": 0,
-        "is_quick_lookup": is_quick_lookup_mode(),
-        "created_at": vn_now().isoformat(),
-        "updated_at": vn_now().isoformat()
-    }
-    if is_test:
-        st.session_state.test_chats = user_chats
-    elif is_guest:
-        st.session_state.guest_chats = user_chats
-
-    st.session_state.current_chat_id = new_chat_id
-    st.session_state.messages = [{"role": "user", "content": user_prompt}]
-
-    # Build prompt inputs
-    content_inputs, system_instruction, _ = build_prompt_inputs_for_chat(
-        new_chat_id, user_prompt, is_retry=False
-    )
-
-    # Khởi động stream trong background
-    typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
-    typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
-
-    multi_chat.start_stream(
-        chat_id=new_chat_id,
-        prompt_inputs=content_inputs,
-        api_keys=SECRET_API_KEYS,
-        preferred_model=sel_model,
-        system_instruction=system_instruction,
-        generation_config={"temperature": temperature, "top_p": top_p, "top_k": top_k},
-        lang=lang,
-        typing_mode=typing_mode_use,
-        typing_cps=typing_cps_use,
-    )
-
-    # Lưu chat mới với user message
-    _save_chat_to_storage(new_chat_id)
-    st.rerun()
-
-
-def send_in_current_chat(user_prompt: str):
-    """Gửi tin nhắn trong chat hiện tại. Nếu đang có stream → không cho gửi."""
-    current_chat_id = st.session_state.current_chat_id
-
-    if not current_chat_id:
-        start_new_chat_stream(user_prompt)
-        return
-
-    if multi_chat.is_running(current_chat_id):
-        st.warning(
-            "⚠️ Chat này đang tạo phản hồi. Vui lòng chờ hoặc bấm Dừng." if lang == "vi"
-            else "⚠️ This chat is generating. Please wait or click Stop."
-        )
-        return
-
-    if not enforce_message_content(user_prompt):
-        return
-
-    if is_guest:
-        db_q = GitHubStorage.load_db(force_refresh=True)
-        allowed, used_now, limit_now = check_guest_quota(db_q)
-        if not allowed:
-            st.error(t("guest_quota_exceeded", lang))
-            return
-        increment_guest_quota(db_q, device_id)
-        save_db_async(db_q)
-
-    # Append user message
-    st.session_state.messages.append({"role": "user", "content": user_prompt})
-    _save_chat_to_storage(current_chat_id)
-
-    # Build prompt inputs
-    content_inputs, system_instruction, _ = build_prompt_inputs_for_chat(
-        current_chat_id, user_prompt, is_retry=False
-    )
-
-    typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
-    typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
-
-    multi_chat.start_stream(
-        chat_id=current_chat_id,
-        prompt_inputs=content_inputs,
-        api_keys=SECRET_API_KEYS,
-        preferred_model=sel_model,
-        system_instruction=system_instruction,
-        generation_config={"temperature": temperature, "top_p": top_p, "top_k": top_k},
-        lang=lang,
-        typing_mode=typing_mode_use,
-        typing_cps=typing_cps_use,
-    )
-
-    st.rerun()
-
-
-def _save_chat_to_storage(chat_id: str):
-    """Lưu chat hiện tại vào storage (encrypted)."""
-    if chat_id not in user_chats:
-        return
-    chat_data = user_chats[chat_id]
-    if chat_id == st.session_state.current_chat_id:
-        msgs = st.session_state.messages
-    else:
-        msgs = deserialize_messages_from_storage(chat_data.get("messages", []))
-    chat_data["messages"] = serialize_messages_for_storage(msgs)
-    chat_data["_encrypted"] = True
-    chat_data["updated_at"] = vn_now().isoformat()
-
-    if is_test:
-        st.session_state.test_chats = user_chats
-    elif is_guest:
-        st.session_state.guest_chats = user_chats
-    else:
-        user_data["chats"] = user_chats
-        db_data[st.session_state.user] = user_data
-        save_db_async(db_data)
-
-
 def retry_last_message():
-    """Retry assistant message lỗi cuối."""
     if not st.session_state.messages:
         return
-    # Xóa message lỗi cuối
     if st.session_state.messages[-1].get("is_error", False):
         st.session_state.messages.pop()
-
     if not st.session_state.current_chat_id:
         return
     if multi_chat.is_running(st.session_state.current_chat_id):
-        st.warning("Chat đang chạy." if lang == "vi" else "Chat is running.")
         return
 
-    content_inputs, system_instruction, _ = build_prompt_inputs_for_chat(
-        st.session_state.current_chat_id, "", is_retry=True
-    )
+    last_user = ""
+    for m in reversed(st.session_state.messages):
+        if m.get("role") == "user":
+            last_user = m.get("content", "")
+            break
+    if not last_user:
+        return
 
-    typing_mode_use = user_data["preferences"].get("typing_mode", DEFAULT_TYPING_MODE)
-    typing_cps_use = user_data["preferences"].get("typing_cps", DEFAULT_TYPING_CPS)
-
-    multi_chat.start_stream(
-        chat_id=st.session_state.current_chat_id,
-        prompt_inputs=content_inputs,
-        api_keys=SECRET_API_KEYS,
-        preferred_model=sel_model,
-        system_instruction=system_instruction,
-        generation_config={"temperature": temperature, "top_p": top_p, "top_k": top_k},
-        lang=lang,
-        typing_mode=typing_mode_use,
-        typing_cps=typing_cps_use,
-    )
+    tool_results, classification = _run_agentic_stream(st.session_state.current_chat_id, last_user)
+    st.session_state[f"_tool_results_{st.session_state.current_chat_id}"] = tool_results
+    st.session_state[f"_classification_{st.session_state.current_chat_id}"] = classification
     _save_chat_to_storage(st.session_state.current_chat_id)
     st.rerun()
 
 
-# Handle retry
 _handle_retry = False
 _retry_idx = None
 try:
     qp = st.query_params
-    _qp_retry = qp.get("__lttp_retry")
-    if _qp_retry is not None:
+    _qp = qp.get("__lttp_retry")
+    if _qp is not None:
         try:
-            _retry_idx = int(_qp_retry)
+            _retry_idx = int(_qp)
             _handle_retry = True
         except Exception:
-            _retry_idx = None
+            pass
         try:
             del st.query_params["__lttp_retry"]
         except Exception:
@@ -6044,7 +5934,7 @@ except Exception:
 if _handle_retry and _retry_idx is not None:
     msgs = st.session_state.messages
     if 0 <= _retry_idx < len(msgs) and msgs[_retry_idx].get("is_error", False):
-        if enforce_rate_limit("retry_message", "Retry message"):
+        if enforce_rate_limit("retry_message", "Retry"):
             retry_last_message()
     st.rerun()
 
@@ -6056,13 +5946,12 @@ if user_prompt := st.chat_input(t("chat_placeholder", lang)):
 
 
 # ==========================================
-# 34. HANDLE LANG / FEEDBACK QUERY PARAMS
+# 33. QUERY PARAMS (lang, feedback)
 # ==========================================
 try:
     qp = st.query_params
     _qp_lang = qp.get("__lttp_lang")
     _qp_fb = qp.get("__lttp_fb")
-
     if _qp_lang in ("en", "vi") and _qp_lang != st.session_state.language:
         st.session_state.language = _qp_lang
         if not is_guest and not is_test and st.session_state.user:
@@ -6077,7 +5966,6 @@ try:
         except Exception:
             pass
         st.rerun()
-
     if _qp_fb == "1":
         try:
             del st.query_params["__lttp_fb"]
@@ -6090,11 +5978,10 @@ except Exception:
 
 
 # ==========================================
-# 35. TASKBAR
+# 34. TASKBAR
 # ==========================================
 def render_taskbar_html():
     sec_enabled = is_lttp_security_enabled()
-
     now_ts = time.time()
     last_scan_time = st.session_state.get("_lttp_sec_last_scan_time", 0)
     last_scan = st.session_state.get("_lttp_sec_last_scan")
@@ -6104,7 +5991,6 @@ def render_taskbar_html():
         st.session_state._lttp_sec_last_scan = findings
         st.session_state._lttp_sec_last_scan_time = now_ts
         last_scan = findings
-
     score = last_scan.get("score", 100) if last_scan else 100
 
     if is_test:
@@ -6139,18 +6025,13 @@ def render_taskbar_html():
         lang_vi_style = "background:rgba(102,126,234,0.25);color:#667eea;border:1px solid rgba(102,126,234,0.5);"
 
     feedback_label = "💬 Feedback" if lang == "en" else "💬 Phản hồi"
-
-    # Đếm chat đang chạy
     running_chats = multi_chat.get_all_running()
     running_count = len(running_chats)
     running_html = ""
     if running_count > 0:
-        running_html = f'<div class="tb-running" style="font-size:0.7rem;color:#f59e0b;padding:2px 8px;background:rgba(245,158,11,0.15);border-radius:6px;border:1px solid rgba(245,158,11,0.35);">⚙️ {running_count}</div>'
+        running_html = f'<div style="font-size:0.7rem;color:#f59e0b;padding:2px 8px;background:rgba(245,158,11,0.15);border-radius:6px;border:1px solid rgba(245,158,11,0.35);">⚙️ {running_count}</div>'
 
-    user_label_html = (user_label
-                       .replace("&", "&amp;")
-                       .replace("<", "&lt;")
-                       .replace(">", "&gt;"))
+    user_label_html = (user_label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
     taskbar_html = f"""
     <!DOCTYPE html>
@@ -6204,30 +6085,20 @@ def render_taskbar_html():
         50% {{ opacity: 0.7; transform: scale(0.9); }}
     }}
     #lttp-taskbar .tb-sec-score {{
-        font-weight: 900;
-        color: {score_color};
-        font-size: 0.9rem;
+        font-weight: 900; color: {score_color}; font-size: 0.9rem;
     }}
     #lttp-taskbar .tb-sec-label {{
-        font-size: 0.68rem;
-        color: #94a3b8;
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
+        font-size: 0.68rem; color: #94a3b8;
+        text-transform: uppercase; letter-spacing: 0.3px;
     }}
     #lttp-taskbar .tb-divider {{
-        width: 1px;
-        height: 20px;
-        background: rgba(148,163,184,0.2);
-        flex-shrink: 0;
+        width: 1px; height: 20px;
+        background: rgba(148,163,184,0.2); flex-shrink: 0;
     }}
     #lttp-taskbar .tb-user {{
         display: flex; align-items: center; gap: 6px;
-        color: {user_color};
-        font-weight: 600;
-        flex-shrink: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 160px;
+        color: {user_color}; font-weight: 600; flex-shrink: 0;
+        overflow: hidden; text-overflow: ellipsis; max-width: 160px;
     }}
     #lttp-taskbar .tb-actions {{
         margin-left: auto;
@@ -6235,34 +6106,25 @@ def render_taskbar_html():
         flex-shrink: 0;
     }}
     #lttp-taskbar .tb-lang-btn, #lttp-taskbar .tb-lang-btn-vi {{
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        cursor: pointer;
-        transition: all 0.15s ease;
+        padding: 4px 10px; border-radius: 6px;
+        font-size: 0.72rem; font-weight: 700;
+        cursor: pointer; transition: all 0.15s ease;
     }}
     #lttp-taskbar .tb-lang-btn {{ {lang_en_style} }}
     #lttp-taskbar .tb-lang-btn-vi {{ {lang_vi_style} }}
     #lttp-taskbar .tb-fb-btn {{
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        background: rgba(102,126,234,0.15);
-        color: #667eea;
+        padding: 4px 12px; border-radius: 6px;
+        font-size: 0.75rem; font-weight: 600;
+        background: rgba(102,126,234,0.15); color: #667eea;
         border: 1px solid rgba(102,126,234,0.35);
-        cursor: pointer;
-        transition: all 0.15s ease;
+        cursor: pointer; transition: all 0.15s ease;
     }}
     #lttp-taskbar .tb-fb-btn:hover {{ background: rgba(102,126,234,0.3); }}
 
     @media (max-width: 768px) {{
         #lttp-taskbar {{
-            font-size: 0.72rem;
-            padding: 4px 6px;
-            gap: 5px;
-            height: 36px;
+            font-size: 0.72rem; padding: 4px 6px;
+            gap: 5px; height: 36px;
         }}
         #lttp-taskbar .tb-sec {{ padding: 2px 6px; gap: 3px; }}
         #lttp-taskbar .tb-sec-score {{ font-size: 0.75rem; }}
@@ -6299,14 +6161,14 @@ def render_taskbar_html():
             const url = new URL(window.parent.location.href);
             url.searchParams.set('__lttp_lang', langCode);
             window.parent.location.href = url.toString();
-        }} catch(e) {{ console.warn("Cannot set lang:", e); }}
+        }} catch(e) {{}}
     }}
     function lttpOpenFeedback() {{
         try {{
             const url = new URL(window.parent.location.href);
             url.searchParams.set('__lttp_fb', '1');
             window.parent.location.href = url.toString();
-        }} catch(e) {{ console.warn("Cannot open feedback:", e); }}
+        }} catch(e) {{}}
     }}
     </script>
     </body>
