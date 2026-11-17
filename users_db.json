@@ -164,8 +164,7 @@
       "smart_draft": true,
       "typing_mode": "smooth",
       "typing_cps": 35
-    },
-    "custom_tools": []
+    }
   },
   "__feedback__": []
 }
