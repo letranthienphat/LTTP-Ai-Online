@@ -176,16 +176,7 @@
  "phát": {
   "password": "v2$e87770ab78c7b5370bd170bb7b8ae585$3d347b85f2fd5ec9a0f182d570a406e71ea71abca5db583f064f7cb49ac67920",
   "custom_instructions": "",
-  "chats": {
-   "98b9d3b6-e316-4a8a-991f-7d282c462c98": {
-    "title": "Tia phân giác của 1 góc là gì?",
-    "messages": "TFRUUENIQVQCGa5eTMD3P6ruPCGf0dHAV3BwnVSHTDtRxyWpBTY9KrfLi1m9eWmHU1kZLVRZwbsiCGoQ1sWZ1brFmLMM2F8WWUSAQPNKJZezkVz9qyh92SkFm2eAcS29vdto_mQv-O1wRY3wSyzqUl_ujvSOnCNUyGYgWet_cmezpy12x4y952n8S1D7u3LEfYzAKUY3jowSxublvL2BiUntvVt-C64Nqs8aJFs4W5Mh6p6ktfKiYYZqp3XMrX0S6C3mPWrFfQ==",
-    "summary": "",
-    "created_at": "2026-11-18T18:00:22.354488+07:00",
-    "updated_at": "2026-11-18T18:01:42.957681+07:00",
-    "_encrypted": true
-   }
-  },
+  "chats": {},
   "remembered_devices": [
    "6ef354b0-ed60-41b8-9caa-8dd448186775",
    "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b",
