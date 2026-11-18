@@ -113,6 +113,12 @@
      "label": "phát",
      "role": "user",
      "device": "dd5243dc-cc13-4e71-9709-4698146dc23b"
+    },
+    {
+     "time": "2026-11-18 18:45:02",
+     "label": "phát",
+     "role": "user",
+     "device": "9061f3c1-1c87-48e2-82ab-fd74fdee6eab"
     }
    ]
   }
@@ -185,7 +191,8 @@
    "ef66dc5b-713f-4128-a4d5-0dd1d2afbb69",
    "cd24234d-ef6f-46b2-aae3-31d403aac4c0",
    "dd5243dc-cc13-4e71-9709-4698146dc23b",
-   "76e0d710-385d-418c-85b5-86646827363d"
+   "76e0d710-385d-418c-85b5-86646827363d",
+   "9061f3c1-1c87-48e2-82ab-fd74fdee6eab"
   ],
   "language": "vi",
   "terms_accepted": true,
