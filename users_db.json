@@ -172,7 +172,7 @@
    "typing_mode": "smooth",
    "typing_cps": 35,
    "study": {
-    "level": "auto",
+    "level": "secondary",
     "subject": "auto",
     "mode": "guide"
    }
