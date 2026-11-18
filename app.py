@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-LTTP AI Study v2.0.0 — Trợ lý AI học tập (Streamlit, một file duy nhất)
+LTTP AI Study v2.1.0 — Trợ lý AI học tập (Streamlit, một file duy nhất)
 
 Chạy trên Streamlit Cloud, dữ liệu lưu trong users_db.json trên GitHub.
-Yêu cầu: streamlit>=1.37, google-generativeai, requests, cryptography,
+Yêu cầu: streamlit>=1.39, google-generativeai, requests, cryptography,
          streamlit-cookies-controller
 Secrets (tuỳ chọn nhưng NÊN đặt): GITHUB_TOKEN, GITHUB_REPO, GEMINI_API_KEY_1,
          GEMINI_API_KEY_2, ENCRYPTION_SECRET, CHAT_ENCRYPTION_SECRET,
@@ -25,6 +25,7 @@ import ipaddress
 import threading
 import html as html_lib
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse, urljoin, parse_qs, unquote
 
@@ -53,7 +54,7 @@ st.set_page_config(
 # ==========================================
 # 0. CONSTANTS
 # ==========================================
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 
 def _secret(name: str, default=""):
@@ -98,11 +99,11 @@ TYPING_MODE_SMOOTH = "smooth"
 TYPING_MODE_CONTROLLED = "controlled"
 TYPING_MODE_INSTANT = "instant"
 DEFAULT_TYPING_MODE = TYPING_MODE_SMOOTH
-DEFAULT_TYPING_CPS = 40
+DEFAULT_TYPING_CPS = 60
 
-GEMINI_REQUEST_TIMEOUT = 60
+GEMINI_REQUEST_TIMEOUT = 40
 GEMINI_STREAM_MAX_RETRIES = 2
-GEMINI_RETRY_BACKOFF = 1.5
+GEMINI_RETRY_BACKOFF = 1.0
 MODEL_LIST_CACHE_SECONDS = 600
 
 LTTP_WRITE_DEBOUNCE_SEC = 1.5
@@ -112,15 +113,19 @@ CHAT_SALT_FIXED = b"LTTP_CHAT_SALT_2"
 
 SEARCH_CACHE_TTL = 300
 SEARCH_CACHE_MAX = 200
-TOOL_TIMEOUT = 12
+TOOL_TIMEOUT = 8
 TOOL_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
 
 GUEST_DAILY_MSG_LIMIT = 100
 
 CHARS_PER_TOKEN = 2.5
-HISTORY_BUDGET_TOKENS = 60_000
+HISTORY_BUDGET_TOKENS = 24_000
 MIN_RECENT_MESSAGES = 6
-MAX_RECENT_MESSAGES = 30
+MAX_RECENT_MESSAGES = 20
+MAX_OUTPUT_TOKENS = 6000
+UI_POLL_SEC = 0.15          # nhịp cập nhật chữ trên màn hình
+SMOOTH_BASE_CPS = 70        # tốc độ gõ cơ bản (chế độ Mượt)
+SMOOTH_CATCHUP_SEC = 1.2    # chế độ Mượt tự tăng tốc để không bị chậm hơn AI quá ~1,2 giây
 
 RATE_LIMITS = {
     "send_message": (20, 60), "new_chat": (15, 60), "delete_chat": (15, 60),
@@ -218,14 +223,18 @@ class SharedRuntime:
         self.writer_status = "idle"
         self.writer_error = ""
         self.writer_count = 0
+        self.models_cache = None
+        self.models_cache_time = 0.0
+        self.models_thread = None
 
 
 @st.cache_resource(show_spinner=False)
-def get_runtime() -> SharedRuntime:
+def get_runtime(version: str) -> SharedRuntime:
+    # tham số version làm khoá cache: đổi phiên bản => tạo runtime mới, tránh thiếu thuộc tính
     return SharedRuntime()
 
 
-RT = get_runtime()
+RT = get_runtime(APP_VERSION)
 
 
 # ==========================================
@@ -488,7 +497,7 @@ def _prune_traffic_log(traffic: dict) -> dict:
 # 4. GITHUB STORAGE + ASYNC WRITER
 # ==========================================
 class GitHubStorage:
-    CACHE_DURATION = 30
+    CACHE_DURATION = 120
 
     @staticmethod
     def _headers(raw: bool = False) -> dict:
@@ -509,7 +518,8 @@ class GitHubStorage:
     def load_db(cls, force_refresh: bool = False) -> dict:
         with RT.lock:
             cached, ctime = RT.db_cache, RT.db_cache_time
-        if not force_refresh and cached is not None and (time.time() - ctime) < cls.CACHE_DURATION:
+        if not force_refresh and cached is not None and (
+                (time.time() - ctime) < cls.CACHE_DURATION or RT.pending is not None):
             return cached
         if not GITHUB_TOKEN or not GITHUB_REPO:
             st.error("⚠️ Thiếu GITHUB_TOKEN hoặc GITHUB_REPO trong secrets.")
@@ -673,40 +683,45 @@ def _build_model_chain(preferred: str) -> list:
 
 
 def _open_stream(api_key, model_name, system_instruction, generation_config, prompt_inputs):
-    # genai.configure là trạng thái toàn cục -> khoá lại để nhiều chat chạy song song không lẫn key
+    # genai.configure là trạng thái toàn cục => chỉ khoá lúc cấu hình + tạo client gắn với key.
+    # Phần chờ token đầu tiên (chậm nhất) chạy NGOÀI khoá để nhiều chat song song không xếp hàng.
+    kw = {"stream": True, "request_options": {"timeout": GEMINI_REQUEST_TIMEOUT}}
     with RT.genai_lock:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name=model_name,
                                       system_instruction=system_instruction or None,
                                       generation_config=generation_config or {})
-        return model.generate_content(prompt_inputs, stream=True,
-                                      request_options={"timeout": GEMINI_REQUEST_TIMEOUT})
+        bound = False
+        try:
+            from google.generativeai import client as _gclient
+            model._client = _gclient.get_default_generative_client()
+            bound = True
+        except Exception:
+            pass
+        if not bound:  # không gắn được client riêng => giữ khoá như cũ để an toàn
+            return model.generate_content(prompt_inputs, **kw)
+    return model.generate_content(prompt_inputs, **kw)
 
 
 def stream_gemini(prompt_inputs, api_keys, preferred_model, system_instruction=None,
                   generation_config=None, typing_mode=DEFAULT_TYPING_MODE,
                   typing_cps=DEFAULT_TYPING_CPS, stop_event=None):
-    """Generator -> (text, done, error)."""
+    """Generator -> (text, done, error).
+    Không giữ nhịp chữ ở đây: AI chạy hết tốc độ, giao diện tự làm mượt phần hiển thị."""
     if not api_keys:
         yield "", True, "no_api_keys"
         return
-    controlled = typing_mode == TYPING_MODE_CONTROLLED
-    cps = max(1, int(typing_cps))
     last_error, saw_rl, saw_other = None, False, False
-
-    def stopped():
-        return stop_event is not None and stop_event.is_set()
-
     for model_name in _build_model_chain(preferred_model):
         for api_k in api_keys:
             for attempt in range(GEMINI_STREAM_MAX_RETRIES + 1):
-                acc, shown, t0 = "", 0, None
+                acc = ""
                 try:
                     response = _open_stream(api_k, model_name, system_instruction,
                                             generation_config, prompt_inputs)
                     for chunk in response:
-                        if stopped():
-                            yield (acc[:shown] if controlled else acc), True, "stopped"
+                        if stop_event is not None and stop_event.is_set():
+                            yield acc, True, "stopped"
                             return
                         try:
                             ct = chunk.text
@@ -715,21 +730,8 @@ def stream_gemini(prompt_inputs, api_keys, preferred_model, system_instruction=N
                         if not ct:
                             continue
                         acc += ct
-                        if controlled:
-                            if t0 is None:
-                                t0 = time.time()
-                            shown = min(len(acc), max(shown, int((time.time() - t0) * cps)))
-                            yield acc[:shown], False, None
-                        else:
-                            yield acc, False, None
+                        yield acc, False, None
                     if acc:
-                        while controlled and shown < len(acc):
-                            if stopped():
-                                yield acc[:shown], True, "stopped"
-                                return
-                            time.sleep(0.05)
-                            shown = min(len(acc), max(shown, int((time.time() - t0) * cps)))
-                            yield acc[:shown], False, None
                         yield acc, True, None
                         return
                     saw_other, last_error = True, "Empty response"
@@ -753,31 +755,47 @@ def stream_gemini(prompt_inputs, api_keys, preferred_model, system_instruction=N
         yield "", True, last_error or "unknown_error"
 
 
+def _refresh_models_worker():
+    """Lấy danh sách model ở luồng nền (REST, không đụng genai.configure) để không chậm lần tải đầu."""
+    names = []
+    try:
+        token = None
+        for _ in range(5):
+            params = {"pageSize": 200}
+            if token:
+                params["pageToken"] = token
+            r = requests.get("https://generativelanguage.googleapis.com/v1beta/models", params=params,
+                             headers={"x-goog-api-key": SECRET_API_KEYS[0]}, timeout=10)
+            if r.status_code != 200:
+                break
+            d = r.json()
+            for m in d.get("models", []):
+                if "generateContent" not in m.get("supportedGenerationMethods", []):
+                    continue
+                name = m.get("name", "").replace("models/", "")
+                if (not name.startswith("gemini") or "gemini-2.0" in name
+                        or any(w in name for w in MODEL_EXCLUDE_WORDS)):
+                    continue
+                names.append(name)
+            token = d.get("nextPageToken")
+            if not token:
+                break
+    except Exception:
+        pass
+    models = list(dict.fromkeys(names + FALLBACK_MODELS)) if names else FALLBACK_MODELS.copy()
+    with RT.lock:
+        RT.models_cache, RT.models_cache_time = models, time.time()
+
+
 def get_available_models_cached() -> list:
-    now = time.time()
-    cached = st.session_state.get("_models_cache")
-    if cached and (now - st.session_state.get("_models_cache_time", 0)) < MODEL_LIST_CACHE_SECONDS:
-        return cached
-    models = FALLBACK_MODELS.copy()
-    if SECRET_API_KEYS:
-        try:
-            with RT.genai_lock:
-                genai.configure(api_key=SECRET_API_KEYS[0])
-                dyn = []
-                for m in genai.list_models():
-                    if "generateContent" not in m.supported_generation_methods:
-                        continue
-                    name = m.name.replace("models/", "")
-                    if "gemini-2.0" in name or any(w in name for w in MODEL_EXCLUDE_WORDS):
-                        continue
-                    dyn.append(name)
-            if dyn:
-                models = list(dict.fromkeys(dyn + FALLBACK_MODELS))
-        except Exception:
-            pass
-    st.session_state._models_cache = models
-    st.session_state._models_cache_time = now
-    return models
+    with RT.lock:
+        cached = RT.models_cache
+        stale = cached is None or (time.time() - RT.models_cache_time) > MODEL_LIST_CACHE_SECONDS
+        th = RT.models_thread
+        if stale and SECRET_API_KEYS and (th is None or not th.is_alive()):
+            RT.models_thread = threading.Thread(target=_refresh_models_worker, daemon=True)
+            RT.models_thread.start()
+    return list(cached) if cached else FALLBACK_MODELS.copy()
 
 
 # ==========================================
@@ -877,7 +895,7 @@ class LTTPStudyToolEngine:
             for inst in ("https://searx.be", "https://searx.tiekoetter.com"):
                 try:
                     r = requests.get(f"{inst}/search", params={"q": query, "format": "json"},
-                                     headers=UA, timeout=TOOL_TIMEOUT)
+                                     headers=UA, timeout=5)
                     if r.status_code == 200:
                         for it in r.json().get("results", [])[:limit]:
                             results.append({"title": it.get("title", ""), "url": it.get("url", ""),
@@ -1131,12 +1149,12 @@ class LTTPMultiChatEngine:
             try:
                 tool_ctx, sources = "", []
                 if use_tools:
-                    results = []
-                    for call in study_tools.plan_tools(user_prompt, lang):
+                    calls = study_tools.plan_tools(user_prompt, lang)
+                    if calls:  # chạy song song để tra cứu nhanh hơn
+                        with ThreadPoolExecutor(max_workers=len(calls)) as ex:
+                            results = list(ex.map(study_tools.execute, calls))
                         if stop_evt.is_set():
                             return finish_stopped()
-                        results.append(study_tools.execute(call))
-                    if results:
                         tool_ctx, sources = study_tools.collect(results)
                 if stop_evt.is_set():
                     return finish_stopped()
@@ -1252,7 +1270,7 @@ T = {
     "draft_title": ("📝 Tìm thấy bản nháp chưa gửi", "📝 Unsent draft found"),
     "draft_discard": ("🗑️ Xóa nháp", "🗑️ Discard"), "draft_discarded": ("Đã xóa nháp", "Draft discarded"),
     "typing_mode_label": ("Cách hiển thị câu trả lời", "Answer display"),
-    "typing_smooth": ("🌊 Mượt", "🌊 Smooth"), "typing_controlled": ("⌨️ Kiểm soát tốc độ", "⌨️ Controlled"),
+    "typing_smooth": ("🌊 Mượt (tự điều chỉnh)", "🌊 Smooth (adaptive)"), "typing_controlled": ("⌨️ Tốc độ cố định", "⌨️ Fixed speed"),
     "typing_instant": ("⚡ Ngay lập tức", "⚡ Instant"), "typing_cps_label": ("Ký tự/giây:", "Chars/sec:"),
     "bug_report_btn": ("🐛 Báo lỗi", "🐛 Report bug"), "bug_report_title": ("🐛 Báo cáo lỗi", "🐛 Bug report"),
     "bug_report_desc": ("Mô tả lỗi và (tuỳ chọn) đính kèm ảnh chụp màn hình.", "Describe the bug and optionally attach a screenshot."),
@@ -1545,6 +1563,55 @@ blockquote { border-left: 3px solid var(--accent) !important; color: var(--text)
     .stButton > button { min-height: 44px !important; }
     section.main .block-container, [data-testid="stMainBlockContainer"] { padding-left: .7rem !important; padding-right: .7rem !important; }
     [data-testid="stChatInput"] textarea { font-size: 16px !important; }
+}
+
+/* ---------- chuyển động mượt ---------- */
+html { scroll-behavior: smooth; }
+[data-stale="true"], [data-testid="stAppViewContainer"] [data-stale="true"] { opacity: 1 !important; transition: none !important; }
+[data-testid="stStatusWidget"] { visibility: hidden !important; }
+@keyframes lttpFadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes lttpFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes lttpPop { from { opacity: 0; transform: scale(.97) translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes lttpBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes lttpDots { 0%, 80%, 100% { transform: scale(.55); opacity: .4; } 40% { transform: scale(1); opacity: 1; } }
+@keyframes lttpShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+[data-testid="stChatMessage"] { animation: lttpFadeUp .3s cubic-bezier(.22,.8,.3,1) both; transition: box-shadow .25s ease, border-color .25s ease; }
+[data-testid="stChatMessage"]:hover { border-color: var(--accent-border); box-shadow: 0 4px 14px var(--shadow); }
+[data-testid="stSidebar"] > div:first-child { animation: lttpFadeIn .35s ease both; }
+div[role="dialog"] { animation: lttpPop .22s cubic-bezier(.22,.8,.3,1) both; }
+[data-testid="stToast"] { animation: lttpFadeUp .25s ease both; }
+[data-testid="stExpander"] details[open] > div { animation: lttpFadeIn .25s ease both; }
+[data-testid="stExpander"], [data-testid="stMetric"], .user-card, .tech-card, .admin-item {
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+[data-testid="stExpander"]:hover, .user-card:hover, .tech-card:hover, .admin-item:hover {
+    border-color: var(--accent-border) !important; box-shadow: 0 4px 12px var(--shadow); }
+.stButton > button, .stFormSubmitButton > button, [data-testid="stBaseButton-secondary"] {
+    transition: transform .15s ease, box-shadow .2s ease, background-color .2s ease, color .2s ease, border-color .2s ease !important; }
+.stButton > button:hover, .stFormSubmitButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px var(--shadow); }
+.stButton > button:active, .stFormSubmitButton > button:active { transform: scale(.97); box-shadow: none; }
+[data-baseweb="input"], [data-baseweb="textarea"], [data-baseweb="select"] > div, [data-testid="stChatInput"] {
+    transition: border-color .2s ease, box-shadow .2s ease !important; }
+[data-baseweb="input"]:focus-within, [data-baseweb="textarea"]:focus-within,
+[data-baseweb="select"]:focus-within > div, [data-testid="stChatInput"]:focus-within {
+    border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--accent-soft) !important; }
+button[data-baseweb="tab"] { transition: color .2s ease !important; }
+[data-baseweb="tab-highlight"] { transition: all .25s ease !important; }
+.update-notice, .announcement-banner, .guest-banner, .status-strip, .draft-banner, .lttp-error-card { animation: lttpFadeUp .35s ease both; }
+
+/* con trỏ nhấp nháy ở cuối câu trả lời đang hiện (chỉ bằng CSS, không chèn HTML vào nội dung AI) */
+.st-key-lttp_live [data-testid="stMarkdownContainer"] > *:last-child::after {
+    content: "\258C"; color: var(--accent); margin-left: 2px; animation: lttpBlink 1s steps(1) infinite; }
+
+/* khung chờ: 3 chấm nhảy + dải sáng chạy */
+.ai-loading-box { position: relative; overflow: hidden; background-image: linear-gradient(100deg, transparent 30%, var(--accent-soft) 50%, transparent 70%);
+    background-size: 200% 100%; animation: lttpShimmer 1.8s linear infinite; }
+.dots { display: inline-flex; gap: 5px; flex-shrink: 0; }
+.dots span { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: lttpDots 1.2s ease-in-out infinite; }
+.dots span:nth-child(2) { animation-delay: .16s; }
+.dots span:nth-child(3) { animation-delay: .32s; }
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition-duration: .001s !important; scroll-behavior: auto !important; }
 }
 img { max-width: 100% !important; height: auto !important; }
 *, *::before, *::after { box-sizing: border-box; }
@@ -2661,7 +2728,7 @@ with st.sidebar:
                             format_func=lambda x: t(f"typing_{x}"), key="typing_mode_radio")
         cps = int(prefs.get("typing_cps", DEFAULT_TYPING_CPS))
         if sel_mode == TYPING_MODE_CONTROLLED:
-            cps = st.slider(t("typing_cps_label"), 5, 120, cps, 5, key="typing_cps_slider")
+            cps = st.slider(t("typing_cps_label"), 10, 300, min(max(cps, 10), 300), 5, key="typing_cps_slider")
         if sel_mode != cur_mode or cps != prefs.get("typing_cps"):
             prefs["typing_mode"], prefs["typing_cps"] = sel_mode, cps
             persist_user_data()
@@ -2753,7 +2820,8 @@ def begin_generation(chat_id: str, prompt: str) -> bool:
     return multi_chat.start(
         chat_id=chat_id, user_prompt=prompt, history_text=build_history_text(history_src),
         api_keys=SECRET_API_KEYS, model=sel_model, system_instruction=build_system_prompt(user_data, lang),
-        gen_cfg={"temperature": temperature, "top_p": top_p, "top_k": top_k}, lang=lang,
+        gen_cfg={"temperature": temperature, "top_p": top_p, "top_k": top_k,
+                 "max_output_tokens": MAX_OUTPUT_TOKENS}, lang=lang,
         typing_mode=prefs.get("typing_mode", DEFAULT_TYPING_MODE),
         typing_cps=prefs.get("typing_cps", DEFAULT_TYPING_CPS), use_tools=True)
 
@@ -2769,7 +2837,7 @@ def handle_user_input(text: str):
     if not enforce_rate_limit("send_message") or not enforce_message_content(text):
         return
     if is_guest:
-        db_q = GitHubStorage.load_db(force_refresh=True)
+        db_q = GitHubStorage.load_db()
         if get_guest_quota_used(db_q) >= GUEST_DAILY_MSG_LIMIT:
             st.error(t("guest_quota_exceeded"))
             return
@@ -2815,21 +2883,71 @@ def sync_finished_chat(chat_id: str):
     multi_chat.cleanup(chat_id)
 
 
-@st.fragment(run_every=0.8)
+def _snap_text(text: str, shown: int) -> str:
+    """Cắt theo ranh giới từ và đóng tạm khối code/công thức để Markdown không bị nhảy lung tung."""
+    n = int(shown)
+    if n >= len(text):
+        return text
+    cut = text[:n]
+    if cut and not cut[-1].isspace() and not text[n].isspace():
+        sp = max(cut.rfind(" "), cut.rfind("\n"))
+        if sp != -1 and n - sp <= 14:
+            cut = cut[:sp]
+    if cut.count("```") % 2 == 1:
+        cut += "\n```"
+    elif cut.count("$$") % 2 == 1:
+        cut = cut[:cut.rfind("$$")]
+    return cut
+
+
+def _reveal_progress(chat_id: str, run_id: str, total: int, mode: str, cps: int) -> int:
+    """Số ký tự được phép hiện, tính theo THỜI GIAN thực (không phụ thuộc nhịp rerun) => chữ chảy đều, không giật."""
+    key = f"_reveal_{chat_id}"
+    now = time.time()
+    r = st.session_state.get(key)
+    if not r or r.get("run") != run_id:
+        r = {"run": run_id, "shown": 0.0, "last": now}
+    dt = min(max(now - r["last"], 0.0), 0.5)
+    r["last"] = now
+    if mode == TYPING_MODE_INSTANT:
+        r["shown"] = float(total)
+    else:
+        backlog = total - r["shown"]
+        if mode == TYPING_MODE_CONTROLLED:
+            speed = max(1, cps)                                   # tốc độ cố định theo cài đặt
+        else:
+            speed = max(SMOOTH_BASE_CPS, backlog / SMOOTH_CATCHUP_SEC)  # tự bắt kịp AI
+        r["shown"] = min(float(total), r["shown"] + speed * dt)
+    st.session_state[key] = r
+    return int(r["shown"])
+
+
+@st.fragment(run_every=UI_POLL_SEC)
 def live_stream_view(chat_id: str):
     s = multi_chat.get_state(chat_id)
-    if s["status"] != "running":
+    running = s["status"] == "running"
+    text = s["accumulated"] if running else s["final_text"]
+    mode = prefs.get("typing_mode", DEFAULT_TYPING_MODE)
+    cps = int(prefs.get("typing_cps", DEFAULT_TYPING_CPS))
+    shown = _reveal_progress(chat_id, s.get("run_id", ""), len(text), mode, cps)
+    if s["status"] in ("stopped", "error") or (not running and shown >= len(text)):
+        st.session_state.pop(f"_reveal_{chat_id}", None)
         st.rerun(scope="app")
         return
     with st.chat_message("assistant"):
-        if st.button(t("stop_btn"), key="stop_gen_btn"):
+        if running and st.button(t("stop_btn"), key="stop_gen_btn"):
             multi_chat.stop(chat_id)
-        if s["accumulated"]:
-            st.markdown(s["accumulated"] + " ▌")
-        else:
-            label = t("ai_searching") if s["stage"] == "tools" else t("ai_typing")
-            st.markdown(f'<div class="ai-loading-box"><div class="spinner"></div>'
-                        f'<div class="ai-loading-text">{label}</div></div>', unsafe_allow_html=True)
+        try:
+            box, cursor = st.container(key="lttp_live"), ""
+        except TypeError:           # Streamlit cũ chưa có container(key=...)
+            box, cursor = st.container(), " ▌"
+        with box:
+            if text and shown > 0:
+                st.markdown(_snap_text(text, shown) + cursor)
+            else:
+                label = t("ai_searching") if s["stage"] == "tools" else t("ai_typing")
+                st.markdown(f'<div class="ai-loading-box"><div class="dots"><span></span><span></span><span></span></div>'
+                            f'<div class="ai-loading-text">{label}</div></div>', unsafe_allow_html=True)
 
 
 # ==========================================
