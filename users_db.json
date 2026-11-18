@@ -191,7 +191,7 @@
    "top_k": 40,
    "smart_draft": true,
    "typing_mode": "controlled",
-   "typing_cps": 35,
+   "typing_cps": 30,
    "study": {
     "level": "secondary",
     "subject": "auto",
