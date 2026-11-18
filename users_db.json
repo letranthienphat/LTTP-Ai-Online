@@ -182,7 +182,16 @@
  "phát": {
   "password": "v2$e87770ab78c7b5370bd170bb7b8ae585$3d347b85f2fd5ec9a0f182d570a406e71ea71abca5db583f064f7cb49ac67920",
   "custom_instructions": "",
-  "chats": {},
+  "chats": {
+   "deee8d08-4371-4811-995c-96cbbc17c227": {
+    "title": "Tia phân giác một góc.",
+    "messages": "TFRUUENIQVQCvzGOvW7JGYKa43j9uMqC4a00qzNFnyi7q5yF-fZaOeeQ4PTgJVF7zaClyJd96eny3AWC7npx2gxXs_KhQkC_8WFVxl8XuPdXDomNnYcGwlOqon9T5wPfzxgbLEQfEILybnT0i_kixpVrlgE9nrgx84Gr7L28e_9TnCvuJ9LJ8S42eYbVbpcVQpBapTghL4Z9agACdpR0amED81OWstiSbAnfWkQ2b-dosqER3cHQb2AHNfLMkpRfquW0Dc0k",
+    "summary": "",
+    "created_at": "2026-11-18T18:48:54.834534+07:00",
+    "updated_at": "2026-11-18T18:48:54.834895+07:00",
+    "_encrypted": true
+   }
+  },
   "remembered_devices": [
    "6ef354b0-ed60-41b8-9caa-8dd448186775",
    "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b",
