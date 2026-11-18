@@ -164,7 +164,16 @@
  "phát": {
   "password": "v2$e87770ab78c7b5370bd170bb7b8ae585$3d347b85f2fd5ec9a0f182d570a406e71ea71abca5db583f064f7cb49ac67920",
   "custom_instructions": "",
-  "chats": {},
+  "chats": {
+   "70e10a6a-8620-4052-8434-32882a938548": {
+    "title": "Hãy giải thích cho tôi hiểu về tia phân ",
+    "messages": "TFRUUENIQVQCrzuXmEFGSFeWmgO2uNERCrL3B8TCRGp4Oyrj49Ebh70RqWtWiD2emgHjNepeOFpkmu45sLsUUE2-J-dqINHA0TBo9HoaqggAyVNvFaeycEfb1WfbkbzdwY3C9Sy5cNCVuGPRBVPkYSPKLATAOWnCu5iMmxX9O2dwf6XxCtmRiZDvZBE0ttECXmwUOGc=",
+    "summary": "",
+    "created_at": "2026-11-18T17:43:18.294160+07:00",
+    "updated_at": "2026-11-18T17:43:18.294622+07:00",
+    "_encrypted": true
+   }
+  },
   "remembered_devices": [
    "6ef354b0-ed60-41b8-9caa-8dd448186775",
    "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b",
