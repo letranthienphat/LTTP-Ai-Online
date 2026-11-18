@@ -95,6 +95,12 @@
      "label": "guest",
      "role": "guest",
      "device": "76e0d710-385d-418c-85b5-86646827363d"
+    },
+    {
+     "time": "2026-11-18 17:41:30",
+     "label": "phát",
+     "role": "user",
+     "device": "ef66dc5b-713f-4128-a4d5-0dd1d2afbb69"
     }
    ]
   }
@@ -163,7 +169,8 @@
    "6ef354b0-ed60-41b8-9caa-8dd448186775",
    "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b",
    "69772d8b-253d-4dab-8b15-ed3a6b64bfb6",
-   "c0cac621-692d-4401-b024-4af93393ab59"
+   "c0cac621-692d-4401-b024-4af93393ab59",
+   "ef66dc5b-713f-4128-a4d5-0dd1d2afbb69"
   ],
   "language": "vi",
   "terms_accepted": true,
