@@ -1,170 +1,175 @@
 {
-  "__system_config__": {
-    "maintenance_mode": false,
-    "maintenance_note": "Đang cập nhật sửa lỗi, sẽ xong vào lúc 6:05.",
-    "announcement": {
-      "enabled": false,
-      "title": "",
-      "body": "",
-      "updated_at": "2026-11-12 18:02:31"
+ "__system_config__": {
+  "maintenance_mode": false,
+  "maintenance_note": "Đang cập nhật sửa lỗi, sẽ xong vào lúc 6:05.",
+  "announcement": {
+   "enabled": false,
+   "title": "",
+   "body": "",
+   "updated_at": "2026-11-12 18:02:31"
+  }
+ },
+ "__traffic_log__": {
+  "2026-11-05": {
+   "visits": [
+    {
+     "time": "2026-11-05 18:39:14",
+     "label": "phát",
+     "role": "user",
+     "device": "6ef354b0-ed60-41b8-9caa-8dd448186775"
+    },
+    {
+     "time": "2026-11-05 19:05:51",
+     "label": "phát",
+     "role": "user",
+     "device": "a158f83d-6e10-43b7-80e2-f420da79268d"
+    },
+    {
+     "time": "2026-11-05 21:16:05",
+     "label": "phát",
+     "role": "user",
+     "device": "5e92b254-ccb1-44f4-81ba-de7bd62a45a2"
     }
+   ]
   },
-  "__traffic_log__": {
-    "2026-11-05": {
-      "visits": [
-        {
-          "time": "2026-11-05 18:39:14",
-          "label": "phát",
-          "role": "user",
-          "device": "6ef354b0-ed60-41b8-9caa-8dd448186775"
-        },
-        {
-          "time": "2026-11-05 19:05:51",
-          "label": "phát",
-          "role": "user",
-          "device": "a158f83d-6e10-43b7-80e2-f420da79268d"
-        },
-        {
-          "time": "2026-11-05 21:16:05",
-          "label": "phát",
-          "role": "user",
-          "device": "5e92b254-ccb1-44f4-81ba-de7bd62a45a2"
-        }
-      ]
+  "2026-11-12": {
+   "visits": [
+    {
+     "time": "2026-11-12 17:18:44",
+     "label": "guest",
+     "role": "guest",
+     "device": "aa5a33fa-21e5-44fd-abe6-dc88e4436278"
     },
-    "2026-11-12": {
-      "visits": [
-        {
-          "time": "2026-11-12 17:18:44",
-          "label": "guest",
-          "role": "guest",
-          "device": "aa5a33fa-21e5-44fd-abe6-dc88e4436278"
-        },
-        {
-          "time": "2026-11-12 18:01:33",
-          "label": "phát",
-          "role": "user",
-          "device": "5e92b254-ccb1-44f4-81ba-de7bd62a45a2"
-        },
-        {
-          "time": "2026-11-12 18:01:47",
-          "label": "Admin",
-          "role": "admin",
-          "device": "5e92b254-ccb1-44f4-81ba-de7bd62a45a2"
-        },
-        {
-          "time": "2026-11-12 18:17:30",
-          "label": "Admin",
-          "role": "admin",
-          "device": "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b"
-        },
-        {
-          "time": "2026-11-12 18:17:56",
-          "label": "phát",
-          "role": "user",
-          "device": "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b"
-        }
-      ]
+    {
+     "time": "2026-11-12 18:01:33",
+     "label": "phát",
+     "role": "user",
+     "device": "5e92b254-ccb1-44f4-81ba-de7bd62a45a2"
     },
-    "2026-11-13": {
-      "visits": [
-        {
-          "time": "2026-11-13 07:22:21",
-          "label": "guest",
-          "role": "guest",
-          "device": "55250d40-4d01-4589-8de1-675fec5da509"
-        }
-      ]
+    {
+     "time": "2026-11-12 18:01:47",
+     "label": "Admin",
+     "role": "admin",
+     "device": "5e92b254-ccb1-44f4-81ba-de7bd62a45a2"
     },
-    "2026-11-18": {
-      "visits": [
-        {
-          "time": "2026-11-18 05:21:42",
-          "label": "phát",
-          "role": "user",
-          "device": "c0cac621-692d-4401-b024-4af93393ab59"
-        }
-      ]
+    {
+     "time": "2026-11-12 18:17:30",
+     "label": "Admin",
+     "role": "admin",
+     "device": "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b"
+    },
+    {
+     "time": "2026-11-12 18:17:56",
+     "label": "phát",
+     "role": "user",
+     "device": "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b"
     }
+   ]
   },
-  "__bug_reports__": [],
-  "__security_log__": [],
-  "__security_alerts__": [],
-  "__blocklist__": {},
-  "__guest_quotas__": {},
-  "__lttp_security__": {
-    "history": [
+  "2026-11-13": {
+   "visits": [
+    {
+     "time": "2026-11-13 07:22:21",
+     "label": "guest",
+     "role": "guest",
+     "device": "55250d40-4d01-4589-8de1-675fec5da509"
+    }
+   ]
+  },
+  "2026-11-18": {
+   "visits": [
+    {
+     "time": "2026-11-18 05:21:42",
+     "label": "phát",
+     "role": "user",
+     "device": "c0cac621-692d-4401-b024-4af93393ab59"
+    }
+   ]
+  }
+ },
+ "__bug_reports__": [],
+ "__security_log__": [],
+ "__security_alerts__": [],
+ "__blocklist__": {},
+ "__guest_quotas__": {},
+ "__lttp_security__": {
+  "history": [
+   {
+    "id": "181b57db-5e96-42af-a1ee-88918a8a89f6",
+    "ts": "2026-11-05 18:39:35",
+    "user": "phát",
+    "device": "6ef354...6775",
+    "findings": {
+     "layers": [
       {
-        "id": "181b57db-5e96-42af-a1ee-88918a8a89f6",
-        "ts": "2026-11-05 18:39:35",
-        "user": "phát",
-        "device": "6ef354...6775",
-        "findings": {
-          "layers": [
-            {
-              "name": "AES-256-GCM",
-              "status": "active",
-              "desc": "Hardware-accelerated encryption"
-            },
-            {
-              "name": "LTTP-Cipher",
-              "status": "active",
-              "desc": "Backup encryption for legacy devices"
-            },
-            {
-              "name": "HMAC-SHA256",
-              "status": "active",
-              "desc": "Integrity verification"
-            },
-            {
-              "name": "Payload Obfuscation",
-              "status": "active",
-              "desc": "Anti-reverse-engineering"
-            },
-            {
-              "name": "Replay Prevention",
-              "status": "active",
-              "desc": "Nonce + timestamp"
-            },
-            {
-              "name": "Entropy Detection",
-              "status": "active",
-              "desc": "Anomaly detection"
-            }
-          ],
-          "issues": [
-            {
-              "severity": "high",
-              "msg": "Encryption roundtrip failed"
-            }
-          ],
-          "score": 80
-        }
+       "name": "AES-256-GCM",
+       "status": "active",
+       "desc": "Hardware-accelerated encryption"
+      },
+      {
+       "name": "LTTP-Cipher",
+       "status": "active",
+       "desc": "Backup encryption for legacy devices"
+      },
+      {
+       "name": "HMAC-SHA256",
+       "status": "active",
+       "desc": "Integrity verification"
+      },
+      {
+       "name": "Payload Obfuscation",
+       "status": "active",
+       "desc": "Anti-reverse-engineering"
+      },
+      {
+       "name": "Replay Prevention",
+       "status": "active",
+       "desc": "Nonce + timestamp"
+      },
+      {
+       "name": "Entropy Detection",
+       "status": "active",
+       "desc": "Anomaly detection"
       }
-    ]
-  },
-  "phát": {
-    "password": "9ba596ae1c18c2b922dbd9cb93a0dea859f575ae5af7220547b97d534d70241a",
-    "custom_instructions": "",
-    "chats": {},
-    "remembered_devices": [
-      "6ef354b0-ed60-41b8-9caa-8dd448186775",
-      "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b",
-      "69772d8b-253d-4dab-8b15-ed3a6b64bfb6",
-      "c0cac621-692d-4401-b024-4af93393ab59"
-    ],
-    "language": "vi",
-    "terms_accepted": true,
-    "terms_accepted_at": "2026-11-05 18:39:08",
-    "preferences": {
-      "model": "gemini-3.6-flash",
-      "temperature": 0.7,
-      "top_p": 0.95,
-      "top_k": 40,
-      "smart_draft": true,
-      "typing_mode": "smooth",
-      "typing_cps": 35
+     ],
+     "issues": [
+      {
+       "severity": "high",
+       "msg": "Encryption roundtrip failed"
+      }
+     ],
+     "score": 80
     }
-  },
-  "__feedback__": []
+   }
+  ]
+ },
+ "phát": {
+  "password": "9ba596ae1c18c2b922dbd9cb93a0dea859f575ae5af7220547b97d534d70241a",
+  "custom_instructions": "",
+  "chats": {},
+  "remembered_devices": [
+   "6ef354b0-ed60-41b8-9caa-8dd448186775",
+   "e38d2a8b-bf4f-4af8-8bd3-3669c4e2993b",
+   "69772d8b-253d-4dab-8b15-ed3a6b64bfb6",
+   "c0cac621-692d-4401-b024-4af93393ab59"
+  ],
+  "language": "vi",
+  "terms_accepted": true,
+  "terms_accepted_at": "2026-11-05 18:39:08",
+  "preferences": {
+   "model": "gemini-3.6-flash",
+   "temperature": 0.7,
+   "top_p": 0.95,
+   "top_k": 40,
+   "smart_draft": true,
+   "typing_mode": "smooth",
+   "typing_cps": 35,
+   "study": {
+    "level": "auto",
+    "subject": "auto",
+    "mode": "guide"
+   }
+  }
+ },
+ "__feedback__": []
 }
