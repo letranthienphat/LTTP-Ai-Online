@@ -157,6 +157,12 @@
      "label": "guest",
      "role": "guest",
      "device": "d9d391d0-8b76-4430-93b1-1bc8e7f4be5d"
+    },
+    {
+     "time": "2026-11-25 17:46:18",
+     "label": "guest",
+     "role": "guest",
+     "device": "31940f08-b86a-4a4e-8a3f-4721948da8cc"
     }
    ]
   }
