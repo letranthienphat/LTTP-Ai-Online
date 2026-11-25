@@ -145,6 +145,12 @@
      "label": "Admin",
      "role": "admin",
      "device": "2691172c-f1b7-446c-8d1b-be0d41c9f6be"
+    },
+    {
+     "time": "2026-11-25 17:44:08",
+     "label": "guest",
+     "role": "guest",
+     "device": "42ed7c62-b870-444e-b4cf-4d4cae858fae"
     }
    ]
   }
