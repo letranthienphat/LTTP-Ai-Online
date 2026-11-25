@@ -147,7 +147,12 @@
  "__security_log__": [],
  "__security_alerts__": [],
  "__blocklist__": {},
- "__guest_quotas__": {},
+ "__guest_quotas__": {
+  "2691172c-f1b7-446c-8d1b-be0d41c9f6be": {
+   "date": "2026-11-25",
+   "count": 1
+  }
+ },
  "__lttp_security__": {
   "history": [
    {
